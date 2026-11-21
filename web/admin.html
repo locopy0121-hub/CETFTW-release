@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1420">
+<meta name="robots" content="noindex, nofollow">
+<title>台美股資產 管理後台</title>
+<link rel="icon" href="/web/app-icon.png" type="image/png">
+<script>
+  (function () {
+    var q = '?v=' + Math.floor(Date.now() / 60000);
+    document.write('<link rel="stylesheet" href="/web/style.css' + q + '">');
+    document.write('<script type="module" src="/web/admin.js' + q + '"><\/script>');
+  })();
+</script>
+<style>
+  .adm { max-width: 1180px; margin: 0 auto; padding: 18px 16px 60px; }
+  .adm-top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .adm-top img { width: 40px; height: 40px; border-radius: 10px; }
+  .adm-top h1 { font-size: 20px; margin: 0; flex: 1; }
+  .adm-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+  .adm-tabs button { border: 1px solid var(--border); background: var(--card); color: var(--text2); padding: 7px 14px; border-radius: 999px; cursor: pointer; font-size: 14px; }
+  .adm-tabs button.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .adm-tabs .cnt { background: #ef4444; color: #fff; border-radius: 999px; padding: 0 6px; font-size: 11px; margin-left: 4px; }
+  .live { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+  .live i { width: 9px; height: 9px; border-radius: 50%; background: #9ca3af; display: inline-block; }
+  .live.on i { background: #22c55e; box-shadow: 0 0 0 3px rgba(34, 197, 94, .2); }
+  .st-待處理, .st-處理中 { color: #f59e0b; } .st-完成 { color: #22c55e; } .st-失敗 { color: #ef4444; } .st-已取消 { color: var(--muted); }
+  .tbl td, .tbl th { text-align: left; }
+  .tbl tr.click { cursor: pointer; }
+  .codebox { font-family: ui-monospace, Menlo, monospace; font-size: 26px; letter-spacing: 6px; text-align: center; }
+</style>
+</head>
+<body>
+<div id="app"><div class="boot"><div class="logo">台</div><div>載入中…</div></div></div>
+<noscript>請開啟 JavaScript。</noscript>
+</body>
+</html>
