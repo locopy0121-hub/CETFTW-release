@@ -1525,7 +1525,7 @@ VIEWS.tools = {
   title: '工具',
   render() {
     const t = S.pref.tool || 'cost';
-    return head('工具') + `<div class="chips" style="margin-bottom:12px">${[['cost', '成本與損益兩平'], ['limit', '漲跌停價'], ['dca', '定期定額試算'], ['drip', '股息再投入'], ['plans', '定期定額計畫'], ['divsim', '配息試算'], ['combo', '配息組合'], ['fx', '匯率換算']].map(([k, n]) => `<button class="chip ${t === k ? 'on' : ''}" data-tl="${k}">${n}</button>`).join('')}</div><div id="tool"></div>`;
+    return head('工具') + `<div class="chips" style="margin-bottom:12px">${[['cost', '成本與損益兩平'], ['limit', '漲跌停價'], ['dca', '定期定額試算'], ['drip', '複利試算'], ['plans', '定期定額計畫'], ['divsim', '配息試算'], ['combo', '配息組合'], ['fx', '匯率換算']].map(([k, n]) => `<button class="chip ${t === k ? 'on' : ''}" data-tl="${k}">${n}</button>`).join('')}</div><div id="tool"></div>`;
   },
   bind() { $$('[data-tl]').forEach((b) => b.onclick = () => { S.pref.tool = b.dataset.tl; savePref(); route(); }); this[S.pref.tool || 'cost'](); },
   cost() {
@@ -1572,21 +1572,87 @@ VIEWS.tools = {
     };
     $$('#tool input').forEach((i) => i.oninput = calc); calc();
   },
+  /** 複利試算（與 App DripScreen 相同）：存股複利／目標反推，逐月複利、配息頻率、預扣稅、每年加碼、通膨；可從持股或單一個股帶入 */
   drip() {
-    $('#tool').innerHTML = `<div class="card"><h2>股息再投入試算</h2><div class="grid g4">
-      <div class="field"><label>投入金額</label><input id="ri" type="number" value="1000000"></div><div class="field"><label>現金殖利率（%／年）</label><input id="ry" type="number" step="0.1" value="5"></div>
-      <div class="field"><label>股價年成長（%）</label><input id="rg" type="number" step="0.1" value="3"></div><div class="field"><label>年數</label><input id="rn" type="number" value="20"></div></div>
-      <div class="grid g3" id="rres" style="margin-top:12px"></div><div class="chart-wrap" id="rC" style="margin-top:10px"><canvas></canvas><div class="chart-tip"></div></div>
-      <div class="small muted" style="margin-top:6px">再投入：股息每年買回同一檔；提領：股息領出不投入（圖中加上累計領出的股息）。未計稅費與二代健保。</div></div>`;
-    const calc = () => {
-      const i0 = +$('#ri').value || 0, y = (+$('#ry').value || 0) / 100, g = (+$('#rg').value || 0) / 100, n = Math.min(60, Math.max(1, +$('#rn').value || 1));
-      let re = i0, wd = i0, cash = 0; const lab = ['第 0 年'], A = [i0], B = [i0];
-      for (let k = 1; k <= n; k++) { re = re * (1 + g) + re * y; cash += wd * y; wd = wd * (1 + g); lab.push('第 ' + k + ' 年'); A.push(Math.round(re)); B.push(Math.round(wd + cash)); }
-      $('#rres').innerHTML = `<div class="tile"><div class="k">再投入期末</div><div class="v num up">${fmtInt(re)}</div><div class="s muted">年股息約 ${fmtInt(re * y)}</div></div><div class="tile"><div class="k">提領期末（含領出）</div><div class="v num">${fmtInt(wd + cash)}</div><div class="s muted">累計領出 ${fmtInt(cash)}</div></div>
-        <div class="tile"><div class="k">再投入多出</div><div class="v num up">${fmtSigned(re - wd - cash)}</div></div>`;
-      drawSeries($('#rC'), lab, [{ v: A, color: '#3b82f6', name: '再投入', fill: true }, { v: B, color: '#f59e0b', name: '提領' }], { h: 240 });
+    const P = S.pref.drip || {}; const v = (k, d) => (P[k] != null ? P[k] : d);
+    const hs = holdings(); const groups = [['全部持股', hs], ['台股持股', hs.filter((h) => !isUs(h.symbol))], ['美股持股', hs.filter((h) => isUs(h.symbol))]].filter(([, l]) => l.length);
+    $('#tool').innerHTML = `<div class="card"><h2>複利試算<span class="r"><span class="seg" id="dpM"><button data-m="0" class="${v('mode', 0) == 0 ? 'on' : ''}">存股複利</button><button data-m="1" class="${v('mode', 0) == 1 ? 'on' : ''}">目標反推</button></span></span></h2>
+      ${hs.length || S.dripSym ? `<div class="small muted">從持股帶入（市值與近 12 個月殖利率）</div><div class="chips" style="margin:6px 0 10px">${groups.map(([n]) => `<button class="chip" data-dg="${n}">${n}</button>`).join('')}${hs.map((h) => `<button class="chip" data-dh="${h.symbol}">${h.symbol}</button>`).join('')}</div>` : ''}
+      <div class="row wrap" style="gap:6px;margin-bottom:8px"><span class="small muted">或指定個股</span>${symPicker('dpS', '')}</div><div id="dpMsg" class="small" style="color:var(--primary);margin-bottom:8px"></div>
+      <div class="grid g4">${[['init', '期初金額（元）', 1000000], ['monthly', '每月投入（元）', 10000], ['yield', '年殖利率 %', 4], ['growth', '股價年成長 %', 3], ['years', '年數', 20], ['step', '每年加碼 %', 0], ['infl', '通膨 %', 2], ['target', '目標金額', 10000000]].map(([k, n, d]) => `<div class="field ${k === 'target' ? 'dpT' : ''}"><label>${n}</label><input data-dp="${k}" type="number" step="any" value="${v(k, d)}"></div>`).join('')}</div>
+      <div class="row wrap" style="gap:12px;margin-top:4px"><span class="small muted">配息頻率</span><span class="seg" id="dpF">${['月配', '季配', '半年', '年配'].map((n, i) => `<button data-f="${i}" class="${v('freq', 1) == i ? 'on' : ''}">${n}</button>`).join('')}</span>
+        <label class="row small" style="gap:6px;cursor:pointer"><input type="checkbox" id="dpTax" style="width:auto" ${v('withTax', false) ? 'checked' : ''}> 扣除股息預扣稅 <span class="muted" id="dpTaxN"></span></label></div></div>
+      <div id="dpGoal"></div><div id="dpRes" style="margin-top:12px"></div>`;
+    let taxRate = v('taxRate', 0);
+    const num = (k) => { const x = parseFloat(($(`[data-dp="${k}"]`).value || '').replace(/,/g, '')); return isNaN(x) ? 0 : x; };
+    const sim = (i) => {
+      const g = Math.pow(1 + i.growth / 100, 1 / 12) - 1; const per = Math.max(1, Math.min(12, i.per)); const every = 12 / per; const dPay = i.yld / 100 / per;
+      let a = i.init, b = i.init, cash = 0, invested = i.init, divTotal = 0, m = i.monthly; const out = [{ year: 0, re: a, co: b, divY: 0, inv: invested, divT: 0, real: a }];
+      for (let y = 1; y <= i.years; y++) { let divY = 0;
+        for (let mo = 1; mo <= 12; mo++) { a = a * (1 + g) + m; b = b * (1 + g) + m; invested += m;
+          if (mo % every === 0) { const dA = a * dPay * (1 - i.tax); a += dA; divY += dA; divTotal += dA; cash += b * dPay * (1 - i.tax); } }
+        m *= 1 + i.step / 100; out.push({ year: y, re: a, co: b + cash, divY, inv: invested, divT: divTotal, real: a / Math.pow(1 + i.infl / 100, y) }); }
+      return out;
     };
-    $$('#tool input').forEach((i) => i.oninput = calc); calc();
+    const need = (target, i) => { if (sim({ ...i, monthly: 0 }).pop().re >= target) return 0; let lo = 0, hi = Math.max(target / Math.max(1, i.years * 12), 1);
+      while (sim({ ...i, monthly: hi }).pop().re < target) { hi *= 2; if (hi > 1e12) return null; } for (let k = 0; k < 50; k++) { const mid = (lo + hi) / 2; if (sim({ ...i, monthly: mid }).pop().re >= target) hi = mid; else lo = mid; } return hi; };
+    const yrsTo = (target, i) => { const r = sim({ ...i, years: 50 }).find((x) => x.re >= target); return r ? r.year : null; };
+    const calc = () => {
+      const mode = +$('#dpM .on').dataset.m; const freq = +$('#dpF .on').dataset.f; const withTax = $('#dpTax').checked;
+      $$('.dpT').forEach((e) => { e.style.display = mode === 1 ? '' : 'none'; });
+      const i = { init: Math.max(0, num('init')), monthly: Math.max(0, num('monthly')), yld: Math.max(0, Math.min(50, num('yield'))), growth: Math.max(-50, Math.min(50, num('growth'))), years: Math.max(1, Math.min(50, Math.round(num('years')) || 20)),
+        tax: withTax ? taxRate || 0.3 : 0, step: Math.max(0, Math.min(50, num('step'))), per: [12, 4, 2, 1][freq], infl: Math.max(0, Math.min(20, num('infl'))) };
+      $('#dpTaxN').textContent = withTax ? '（以 ' + ((i.tax) * 100).toFixed(1) + '% 計）' : taxRate ? '' : '（台股多數不預扣，二代健保另計）';
+      S.pref.drip = { mode, freq, withTax, taxRate, init: i.init, monthly: i.monthly, yield: i.yld, growth: i.growth, years: i.years, step: i.step, infl: i.infl, target: num('target') }; savePref();
+      const rows = sim(i); const L = rows[rows.length - 1]; const target = num('target');
+      const kvr = (k, x, c = '') => `<div class="row" style="padding:5px 0;border-bottom:1px solid var(--border)"><span class="sp small text2">${k}</span><span class="num ${c}">${x}</span></div>`;
+      if (mode === 1) { const nd = target > 0 ? need(target, i) : null; const yr = target > 0 ? yrsTo(target, i) : null;
+        $('#dpGoal').innerHTML = `<div class="card" style="margin-top:12px"><h2>目標 NT$${fmtInt(target)}</h2>${target <= 0 ? '<div class="small down">請輸入目標金額</div>' :
+          kvr(i.years + ' 年內達標，每月需投入', nd != null ? 'NT$' + fmtInt(Math.ceil(nd)) : '無法達成', 'up') + (nd != null ? kvr('與目前每月投入相比', fmtSigned(nd - i.monthly), cls(i.monthly - nd)) : '') +
+          kvr('以目前每月 NT$' + fmtInt(i.monthly) + '，達標需要', yr != null ? yr + ' 年' : '50 年內無法達成', yr != null && yr <= i.years ? 'up' : 'down') + kvr('目標折合今日購買力', 'NT$' + fmtInt(target / Math.pow(1 + i.infl / 100, i.years)))}</div>`; }
+      else $('#dpGoal').innerHTML = '';
+      const r = (1 + i.growth / 100) * (1 + i.yld / 100 * (1 - i.tax)) - 1; const sup = rows.find((x) => x.year > 0 && i.monthly > 0 && x.divY / 12 >= i.monthly);
+      const step = Math.max(1, Math.floor(i.years / 10));
+      $('#dpRes').innerHTML = `<div class="grid g2 stack"><div class="card"><h2>${i.years} 年後</h2><div class="grid g2"><div class="tile"><div class="k">股息再投入</div><div class="v num" style="color:var(--primary)">${fmtInt(L.re)}</div></div><div class="tile"><div class="k">股息領現（含累積現金）</div><div class="v num" style="color:#f59e0b">${fmtInt(L.co)}</div></div></div>
+        ${kvr('累計投入本金', fmtInt(L.inv))}${kvr('複利報酬（資產 − 本金）', fmtSigned(L.re - L.inv) + '（' + (L.inv > 0 ? ((L.re / L.inv - 1) * 100).toFixed(1) : '0.0') + '%）', cls(L.re - L.inv))}
+        ${kvr('再投入比領現多', fmtSigned(L.re - L.co), cls(L.re - L.co))}${kvr('累計領到股息（稅後）', fmtInt(L.divT))}${kvr('第 ' + i.years + ' 年股息', fmtInt(L.divY) + '（月均 ' + fmtInt(L.divY / 12) + '）')}${kvr('折合今日購買力（扣通膨）', fmtInt(L.real))}
+        ${r > 0 ? kvr('資產翻倍約需（不計投入）', (Math.log(2) / Math.log(1 + r)).toFixed(1) + ' 年（年化 ' + (r * 100).toFixed(2) + '%）') : ''}${sup ? kvr('月均股息超過每月投入', '第 ' + sup.year + ' 年', 'up') : ''}
+        <div class="chart-wrap" id="dpC" style="margin-top:10px"><canvas></canvas><div class="chart-tip"></div></div></div>
+        <div class="card"><h2>逐年明細</h2><div class="scroll-x"><table class="tbl"><thead><tr><th>年</th><th>本金</th><th>再投入資產</th><th>領現資產</th><th>年股息</th></tr></thead><tbody>
+          ${rows.filter((x) => x.year > 0 && (x.year % step === 0 || x.year === i.years)).map((x) => `<tr><td>第 ${x.year} 年</td><td class="num muted">${fmtInt(x.inv)}</td><td class="num">${fmtInt(x.re)}</td><td class="num">${fmtInt(x.co)}</td><td class="num" style="color:#f59e0b">${fmtInt(x.divY)}</td></tr>`).join('')}</tbody></table></div>
+          <div class="small muted" style="margin-top:6px">試算假設殖利率與成長率固定、不含手續費；實際結果會不同，僅供規劃參考。</div></div></div>`;
+      drawSeries($('#dpC'), rows.map((x) => '第 ' + x.year + ' 年'), [{ v: rows.map((x) => Math.round(x.re)), color: '#3b82f6', name: '再投入', fill: true }, { v: rows.map((x) => Math.round(x.co)), color: '#f59e0b', name: '領現' }, { v: rows.map((x) => Math.round(x.inv)), color: '#94a3b8', name: '本金' }], { h: 220 });
+    };
+    /** 帶入一組持股：市值合計、市值加權殖利率；美股部位預設扣 30% 預扣稅 */
+    const load = async (label, list) => {
+      if (!list.length) return; const msg = $('#dpMsg'); msg.textContent = '載入 ' + label + ' 配息紀錄中…';
+      const rows = list.map((h) => { const q = S.q[h.symbol] || {}; const mv = h.shares * (q.price || h.avgCost) * (isUs(h.symbol) ? usdTwd() : 1); return { s: h.symbol, mv }; });
+      const total = rows.reduce((a, r) => a + r.mv, 0); const usShare = rows.filter((r) => isUs(r.s)).reduce((a, r) => a + r.mv, 0) / Math.max(1, total);
+      taxRate = 0.3 * usShare; $('#dpTax').checked = usShare > 0.01; $('[data-dp="init"]').value = Math.round(total);
+      let y = 0, miss = 0; const pers = [];
+      for (const r of rows) { const l = await divHist(r.s).catch(() => []); const pj = divProject(l, r.s); const px0 = (S.q[r.s] || {}).price; if (pj.annual && px0) { y += pj.annual / px0 * 100 * r.mv; pers.push(pj.perYear); } else miss++; }
+      if (y > 0) { const avg = y / total; $('[data-dp="yield"]').value = avg.toFixed(2); if (list.length === 1 && pers[0]) { const fi = { 12: 0, 4: 1, 2: 2, 1: 3 }[pers[0]]; if (fi != null) $$('#dpF button').forEach((b) => b.classList.toggle('on', +b.dataset.f === fi)); }
+        msg.textContent = '已帶入 ' + label + '：市值 NT$' + fmtInt(total) + '，加權殖利率 ' + avg.toFixed(2) + '%' + (miss ? '（' + miss + ' 檔無配息，以 0 計）' : ''); }
+      else msg.textContent = label + ' 近一年沒有配息紀錄';
+      calc();
+    };
+    /** 指定個股（未持有）：帶入近 12 個月殖利率與配息頻率，期初金額不變 */
+    const loadSym = async (sym) => {
+      const msg = $('#dpMsg'); msg.textContent = '載入 ' + sym + ' 配息紀錄中…'; await ensureQuote(sym); const l = await divHist(sym).catch(() => []); const pj = divProject(l, sym); const px0 = (S.q[sym] || {}).price;
+      if (!pj.annual || !px0) { msg.textContent = D.name(sym) + '（' + sym + '）近一年沒有配息或取不到股價'; return; }
+      $('[data-dp="yield"]').value = (pj.annual / px0 * 100).toFixed(2); const fi = { 12: 0, 4: 1, 2: 2, 1: 3 }[pj.perYear]; if (fi != null) $$('#dpF button').forEach((b) => b.classList.toggle('on', +b.dataset.f === fi));
+      if (isUs(sym)) { taxRate = 0.3; $('#dpTax').checked = true; } else { taxRate = 0; $('#dpTax').checked = false; }
+      msg.textContent = '已帶入 ' + D.name(sym) + '（' + sym + '）：' + divFreq(l, sym)[0] + '、' + (pj.estimated ? '年化殖利率（推估）' : '近 12 個月殖利率') + ' ' + (pj.annual / px0 * 100).toFixed(2) + '%'; calc();
+    };
+    $$('#dpM button').forEach((b) => b.onclick = () => { $$('#dpM button').forEach((x) => x.classList.toggle('on', x === b)); calc(); });
+    $$('#dpF button').forEach((b) => b.onclick = () => { $$('#dpF button').forEach((x) => x.classList.toggle('on', x === b)); calc(); });
+    $('#dpTax').onchange = () => { if ($('#dpTax').checked && !taxRate) taxRate = 0.3; calc(); };
+    $$('[data-dp]').forEach((e) => e.oninput = calc);
+    $$('[data-dg]').forEach((b) => b.onclick = () => { $$('#tool .chip').forEach((x) => x.classList.toggle('on', x === b)); load(b.dataset.dg, groups.find(([n]) => n === b.dataset.dg)[1]); });
+    $$('[data-dh]').forEach((b) => b.onclick = () => { $$('#tool .chip').forEach((x) => x.classList.toggle('on', x === b)); load(b.dataset.dh, hs.filter((h) => h.symbol === b.dataset.dh)); });
+    bindSearch($('#dpS'), (sym) => { $('#dpS').value = sym; loadSym(sym); });
+    calc();
+    if (S.dripSym) { const s0 = S.dripSym; S.dripSym = null; const h = hs.find((x) => x.symbol === s0); if (h) load(s0, [h]); else loadSym(s0); }
   },
   divsim() { divSimTool(); },
   combo() { comboTool(); },
@@ -2224,17 +2290,42 @@ async function divHist(sym) {
 }
 function yearAgoYmd(n = 1) { const d = tpeNow(); d.setFullYear(d.getFullYear() - n); return ymd(d); }
 /** 配息方式：近 13 個月的配息次數 */
-function divFreq(list) {
-  const since = (() => { const d = tpeNow(); d.setMonth(d.getMonth() - 13); return ymd(d); })();
-  const n = list.filter(([d]) => d >= since).length;
-  return n >= 9 ? ['月配', 12] : n >= 3 ? ['季配', 4] : n === 2 ? ['半年配', 2] : n === 1 ? ['年配', 1] : list.length ? ['近一年未配息', 0] : ['無配息資料', 0];
+/** 配息方式（與 App EtfTags 相同）：名稱有寫明者為準；否則取近 4 次配息間隔的中位數（< 45 天月配、< 125 季配、< 250 半年配、其餘年配）。ex＝已公告的下次除息日 */
+function divFreq(list, sym, ex) {
+  const per = { 月配: 12, 季配: 4, 半年配: 2, 年配: 1 };
+  const nm = sym ? D.name(sym) : '';
+  const byName = /月配|月月|Monthly/i.test(nm) ? '月配' : /季配/.test(nm) ? '季配' : /半年配/.test(nm) ? '半年配' : /年配/.test(nm) ? '年配' : null;
+  if (byName) return [byName, per[byName]];
+  const day = (d) => Date.parse(String(d).replace(/\//g, '-') + 'T00:00:00+08:00');
+  const ts = list.map(([d]) => day(d)).filter((x) => !isNaN(x));
+  if (ex) { const e = day(ex); if (!isNaN(e) && !ts.some((t) => Math.abs(t - e) < 20 * 864e5)) ts.push(e); }
+  ts.sort((a, b) => a - b);
+  if (!ts.length) return ['無配息資料', 0];
+  const now = Date.now();
+  if (ts[ts.length - 1] < now - 765 * 864e5) return ['近一年未配息', 0];
+  if (ts.length === 1) return now - ts[0] > 300 * 864e5 ? ['年配', 1] : ['已配息 1 次', 0];
+  const gaps = []; for (let i = 1; i < ts.length; i++) gaps.push((ts[i] - ts[i - 1]) / 864e5);
+  const g4 = gaps.slice(-4).sort((a, b) => a - b); const g = g4[Math.floor(g4.length / 2)];
+  const f = g < 45 ? '月配' : g < 125 ? '季配' : g < 250 ? '半年配' : '年配';
+  return [f, per[f]];
 }
-/** 近 12 個月：每股合計、平均每次、各除息月份（1～12）每股金額 */
-function divProject(list) {
-  const ya = yearAgoYmd(); const recent = list.filter(([d]) => d >= ya);
-  const months = Array(12).fill(0); recent.forEach(([d, c]) => { months[Number(String(d).slice(5, 7)) - 1] += c; });
-  const annual = recent.reduce((a, [, c]) => a + c, 0);
-  return { annual, perPay: recent.length ? annual / recent.length : 0, count: recent.length, months };
+/**
+ * 配息推估（與 App EtfTags.project 相同，處理新上市未滿一年與資料漏筆）：
+ * 每次配息＝近期平均（月配近 3 次、季配近 2 次）；近一年筆數達每年次數用實際合計，否則每次 × 每年次數（estimated）；
+ * 每月入帳不足時，依最近一次除息月份以固定間隔補齊。
+ */
+function divProject(list, sym) {
+  const [, k] = divFreq(list, sym);
+  const d = list.slice().sort((a, b) => String(b[0]).localeCompare(String(a[0])));
+  const since = (() => { const t = tpeNow(); t.setDate(t.getDate() - 370); return ymd(t); })();
+  const yr = d.filter(([x]) => x >= since); const months = Array(12).fill(0); const mo = (x) => Number(String(x).slice(5, 7)) - 1; const sum = (l) => l.reduce((a, [, c]) => a + c, 0);
+  if (!d.length) return { annual: 0, perPay: 0, count: 0, months, estimated: false, perYear: 0 };
+  if (!k) { const src = yr.length ? yr : d.slice(0, 1); src.forEach(([x, c]) => { months[mo(x)] += c; }); return { annual: sum(src), perPay: d[0][1], count: yr.length, months, estimated: false, perYear: 0 }; }
+  const n = k >= 12 ? 3 : k >= 4 ? 2 : 1; const recent = (yr.length ? yr : d).slice(0, n); const perPay = sum(recent) / recent.length;
+  const complete = yr.length >= k; const annual = complete ? sum(yr.slice(0, k)) : perPay * k;
+  if (complete && k < 12) yr.slice(0, k).forEach(([x, c]) => { months[mo(x)] += c; });
+  else { const st = mo(d[0][0]), step = 12 / k; for (let i = 0; i < k; i++) months[(st + i * step) % 12] += perPay; }
+  return { annual, perPay, count: k, months, estimated: !complete, perYear: k };
 }
 function divNetFactor(sym) { return isUs(sym) ? 0.7 * usdTwd() : 1; }
 
@@ -2243,7 +2334,7 @@ async function divStatsCard(el, sym) {
   if (!el) return;
   const list = await divHist(sym); if (!el.isConnected) return;
   if (!list.length) { el.innerHTML = ''; return; }
-  const price = (S.q[sym] || {}).price || 0; const pj = divProject(list); const [freq] = divFreq(list); const last = list[list.length - 1];
+  const price = (S.q[sym] || {}).price || 0; const pj = divProject(list, sym); const [freq] = divFreq(list, sym); const last = list[list.length - 1];
   const byYear = {}; list.forEach(([d, c]) => { const y = String(d).slice(0, 4); byYear[y] = (byYear[y] || 0) + c; });
   const ys = Object.keys(byYear).sort(); const thisY = String(tpeNow().getFullYear());
   let streak = 0; for (let y = +thisY - 1; byYear[String(y)]; y--) streak++; if (byYear[thisY]) streak++;
@@ -2251,8 +2342,8 @@ async function divStatsCard(el, sym) {
   const mx = Math.max(...mh, 1); const us = isUs(sym);
   el.innerHTML = `<div class="card"><h2>配息統計<span class="r tag">${esc(freq)}</span></h2>
     <div class="grid g4" style="gap:8px">
-      <div><div class="small muted">近 12 月殖利率</div><div class="num big">${price && pj.annual ? (pj.annual / price * 100).toFixed(2) + '%' : '—'}</div></div>
-      <div><div class="small muted">近 12 月每股</div><div class="num big">${pj.annual ? fmt(pj.annual, us ? 3 : 4) : '—'}</div></div>
+      <div><div class="small muted">${pj.estimated ? '年化殖利率（推估）' : '近 12 月殖利率'}</div><div class="num big">${price && pj.annual ? (pj.annual / price * 100).toFixed(2) + '%' : '—'}</div></div>
+      <div><div class="small muted">${pj.estimated ? '年化每股（推估）' : '近 12 月每股'}</div><div class="num big">${pj.annual ? fmt(pj.annual, us ? 3 : 4) : '—'}</div></div>
       <div><div class="small muted">上次配息</div><div class="num">${fmt(last[1], us ? 3 : 4)}</div><div class="small muted">${esc(last[0])}</div></div>
       <div><div class="small muted">連續配息</div><div class="num big">${streak} 年</div></div></div>
     <div style="margin-top:12px">${barsHtml(ys.slice(-10).map((y) => [y, byYear[y]]), 'var(--primary)')}</div>
@@ -2276,7 +2367,7 @@ async function divSimTool() {
   const calc = async () => {
     const R = $('#dsR'); if (!R) return; R.innerHTML = '<div class="muted">讀取中…</div>';
     const [list, price] = await Promise.all([divHist(sym), ensureQuote(sym)]); if (!$('#dsR')) return;
-    const pj = divProject(list); const [freq, per] = divFreq(list); const f = divNetFactor(sym);
+    const pj = divProject(list, sym); const [freq, per] = divFreq(list, sym); const f = divNetFactor(sym);
     if (!pj.annual || !price) { R.innerHTML = `<div class="empty">${esc(D.name(sym))}（${sym}）近 12 個月沒有配息資料或取不到股價</div>`; return; }
     const amt = +$('#dsA').value || 0; const mode = $('#dsM').value; S.pref.dsAmt = amt; S.pref.dsSym = sym; savePref();
     const annualWant = mode === 'm' ? amt * 12 : mode === 'y' ? amt : amt * Math.max(1, pj.count);
@@ -2286,7 +2377,7 @@ async function divSimTool() {
     const h = holdings().find((x) => x.symbol === sym); const have = h ? h.shares : 0;
     const row = (k, v, c = '') => `<div class="row between" style="padding:6px 0;border-bottom:1px solid var(--card2)"><span class="text2">${k}</span><b class="num ${c}">${v}</b></div>`;
     R.innerHTML = `<div class="row" style="gap:8px;margin-bottom:6px"><b>${esc(D.name(sym))}</b><span class="muted num">${sym}</span><span class="tag">${esc(freq)}</span></div>` +
-      row('近 12 月每股配息', fmt(pj.annual, 4) + (us ? ' 美元' : ' 元')) + row('近 12 月殖利率', (pj.annual / price * 100).toFixed(2) + '%') + row('目前股價', fmtPrice(price)) +
+      row(pj.estimated ? '年化每股配息（推估）' : '近 12 月每股配息', fmt(pj.annual, 4) + (us ? ' 美元' : ' 元')) + row(pj.estimated ? '年化殖利率（推估）' : '近 12 月殖利率', (pj.annual / price * 100).toFixed(2) + '%') + row('目前股價', fmtPrice(price)) +
       row('需要持有', us ? fmtInt(shares) + ' 股' : fmtInt(shares / 1000) + ' 張（' + fmtInt(shares) + ' 股）', 'up') + row('參考本金（台幣）', fmtInt(cap), 'up') +
       row('預估年領', fmtInt(annual)) + row('平均每月', fmtInt(annual / 12)) + (per ? row('每次約', fmtInt(annual / Math.max(1, pj.count))) : '') +
       row('目前持有', have ? fmtInt(have) + ' 股' : '—') + (have ? row('還差', shares > have ? fmtInt(shares - have) + ' 股（約 ' + fmtInt((shares - have) * price * (us ? usdTwd() : 1)) + ' 元）' : '已達成', shares > have ? '' : 'up') : '') +
@@ -2312,9 +2403,9 @@ async function comboTool() {
     const cap = +$('#cbC').value || 0; const tw = rows.reduce((a, [, w]) => a + w, 0) || 1;
     await refreshQuotes(rows.map(([s]) => s).concat(['TWD=X']));
     const res = await Promise.all(rows.map(async ([s, w]) => {
-      const list = await divHist(s); const pj = divProject(list); const price = (S.q[s] || {}).price || 0; const us = isUs(s); const f = divNetFactor(s);
+      const list = await divHist(s); const pj = divProject(list, s); const price = (S.q[s] || {}).price || 0; const us = isUs(s); const f = divNetFactor(s);
       const money = cap * w / tw; const shares = price ? (us ? money / usdTwd() / price : Math.floor(money / price)) : 0;
-      return { s, w: w / tw * 100, price, shares, money, annual: shares * pj.annual * f, months: pj.months.map((v) => v * shares * f), freq: divFreq(list)[0] };
+      return { s, w: w / tw * 100, price, shares, money, annual: shares * pj.annual * f, months: pj.months.map((v) => v * shares * f), freq: divFreq(list, s)[0] };
     }));
     if (!$('#cbO')) return;
     const total = res.reduce((a, r) => a + r.annual, 0); const months = Array.from({ length: 12 }, (_, i) => res.reduce((a, r) => a + r.months[i], 0));
@@ -2469,6 +2560,42 @@ function sapiErr(e) { return e && e.message === 'NEEDDEPLOY' ? NEED_DEPLOY : `<d
 const yf = (o, k) => { const v = o && o[k]; if (v == null) return null; if (typeof v === 'object') return v.fmt || (v.raw != null ? String(v.raw) : null); return String(v); };
 const yr = (o, k) => { const v = o && o[k]; if (v == null) return null; const x = typeof v === 'object' ? v.raw : v; return x == null || isNaN(x) ? null : +x; };
 const kvRows = (items) => `<div class="grid g3" style="gap:10px">${items.filter(([, v]) => v != null && v !== '').map(([k, v]) => `<div><div class="small muted">${esc(k)}</div><div class="num">${esc(String(v))}</div></div>`).join('')}</div>`;
+/**
+ * ETF 每日操作（與 App EtfComposition 相同）：今天與前一個資料日的持股比較，得出新增、刪除、加碼、減碼與估算金額。
+ * 前一日快照優先用發佈站保存的（所有人共用），沒有時用這個瀏覽器自己存的。
+ */
+async function etfOps(sym, list, asOf, prev) {
+  const key = 'etfs_' + sym; const local = store.get(key, {}); const cur = {}; list.forEach((x) => { cur[x.s || x.n] = [x.sh || -1, x.w, x.n]; });
+  local[asOf] = cur; Object.keys(local).sort().slice(0, -5).forEach((k) => delete local[k]); store.set(key, local);
+  if (!prev) { const pk = Object.keys(local).filter((k) => k < asOf).sort().pop(); if (pk) prev = { asOf: pk, rows: local[pk] }; }
+  if (!prev || !prev.rows) return { asOf, prevAsOf: null, changes: [] };
+  const P = prev.rows; const out = []; const nowKeys = new Set();
+  list.forEach((x) => { const k = x.s || x.n; nowKeys.add(k); nowKeys.add(x.n); const p = P[k] || P[x.n];
+    if (!p) { out.push({ s: x.s, n: x.n, kind: 0, d: x.sh || 0, pct: null, w: x.w, dw: x.w }); return; }
+    const ps = p[0], pw = p[1];
+    if (x.sh > 0 && ps > 0) { const d = x.sh - ps; if (Math.abs(d) >= 1) out.push({ s: x.s, n: x.n, kind: d > 0 ? 2 : 3, d, pct: d / ps * 100, w: x.w, dw: x.w - pw }); }
+    else if (Math.abs(x.w - pw) >= 0.1) out.push({ s: x.s, n: x.n, kind: x.w > pw ? 2 : 3, d: 0, pct: null, w: x.w, dw: x.w - pw, byW: true }); });
+  Object.keys(P).forEach((k) => { if (nowKeys.has(k) || nowKeys.has(P[k][2])) return; const ps = P[k][0];
+    out.push({ s: /^[0-9A-Z]+$/.test(k) && /\d/.test(k) ? k : '', n: P[k][2] || k, kind: 1, d: ps > 0 ? -ps : 0, pct: -100, w: 0, dw: -(P[k][1] || 0) }); });
+  out.sort((a, b) => a.kind - b.kind || Math.abs(b.pct ?? 100) - Math.abs(a.pct ?? 100));
+  const syms = out.map((c) => c.s).filter(Boolean).slice(0, 40); if (syms.length) await refreshQuotes(syms).catch(() => {});
+  out.forEach((c) => { const px0 = c.s && (S.q[c.s] || {}).price; c.amt = px0 && c.d ? c.d * px0 : null; });
+  return { asOf, prevAsOf: prev.asOf, changes: out };
+}
+function etfOpsHtml(o) {
+  const K = [['新增', 'up'], ['刪除', 'down'], ['加碼', 'up'], ['減碼', 'down']];
+  if (!o.prevAsOf) return `<div class="card" style="grid-column:1/-1"><h2>每日操作</h2><div class="small muted">已記錄 ${esc(o.asOf)} 的持股；下一個資料日起即可比較出新增、刪除、加碼與減碼。</div></div>`;
+  const c = o.changes; const buy = c.filter((x) => x.amt > 0).reduce((a, x) => a + x.amt, 0), sell = -c.filter((x) => x.amt < 0).reduce((a, x) => a + x.amt, 0);
+  const lots = (v) => (Math.abs(v) >= 1000 ? fmtSigned(v / 1000, Math.abs(v) % 1000 ? 1 : 0) + ' 張' : fmtSigned(v) + ' 股');
+  return `<div class="card" style="grid-column:1/-1"><h2>每日操作<span class="r small muted">${esc(o.prevAsOf)} → ${esc(o.asOf)}</span></h2>
+    <div class="grid g3" style="gap:8px;margin-bottom:10px">${K.map(([n, cl], i) => `<div class="tile"><div class="k">${n}</div><div class="v num ${c.filter((x) => x.kind === i).length ? cl : ''}">${c.filter((x) => x.kind === i).length} 檔</div></div>`).join('')}
+      <div class="tile"><div class="k">估算買進金額</div><div class="v num up">${buy ? fmtInt(buy) : '—'}</div></div><div class="tile"><div class="k">估算賣出金額</div><div class="v num down">${sell ? fmtInt(sell) : '—'}</div></div></div>
+    ${c.length ? `<div class="scroll-x"><table class="tbl"><thead><tr><th>動作</th><th style="text-align:left">成分股</th><th>股數變化</th><th>變動</th><th>權重</th><th>估算金額</th></tr></thead><tbody>
+      ${c.map((x) => `<tr ${x.s ? `class="click" data-go="#/s/${encodeURIComponent(x.s)}"` : ''}><td><span class="tag ${K[x.kind][1]}">${K[x.kind][0]}</span></td><td style="text-align:left">${esc(x.s && D.name(x.s) !== x.s ? D.name(x.s) : x.n)} <span class="muted small num">${esc(x.s || '')}</span></td>
+        <td class="num ${cls(x.d)}">${x.d ? lots(x.d) : x.byW ? '（依權重）' : '—'}</td><td class="num ${cls(x.pct ?? x.dw)}">${x.pct != null ? fmtPct(x.pct) : '—'}</td><td class="num">${x.w.toFixed(2)}%<span class="small ${cls(x.dw)}"> ${x.dw >= 0 ? '+' : ''}${x.dw.toFixed(2)}</span></td><td class="num ${cls(x.amt)}">${x.amt ? fmtSigned(x.amt) : '—'}</td></tr>`).join('')}</tbody></table></div>`
+      : '<div class="small muted">與前一個資料日相比，持股沒有變動。</div>'}
+    <div class="small muted" style="margin-top:6px">依每日揭露的持股（股數）比較；估算金額＝股數變化 × 目前股價，僅供參考，實際以投信公告為準。</div></div>`;
+}
 const STABS = [['ov', '概覽'], ['ta', '技術分析'], ['chip', '籌碼'], ['fin', '財務'], ['hold', '成分'], ['div', '股息'], ['news', '新聞'], ['co', '公司']];
 /** 個股分頁列：依「分頁列排版」設定排序與隱藏（S.pref.stabL＝{o:順序, h:隱藏, def:預設分頁, pos:'top'|'bottom'}） */
 function stockTabs(sym, all) {
@@ -2535,10 +2662,10 @@ Object.assign(VIEWS.s, {
     const [plans, list] = await Promise.all([kv('sx:plans'), divHist(sym)]); if (this.sym !== sym || !$('#stags')) return;
     const t = []; const etf = /^00/.test(sym) || D.isEtf(sym);
     if (etf && !isUs(sym)) { t.push([etfCat(sym, D.name(sym)), 'var(--primary)']); t.push([/A$/.test(sym) || D.name(sym).startsWith('主動') ? '主動式' : '被動式', /A$/.test(sym) ? '#f59e0b' : 'var(--text2)']); }
-    if (list.length) { const [f] = divFreq(list); t.push([f, '#a855f7']); }
+    { const pp = plans && plans[sym]; const [f] = divFreq(list, sym, pp && pp.ex); if (list.length || f !== '無配息資料') t.push([f, '#a855f7']); }
     t.push([TAX_KINDS[taxKindOf(sym)][0], 'var(--text2)']);
     const p = plans && plans[sym]; const today = ymd();
-    el.innerHTML = t.map(([x, c]) => `<span class="tag" style="color:${c};border-color:${c}">${esc(x)}</span>`).join(' ') +
+    el.innerHTML = t.filter(([x], i) => t.findIndex(([y]) => y === x) === i).map(([x, c]) => `<span class="tag" style="color:${c};border-color:${c}">${esc(x)}</span>`).join(' ') +
       (p && p.ex >= today ? ` <span class="tag" style="color:#f59e0b;border-color:#f59e0b">除息 ${esc(p.ex.slice(5))}${p.lb ? '・最後買進 ' + esc(p.lb.slice(5)) : ''}${p.cash ? '・' + fmt(p.cash, 4) + ' 元' : ''}${p.pay ? '・發放 ' + esc(p.pay.slice(5)) : ''}</span>` : '');
   },
   /** 五檔 */
@@ -2697,7 +2824,8 @@ Object.assign(VIEWS.s, {
     const sym = this.sym; const us = isUs(sym); const si = $('#si'); si.innerHTML = '<div class="card empty" style="grid-column:1/-1">讀取中…</div>';
     if (!can('STOCKPRO')) { si.innerHTML = lockCard('STOCKPRO', 'ETF 成分股（個股進階資料）'); return; }
     let list = [], asOf = '', src = '', sectors = [], err = null, extra = {};
-    if (!us) { try { const j = await sapi('etfh', sym); list = j.list || []; asOf = j.asOf; src = j.src; } catch (e) { err = e; } }
+    let prev = null;
+    if (!us) { try { const j = await sapi('etfh', sym); list = j.list || []; asOf = j.asOf; src = j.src; prev = j.prev || null; } catch (e) { err = e; } }
     try { const r = await ys(sym, 'topHoldings,fundProfile'); const th = r.topHoldings || {};
       if (!list.length) { list = (th.holdings || []).map((o) => ({ s: (o.symbol || '').replace(/\.TWO?$/, ''), n: o.holdingName || o.symbol, w: (yr(o, 'holdingPercent') || 0) * 100 })); src = 'Yahoo Finance'; }
       const SN = { realestate: '房地產', consumer_cyclical: '非必需消費', basic_materials: '原物料', consumer_defensive: '必需消費', technology: '科技', communication_services: '通訊服務', financial_services: '金融', utilities: '公用事業', industrials: '工業', energy: '能源', healthcare: '醫療保健' };
@@ -2707,9 +2835,10 @@ Object.assign(VIEWS.s, {
     if (this.sym !== sym || this.tab() !== 'hold') return;
     if (!list.length) { si.innerHTML = `<div class="card" style="grid-column:1/-1"><h2>成分股</h2>${err ? sapiErr(err) : '<div class="small muted">查無成分股資料</div>'}</div>`; return; }
     await loadDir(); const mine = new Set(holdings().map((h) => h.symbol)); const mx = Math.max(...list.map((x) => x.w));
+    const ops = !us && asOf ? await etfOps(sym, list, asOf, prev) : null; if (this.sym !== sym || this.tab() !== 'hold') return;
     const top10 = list.slice(0, 10).reduce((a, x) => a + x.w, 0); const overlap = list.filter((x) => x.s && mine.has(x.s));
     const h = holdings().find((x) => x.symbol === sym); const mv = h ? h.shares * ((S.q[sym] || {}).price || h.avgCost) * (us ? usdTwd() : 1) : 0;
-    si.innerHTML = `<div class="card" style="grid-column:1/-1"><h2>成分股<span class="r small muted">${esc(src)}${asOf ? ' · 資料日期 ' + esc(asOf) : ''}</span></h2>
+    si.innerHTML = (ops ? etfOpsHtml(ops) : '') + `<div class="card" style="grid-column:1/-1"><h2>成分股<span class="r small muted">${esc(src)}${asOf ? ' · 資料日期 ' + esc(asOf) : ''}</span></h2>
         <div class="grid g4" style="margin-bottom:10px"><div class="tile"><div class="k">檔數</div><div class="v num">${list.length}</div></div><div class="tile"><div class="k">前十大占比</div><div class="v num">${top10.toFixed(1)}%</div></div>
           <div class="tile"><div class="k">與我的持股重疊</div><div class="v num">${overlap.length} 檔</div><div class="s muted">${overlap.reduce((a, x) => a + x.w, 0).toFixed(1)}%</div></div>
           ${extra.exp ? `<div class="tile"><div class="k">內扣費用率</div><div class="v num">${esc(extra.exp)}</div></div>` : extra.cat ? `<div class="tile"><div class="k">類別</div><div class="v" style="font-size:15px">${esc(extra.cat)}</div></div>` : ''}</div>
@@ -2727,6 +2856,9 @@ Object.assign(VIEWS.s, {
     si.innerHTML = `<div id="dvs" style="grid-column:1/-1"></div><div id="dvtax"></div><div id="dvup"></div><div id="dvlist"></div><div id="dvsplit"></div>`;
     if (!can('DIVTAX')) { si.innerHTML = lockCard('DIVTAX'); return; }
     divStatsCard($('#dvs'), sym); this.taxCard();
+    { const bar = document.createElement('div'); bar.className = 'row wrap'; bar.style.cssText = 'gap:8px;grid-column:1/-1'; bar.innerHTML = '<button class="btn sm primary" id="toDrip">以此股複利試算 ›</button><button class="btn sm" id="toDivSim">配息試算（要領多少需買多少）›</button>'; si.prepend(bar);
+      $('#toDrip').onclick = () => { S.dripSym = sym; S.pref.tool = 'drip'; savePref(); location.hash = '#/tools'; };
+      $('#toDivSim').onclick = () => { S.pref.dsSym = sym; S.pref.tool = 'divsim'; savePref(); location.hash = '#/tools'; }; }
     const [plans, list] = await Promise.all([kv('sx:plans'), divHist(sym)]); if (this.sym !== sym || this.tab() !== 'div') return;
     const p = plans && plans[sym]; const h = holdings().find((x) => x.symbol === sym);
     $('#dvup').innerHTML = `<div class="card"><h2>即將除權息</h2>${p && p.ex >= ymd() ? kvRows([['除息日', p.ex], ['最後買進日', p.lb || '—'], ['發放日', p.pay || '—'], ['現金股利', p.cash ? fmt(p.cash, 4) + ' 元' : '—'], ['股票股利', p.stock || null], ['預估可領', h && p.cash ? fmtInt(h.shares * p.cash) + ' 元' : null]]) : '<div class="small muted">目前沒有已公告的除權息。</div>'}</div>`;

@@ -67,7 +67,11 @@ async function logout(msg) {
 }
 
 // ───────── 主畫面 ─────────
-const TABS = [['home', '總覽'], ['req', '申請'], ['mem', '會員'], ['pol', '政策'], ['rel', '發布'], ['job', '工作紀錄']];
+const TABS = [['home', '總覽'], ['req', '申請'], ['mem', '會員'], ['pol', '政策'], ['tier', '會員等級'], ['rel', '發布'], ['line', 'LINE'], ['job', '工作紀錄']];
+/** 功能位元（與 App License.Feature 順序相同，不可調整） */
+const FEATS = ['K 線分析與進場建議', 'AI 個股體檢', '提醒與進場鈴聲', '行情牆與熱度圖', '股息與稅務', '投資分析工具', '報告', '市場與排行', '群聊', '備份與設定檔', '盤中持股監控', '桌面小工具', '進階圖表', '新聞', '外觀自訂', '個股進階資料'];
+const featBoxes = (name, mask) => `<div class="grid g2" style="gap:4px 12px">${FEATS.map((f, i) => `<label class="row small" style="gap:6px;cursor:pointer"><input type="checkbox" data-${name}="${i}" style="width:auto" ${mask & (1 << i) ? 'checked' : ''}> ${esc(f)}</label>`).join('')}</div>`;
+const maskOf = (box, name) => $$(`[data-${name}]`, box).reduce((a, el) => a | (el.checked ? 1 << +el.dataset[name] : 0), 0);
 function shell() {
   $('#app').innerHTML = `<div class="adm"><div class="adm-top"><img src="/web/app-icon.png" alt=""><h1>管理後台</h1>
       <span class="live" id="live"><i></i><span>連線中…</span></span><span class="small muted">${esc(S.email)}</span><a class="btn sm" href="/web" target="_blank">使用者網頁版</a><button class="btn sm" id="lo">登出</button></div>
@@ -86,7 +90,8 @@ function renderLive() {
   el.classList.toggle('on', on); el.querySelector('span').textContent = on ? '管理員 App 已連線' : S.d.appSeen ? '管理員 App 未開啟（最後連線 ' + ago(Date.now() - (S.d.now - S.d.appSeen)) + '）' : '管理員 App 尚未連線';
 }
 async function refresh() {
-  try { S.d = await call('state'); renderLive(); renderTabs(); render(); }
+  // 編輯中的頁面（政策、等級、LINE）不自動重畫，避免輸入到一半被覆蓋
+  try { S.d = await call('state'); renderLive(); renderTabs(); if (!(['pol', 'tier', 'line'].includes(S.tab) && S.rendered === S.tab)) render(); }
   catch (e) { if (S.ses) { const el = $('#live'); if (el) el.querySelector('span').textContent = '讀取失敗：' + e.message; } }
 }
 function pendingReqs() {
@@ -99,7 +104,7 @@ async function job(type, payload, label) {
 }
 
 function render() {
-  if (!S.d) return; const v = $('#view'); const d = S.d; const app = d.app || {};
+  if (!S.d) return; S.rendered = S.tab; const v = $('#view'); const d = S.d; const app = d.app || {};
   if (S.tab === 'home') {
     const ms = d.members || []; const st = (s) => ms.filter((m) => m.status === s).length; const reqs = pendingReqs();
     const rel = (app.builds || []).find((b) => !b.draft); const dr = (app.builds || []).find((b) => b.draft);
@@ -139,10 +144,40 @@ function render() {
       <div class="grid g2" style="gap:10px">${[['trialDays', '試用天數', p.trialDays], ['trialName', '試用等級名稱', p.trialName], ['graceDays', '到期寬限天數', p.graceDays], ['remindDays', '到期前提醒天數', p.remindDays], ['actWindow', '啟用期限（天）', p.actWindow]].map(([k, n, x]) => `<div class="field"><label>${n}</label><input data-pk="${k}" value="${esc(x)}" ${k === 'trialName' ? '' : 'type="number" min="0"'}></div>`).join('')}
         <div class="field"><label>Google 登入要求</label><select data-pk="loginMode">${['選用', '會員需登入', '全部需登入'].map((n, i) => `<option value="${i}" ${p.loginMode === i ? 'selected' : ''}>${n}</option>`).join('')}</select></div></div>
       <div class="field"><label>公告（App 與網頁版會員頁顯示）</label><textarea data-pk="notice" rows="3" maxlength="300">${esc(p.notice || '')}</textarea></div>
+      <div class="field"><label>試用可用功能</label>${featBoxes('tf', p.trialF ?? 65535)}</div>
+      <div class="field"><label>到期（免費）可用功能</label>${featBoxes('ff', p.freeF ?? 0)}</div>
       <button class="btn primary" id="psave">儲存並回傳政策</button><div class="small muted" style="margin-top:6px">由管理員 App 簽章後回傳，使用者約半天內生效（會員頁可手動重新整理）。${p.updated ? '上次回傳 ' + new Date(p.updated).toLocaleString('zh-TW') : ''}</div></div>
       <div class="card"><h2>會員等級</h2>${(p.tiers || []).map((t) => `<div class="row" style="padding:6px 0;border-bottom:1px solid var(--border)"><span class="badge" style="color:${argb(t.color)};border-color:${argb(t.color)}">${esc(t.name)}</span><span class="sp small text2">${esc(t.desc || '')}</span><span class="small muted">${t.days > 0 ? t.days + ' 天' : '永久'}</span></div>`).join('')}
         <div class="small muted" style="margin-top:6px">等級內容與功能請在管理員 App「會員 › 政策」調整。</div></div></div>`;
-    $('#psave').onclick = () => { const o = {}; $$('[data-pk]', v).forEach((el) => { const k = el.dataset.pk; o[k] = /trialName|notice/.test(k) ? el.value : parseInt(el.value, 10) || 0; }); job('policy', o, '已送出政策更新'); };
+    $('#psave').onclick = () => { const o = {}; $$('[data-pk]', v).forEach((el) => { const k = el.dataset.pk; o[k] = /trialName|notice/.test(k) ? el.value : parseInt(el.value, 10) || 0; }); o.trialF = maskOf(v, 'tf'); o.freeF = maskOf(v, 'ff'); job('policy', o, '已送出政策更新'); };
+  } else if (S.tab === 'tier') {
+    const p = app.policy || {}; if (!app.policy) { v.innerHTML = '<div class="card empty">等待管理員 App 回報政策（開啟 App 即可）</div>'; return; }
+    if (!S.tiers) S.tiers = JSON.parse(JSON.stringify(p.tiers || []));
+    const T = S.tiers;
+    v.innerHTML = `<div class="card"><h2>會員等級<span class="r small muted">開通時選擇等級即套用其功能與預設期限</span></h2>
+      ${T.map((t, i) => `<div class="tile" style="margin-top:10px"><div class="grid g4" style="gap:8px"><div class="field"><label>名稱</label><input data-ti="${i}" data-tk="name" value="${esc(t.name)}" maxlength="12"></div>
+        <div class="field"><label>說明</label><input data-ti="${i}" data-tk="desc" value="${esc(t.desc || '')}" maxlength="30"></div><div class="field"><label>預設天數（0＝永久）</label><input data-ti="${i}" data-tk="days" type="number" min="0" value="${t.days}"></div>
+        <div class="field"><label>顏色</label><input data-ti="${i}" data-tk="color" type="color" value="${argb(t.color)}" style="height:38px;padding:2px"></div></div>
+        <div class="field"><label>開放功能</label>${featBoxes('tm' + i, t.f)}</div><div class="row" style="justify-content:flex-end;gap:6px">${i ? `<button class="btn sm" data-tu="${i}">↑</button>` : ''}<button class="btn sm" data-td="${i}">刪除</button></div></div>`).join('')}
+      <div class="row" style="gap:8px;margin-top:12px"><button class="btn" id="tadd">＋ 新增等級</button><span class="sp"></span><button class="btn" id="treset">還原</button><button class="btn primary" id="tsave">儲存並回傳政策</button></div>
+      <div class="small muted" style="margin-top:6px">儲存後由管理員 App 簽章回傳；已開通的授權碼依其等級編號顯示新名稱，功能以授權碼為準（調整既有會員權限請在會員頁「續約／變更方案」）。</div></div>`;
+    const sync = () => { $$('[data-ti]', v).forEach((el) => { const t = T[+el.dataset.ti]; const k = el.dataset.tk; t[k] = k === 'days' ? Math.max(0, parseInt(el.value, 10) || 0) : k === 'color' ? (0xFF000000 + parseInt(el.value.slice(1), 16)) : el.value; });
+      T.forEach((t, i) => { t.f = maskOf(v, 'tm' + i); }); };
+    $$('[data-td]', v).forEach((b) => b.onclick = () => { sync(); T.splice(+b.dataset.td, 1); render(); });
+    $$('[data-tu]', v).forEach((b) => b.onclick = () => { sync(); const i = +b.dataset.tu; [T[i - 1], T[i]] = [T[i], T[i - 1]]; render(); });
+    $('#tadd').onclick = () => { sync(); T.push({ id: 0, name: '新等級', desc: '', days: 30, color: 0xFF22C55E, f: 0 }); render(); };
+    $('#treset').onclick = () => { S.tiers = null; render(); };
+    $('#tsave').onclick = () => { sync(); if (!T.length) return toast('至少要有一個會員等級'); job('policy', { tiers: T }, '已送出會員等級'); S.tiers = null; };
+  } else if (S.tab === 'line') {
+    const L = app.line || {};
+    v.innerHTML = `<div class="grid g2 stack"><div class="card"><h2>LINE 官方帳號</h2>${L.name ? kv([['名稱', L.name], ['ID', L.id], ['好友數（前一日）', L.friends >= 0 ? L.friends : '—'], ['本月訊息', L.used + (L.limit >= 0 ? ' / ' + L.limit + '（剩 ' + Math.max(0, L.limit - L.used) + '）' : ' / 不限')]]) : `<div class="small muted">${L.ready === false ? '管理員 App 尚未設定 LINE 頻道存取權杖' : '等待管理員 App 回報（約 30 分鐘更新一次）'}</div>`}
+        <div class="small muted" style="margin-top:8px">自動回覆規則、圖文選單與每日報告請在管理員 App「LINE」頁設定。</div></div>
+      <div class="card"><h2>群發訊息</h2><textarea id="bct" rows="6" maxlength="4900" placeholder="輸入要群發給所有好友的文字（每位好友計 1 則訊息額度）"></textarea>
+        <div class="row" style="margin-top:8px"><span class="sp small muted" id="bcn">0 字</span><button class="btn primary" id="bcs">群發給所有好友</button></div></div></div>`;
+    $('#bct').oninput = () => { $('#bcn').textContent = $('#bct').value.length + ' 字'; };
+    $('#bcs').onclick = async () => { const t = $('#bct').value.trim(); if (!t) return toast('請輸入訊息內容');
+      const c = await dialog('確認群發', `<div class="text2">將傳送給所有 LINE 好友${L.friends >= 0 ? '（約 ' + L.friends + ' 人，會用掉同數量的訊息額度）' : ''}：</div><div class="tile" style="margin-top:8px;white-space:pre-wrap">${esc(t)}</div>`, [['', '取消'], ['ok', '群發', 'primary']]);
+      if (c.v === 'ok') { job('broadcast', { text: t }, '已送出群發'); $('#bct').value = ''; } };
   } else if (S.tab === 'rel') {
     const bs = app.builds || []; const rel = bs.find((b) => !b.draft);
     v.innerHTML = `<div class="card"><h2>發布版本給使用者</h2>${!app.token ? '<div class="notice">管理員 App 尚未設定 GitHub 權杖，無法讀取版本與發布。</div>' : ''}
@@ -162,7 +197,7 @@ function render() {
   }
 }
 const kindN = (k) => ({ new: '開通', renew: '續約', change: '變更方案', register: '註冊' }[k] || k);
-const JOBN = { issue: '開通授權', revoke: '停用授權', edit: '編輯會員', account: '帳號管理', policy: '更新政策', promote: '發布版本', redeploy: '重新部署', sync: '同步會員', remove: '刪除資料', request: '處理申請' };
+const JOBN = { broadcast: 'LINE 群發', issue: '開通授權', revoke: '停用授權', edit: '編輯會員', account: '帳號管理', policy: '更新政策', promote: '發布版本', redeploy: '重新部署', sync: '同步會員', remove: '刪除資料', request: '處理申請' };
 function kv(items) { return `<div class="grid g2" style="gap:8px">${items.map(([k, x]) => `<div><div class="small muted">${esc(k)}</div><div>${esc(x)}</div></div>`).join('')}</div>`; }
 function jobRow(j) {
   let p = {}; try { p = JSON.parse(j.payload); } catch (e) {}
