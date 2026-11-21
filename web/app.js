@@ -541,7 +541,7 @@ function drawChart(wrap, bars, opt) {
   const padR = 56, padL = 6, top = 8;
   const mainH = subOn ? H - 210 : H - 100, volTop = top + mainH + 8, volH = 60, subTop = volTop + volH + 10, subH = subOn ? H - subTop - 18 : 0;
   const c = bars.map((b) => b.c);
-  const MAS = (opt.mas && opt.mas.length ? opt.mas : [5, 20, 60]).slice(0, 4); const MAC = ['#f59e0b', '#a855f7', '#38bdf8', '#ec4899'];
+  const MAS = opt.intraday ? [] : (opt.mas && opt.mas.length ? opt.mas : [5, 20, 60]).slice(0, 4); const ty = opt.type || 'candle'; const MAC = ['#f59e0b', '#a855f7', '#38bdf8', '#ec4899'];
   const ma = { 20: sma(c, 20) }; MAS.forEach((p) => { ma[p] = sma(c, p); });
   const n = bars.length; const def = Math.min(n, opt.count || n); const z = zoomState(wrap, opt.key || 'k' + n, def, n);
   const from = Math.max(0, n - z.count - z.off); const vis = bars.slice(from, n - z.off);
@@ -550,6 +550,7 @@ function drawChart(wrap, bars, opt) {
   vis.forEach((b, i) => { hi = Math.max(hi, b.h); lo = Math.min(lo, b.l); vmax = Math.max(vmax, b.v || 0);
     MAS.forEach((p) => { const v = ma[p][from + i]; if (v != null) { hi = Math.max(hi, v); lo = Math.min(lo, v); } }); });
   if (opt.avg && opt.avg > lo * 0.8 && opt.avg < hi * 1.25) { hi = Math.max(hi, opt.avg); lo = Math.min(lo, opt.avg); }
+  if (opt.base) { hi = Math.max(hi, opt.base); lo = Math.min(lo, opt.base); }
   const pad = (hi - lo) * 0.06 || 1; hi += pad; lo -= pad;
   const y = (v) => top + (hi - v) / (hi - lo) * mainH;
   const x = (i) => padL + i * cw + cw / 2;
@@ -558,14 +559,25 @@ function drawChart(wrap, bars, opt) {
   g.strokeStyle = GRID; g.lineWidth = 1; g.fillStyle = TXT;
   for (let k = 0; k <= 4; k++) { const v = lo + (hi - lo) * k / 4; const yy = y(v); g.beginPath(); g.moveTo(padL, yy); g.lineTo(W - padR, yy); g.stroke(); g.fillText(fmtPx(v), W - padR + 4, yy); }
   // K 棒
+  if (opt.base) { g.strokeStyle = TXT; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(padL, y(opt.base)); g.lineTo(W - padR, y(opt.base)); g.stroke(); g.setLineDash([]); }
   vis.forEach((b, i) => {
-    const up = b.c >= b.o; g.strokeStyle = g.fillStyle = up ? UP : DN;
-    g.beginPath(); g.moveTo(x(i), y(b.h)); g.lineTo(x(i), y(b.l)); g.stroke();
-    const bw = Math.max(1, cw * 0.65); const y1 = y(Math.max(b.o, b.c)), y2 = y(Math.min(b.o, b.c));
-    g.fillRect(x(i) - bw / 2, y1, bw, Math.max(1, y2 - y1));
+    const prevC = from + i > 0 ? bars[from + i - 1].c : b.o; const up = b.c > b.o || (b.c === b.o && b.c >= prevC); g.strokeStyle = g.fillStyle = up ? UP : DN;
+    const bw = Math.max(1, cw * 0.65);
+    if (ty === 'candle') {
+      g.beginPath(); g.moveTo(x(i), y(b.h)); g.lineTo(x(i), y(b.l)); g.stroke();
+      const y1 = y(Math.max(b.o, b.c)), y2 = y(Math.min(b.o, b.c)); g.fillRect(x(i) - bw / 2, y1, bw, Math.max(1, y2 - y1));
+    } else if (ty === 'ohlc') {
+      // 美國線：高低直線＋左側開盤、右側收盤
+      const tk = Math.max(2, cw * 0.35); g.lineWidth = Math.max(1, Math.min(2, cw / 5)); g.beginPath(); g.moveTo(x(i), y(b.h)); g.lineTo(x(i), y(b.l)); g.moveTo(x(i) - tk, y(b.o)); g.lineTo(x(i), y(b.o)); g.moveTo(x(i), y(b.c)); g.lineTo(x(i) + tk, y(b.c)); g.stroke(); g.lineWidth = 1;
+    }
     // 成交量
     const vh = vmax ? (b.v || 0) / vmax * volH : 0; g.globalAlpha = 0.55; g.fillRect(x(i) - bw / 2, volTop + volH - vh, bw, vh); g.globalAlpha = 1;
   });
+  if (ty === 'line' || ty === 'area') {
+    const last = vis[vis.length - 1], first = vis[0]; const col = opt.base ? (last.c >= opt.base ? UP : DN) : last.c >= first.c ? UP : DN;
+    g.beginPath(); vis.forEach((b, i) => (i ? g.lineTo(x(i), y(b.c)) : g.moveTo(x(i), y(b.c)))); g.strokeStyle = col; g.lineWidth = 1.8; g.stroke(); g.lineWidth = 1;
+    if (ty === 'area') { g.lineTo(x(vis.length - 1), top + mainH); g.lineTo(x(0), top + mainH); g.closePath(); const gr = g.createLinearGradient(0, top, 0, top + mainH); gr.addColorStop(0, col + '55'); gr.addColorStop(1, col + '00'); g.fillStyle = gr; g.fill(); }
+  }
   // 均線
   if (opt.boll) {
     const sd = c.map((_, i) => { if (i < 19) return null; const m = ma[20][i]; let v = 0; for (let j = i - 19; j <= i; j++) v += (c[j] - m) ** 2; return Math.sqrt(v / 20); });
@@ -607,7 +619,7 @@ function drawChart(wrap, bars, opt) {
   }
   // 日期
   g.fillStyle = TXT; const step = Math.max(1, Math.floor(vis.length / 6));
-  for (let i = 0; i < vis.length; i += step) g.fillText(vis[i].d.slice(5), x(i) - 14, H - 7);
+  for (let i = 0; i < vis.length; i += step) g.fillText(opt.intraday ? vis[i].d : vis[i].d.slice(opt.weekly ? 2 : 5), x(i) - 14, H - 7);
   // 十字線提示
   const info = (i) => {
     const b = vis[i]; const k = from + i; const prev = k > 0 ? bars[k - 1].c : b.o; const ch = b.c - prev;
@@ -631,7 +643,7 @@ function drawChart(wrap, bars, opt) {
   const zi = wrap.parentElement && wrap.parentElement.querySelector('.zinfo'); if (zi) zi.textContent = z.count !== def || z.off ? `顯示 ${vis.length} 根（${vis[0].d} ～ ${vis[vis.length - 1].d}）` : '';
 }
 /** 當日走勢（分時線＋昨收基準＋成交量） */
-function drawLine(wrap, pts, prev, us) {
+function drawLine(wrap, pts, prev, us, ctype) {
   const cv = wrap.querySelector('canvas'); const tip = wrap.querySelector('.chart-tip');
   const W = wrap.clientWidth, H = 320, dpr = window.devicePixelRatio || 1; cv.width = W * dpr; cv.height = H * dpr; cv.style.height = H + 'px';
   const g = cv.getContext('2d'); g.scale(dpr, dpr); g.clearRect(0, 0, W, H); g.font = '11px sans-serif'; g.textBaseline = 'middle';
@@ -648,17 +660,18 @@ function drawLine(wrap, pts, prev, us) {
   if (prev) { g.setLineDash([4, 4]); g.strokeStyle = css('--muted'); g.beginPath(); g.moveTo(padL, y(prev)); g.lineTo(W - padR, y(prev)); g.stroke(); g.setLineDash([]); }
   const grad = g.createLinearGradient(0, top, 0, top + mainH); grad.addColorStop(0, col + '55'); grad.addColorStop(1, col + '00');
   g.beginPath(); pts.forEach((p, i) => (i ? g.lineTo(x(p[0]), y(p[1])) : g.moveTo(x(p[0]), y(p[1])))); g.strokeStyle = col; g.lineWidth = 1.6; g.stroke();
-  g.lineTo(x(pts[pts.length - 1][0]), top + mainH); g.lineTo(x(t0), top + mainH); g.closePath(); g.fillStyle = grad; g.fill();
+  if (ctype !== 'line') { g.lineTo(x(pts[pts.length - 1][0]), top + mainH); g.lineTo(x(t0), top + mainH); g.closePath(); g.fillStyle = grad; g.fill(); }
   const vmax = Math.max(1, ...pts.map((p) => p[2] || 0)); const bw = Math.max(1, (W - padL - padR) / (span / 60000) * 0.7);
   pts.forEach((p, i) => { const pv = i ? pts[i - 1][1] : prev || p[1]; g.fillStyle = p[1] >= pv ? UP : DN; g.globalAlpha = .55; const h = (p[2] || 0) / vmax * volH; g.fillRect(x(p[0]) - bw / 2, volTop + volH - h, bw, h); });
   g.globalAlpha = 1; g.fillStyle = css('--muted');
-  [0, 0.25, 0.5, 0.75, 1].forEach((f) => { const t = t0 + span * f; g.fillText(hm(t), Math.min(W - padR - 30, padL + f * (W - padL - padR) - 14), H - 8); });
-  const info = (p) => `${hm(p[0])}　<b class="${cls(prev ? p[1] - prev : 0)}">${fmt(p[1], 2)} ${prev ? fmtPct((p[1] / prev - 1) * 100) : ''}</b>　量 ${fmtVol(us ? p[2] : (p[2] || 0) / 1000)}${us ? '' : ' 張'}${prev ? '　昨收 ' + fmt(prev, 2) : ''}`;
+  [0, 0.25, 0.5, 0.75, 1].forEach((f) => { const t = t0 + span * f; const d0 = new Date(t + 8 * 3600000); g.fillText((f === 0 ? String(d0.getUTCMonth() + 1) + '/' + d0.getUTCDate() + ' ' : '') + hm(t), Math.min(W - padR - 30, padL + f * (W - padL - padR) - (f === 0 ? 0 : 14)), H - 8); });
+  const md = (t) => { const d = new Date(t + 8 * 3600000); return String(d.getUTCMonth() + 1).padStart(2, '0') + '/' + String(d.getUTCDate()).padStart(2, '0'); };
+  const info = (p) => `${md(p[0])} ${hm(p[0])}　<b class="${cls(prev ? p[1] - prev : 0)}">${fmt(p[1], 2)} ${prev ? fmtPct((p[1] / prev - 1) * 100) : ''}</b>　量 ${fmtVol(us ? p[2] : (p[2] || 0) / 1000)}${us ? '' : ' 張'}${prev ? '　昨收 ' + fmt(prev, 2) : ''}`;
   tip.innerHTML = info(pts[pts.length - 1]);
   const xh = xhair(wrap, cv, H);
   const move = (e) => { const r = cv.getBoundingClientRect(); const my = e.clientY - r.top; const t = t0 + (e.clientX - r.left - padL) / (W - padL - padR) * span; let best = pts[0]; for (const p of pts) if (Math.abs(p[0] - t) < Math.abs(best[0] - t)) best = p; tip.innerHTML = info(best);
     const yl = my >= top && my <= top + mainH ? fmtPx(hi - (my - top) / mainH * (hi - lo)) + (prev ? '' : '') : null;
-    xh.draw(x(best[0]), my, yl, hm(best[0]), padR, H - 16); };
+    xh.draw(x(best[0]), my, yl, md(best[0]) + ' ' + hm(best[0]), padR, H - 16); };
   cv.onmousemove = move; cv.onclick = move;
   cv.onmouseleave = () => { tip.innerHTML = info(pts[pts.length - 1]); xh.clear(); };
 }
@@ -691,8 +704,8 @@ function drawSeries(wrap, labels, series, opt = {}) {
   const [L0, S0] = opt._orig || [labels, series]; const N0 = opt._N || n;
   if (N0 >= 10) chartZoom(cv, wrap, N0, N0, { padL, w: W - padL - padR }, () => drawSeries(wrap, L0, S0, { ...opt, _full: false, _N: 0, _orig: null }));
 }
-async function loadBars(sym, range) {
-  const r = await fetchYahoo(ysym(sym), range, '1d', 600);
+async function loadBars(sym, range, interval = '1d') {
+  const r = await fetchYahoo(ysym(sym), range, interval, 600);
   if (!r || !r.timestamp) return [];
   const q = r.indicators.quote[0]; const out = [];
   r.timestamp.forEach((t, i) => {
@@ -1265,7 +1278,15 @@ function dialog(title, html, buttons, setup) {
 }
 
 // ───────── 個股 ─────────
-const RANGES = { '1D': ['1d', 0], '3M': ['6mo', 66], '6M': ['1y', 132], '1Y': ['2y', 250], '2Y': ['5y', 500] };
+/** 圖表區間：[抓取範圍, 顯示根數（0＝全部）, K 棒週期]；5 年以內日 K，更長改週 K；C＝自訂（S.pref.rcDays 天） */
+const RANGES = { '1D': ['1d', 0], '3M': ['6mo', 66], '6M': ['1y', 132], '1Y': ['2y', 250], '2Y': ['5y', 500], '5Y': ['10y', 1250], '10Y': ['max', 522, '1wk'], 'MAX': ['max', 0, '1wk'] };
+const RANGE_N = { '1D': '當日', '3M': '3 個月', '6M': '6 個月', '1Y': '1 年', '2Y': '2 年', '5Y': '5 年', '10Y': '10 年', 'MAX': '最大' };
+function rangeOf(k) {
+  if (k === 'C') { const d = S.pref.rcDays || 365; return d <= 1800 ? [d <= 700 ? '5y' : '10y', Math.max(5, Math.round(d * 250 / 365)), '1d'] : ['max', Math.round(d / 7), '1wk']; }
+  return RANGES[k] || RANGES['6M'];
+}
+function rcLabel(d) { return d % 365 === 0 ? d / 365 + ' 年' : d % 30 === 0 ? d / 30 + ' 個月' : d + ' 天'; }
+const CTYPES = [['candle', 'K線'], ['line', '走勢'], ['area', '面積'], ['ohlc', '美國線']];
 const barCache = {};
 VIEWS.s = {
   title: '個股',
@@ -1279,7 +1300,8 @@ VIEWS.s = {
       <div id="stags" class="row wrap" style="gap:6px;margin:-4px 0 10px"></div>
       <div id="sq"></div>
       ${(S.pref.stabL || {}).pos === 'top' ? stabBar(this) : ''}
-      <div class="card" style="margin-top:12px"><div class="row wrap" style="margin-bottom:8px"><div class="seg" id="rg">${Object.keys(RANGES).map((k) => `<button data-r="${k}" class="${S.pref.range === k ? 'on' : ''}">${k === '1D' ? '當日' : k.replace('M', ' 個月').replace('Y', ' 年')}</button>`).join('')}</div>
+      <div class="card" style="margin-top:12px"><div class="row wrap" style="margin-bottom:8px"><div class="seg" id="rg" style="flex-wrap:wrap">${Object.keys(RANGES).map((k) => `<button data-r="${k}" class="${S.pref.range === k ? 'on' : ''}">${RANGE_N[k]}</button>`).join('')}<button data-r="C" class="${S.pref.range === 'C' ? 'on' : ''}" title="自訂區間">${S.pref.rcDays ? '自訂 ' + rcLabel(S.pref.rcDays) : '自訂…'}</button></div>
+        <div class="seg" id="ctp">${CTYPES.map(([k, n]) => `<button data-ct="${k}" class="${(S.pref.ctype || 'candle') === k ? 'on' : ''}">${n}</button>`).join('')}</div>
         <span class="sp"></span><button class="btn sm ${S.pref.boll ? 'primary' : ''}" id="boll">布林通道</button><a class="btn sm" href="#/compare/${sym}">比較</a><span class="seg" id="kopt"><button id="kpat" class="${S.pref.kpat !== false ? 'on' : ''}" title="在 K 線上標示型態">型態</button><button id="kavg" class="${S.pref.kavg !== false ? 'on' : ''}" title="顯示我的持股均價線">均價</button><button id="kxh" class="${S.pref.xh !== false ? 'on' : ''}" title="顯示十字線（價格與日期）">十字</button><button id="kma" title="設定均線週期">均線</button><button id="kfs" title="全螢幕">⛶</button><button id="kpng" title="下載圖表圖片">⤓</button></span><span class="seg" id="zm" title="滑鼠滾輪縮放、拖曳平移、雙擊還原"><button data-z="0.7">＋</button><button data-z="1.4">－</button><button data-z="0">還原</button></span>
         <div class="seg" id="sb">${['KD', 'RSI', 'MACD'].map((k) => `<button data-s="${k}" class="${S.pref.sub === k ? 'on' : ''}">${k}</button>`).join('')}</div></div>
         <div class="chart-wrap"><canvas></canvas><div class="chart-tip"></div></div><div class="row between small muted" style="margin-top:4px"><span id="cmsg"></span><span class="zinfo"></span><span class="d-only">滾輪縮放 · 拖曳平移 · 雙擊還原</span></div></div>
@@ -1293,7 +1315,15 @@ VIEWS.s = {
     $('#star').onclick = () => { $('#star').textContent = toggleStar(sym) ? '★' : '☆'; };
     if ($('#grp')) $('#grp').onchange = () => { const g = D.groups().find((x) => String(x.id) === $('#grp').value); if (!g) return; const on = !(g.s || []).includes(sym); setGroup(sym, g.id, on); toast((on ? '已加入「' : '已移出「') + g.n + '」'); route(); };
     $('#sell').onclick = () => tradeModal(null, { t: 'SELL', s: sym, p: (S.q[sym] || {}).price || '' });
-    $$('[data-r]', $('#rg')).forEach((b) => b.onclick = () => { S.pref.range = b.dataset.r; savePref(); $$('[data-r]', $('#rg')).forEach((x) => x.classList.toggle('on', x === b)); this.chart(); });
+    $$('[data-r]', $('#rg')).forEach((b) => b.onclick = async () => {
+      if (b.dataset.r === 'C' && (!S.pref.rcDays || S.pref.range === 'C')) {
+        let box = null; const v = await dialog('自訂圖表區間', `<div class="grid g2"><div class="field"><label>數量</label><input id="rcN" type="number" min="1" value="${S.pref.rcDays ? (S.pref.rcDays % 365 === 0 ? S.pref.rcDays / 365 : S.pref.rcDays % 30 === 0 ? S.pref.rcDays / 30 : S.pref.rcDays) : 3}"></div>
+          <div class="field"><label>單位</label><select id="rcU"><option value="1">天</option><option value="30">個月</option><option value="365" selected>年</option></select></div></div><div class="small muted">5 年內為日 K，更長的區間改用週 K；最長 30 年。</div><div id="derr" class="small down"></div>`,
+          [['', '取消'], ['ok', '套用', 'primary']], (bx) => { box = bx; return () => { const d = (+$('#rcN', bx).value || 0) * +$('#rcU', bx).value; return d < 5 || d > 30 * 365 ? '請輸入 5 天到 30 年之間' : null; }; });
+        if (v !== 'ok') return; S.pref.rcDays = (+$('#rcN', box).value || 0) * +$('#rcU', box).value; b.textContent = '自訂 ' + rcLabel(S.pref.rcDays);
+      }
+      S.pref.range = b.dataset.r; savePref(); $$('[data-r]', $('#rg')).forEach((x) => x.classList.toggle('on', x === b)); this.chart(); });
+    $$('[data-ct]', $('#ctp')).forEach((b) => b.onclick = () => { S.pref.ctype = b.dataset.ct; savePref(); $$('[data-ct]', $('#ctp')).forEach((x) => x.classList.toggle('on', x === b)); this.chart(); });
     $$('[data-s]', $('#sb')).forEach((b) => b.onclick = () => { S.pref.sub = b.dataset.s; savePref(); $$('[data-s]', $('#sb')).forEach((x) => x.classList.toggle('on', x === b)); this.chart(); });
     $('#boll').onclick = () => { if (!can('CHART')) return toast('布林通道為會員功能（進階圖表）'); S.pref.boll = !S.pref.boll; savePref(); $('#boll').classList.toggle('primary', S.pref.boll); this.chart(); };
     $$('[data-z]', $('#zm')).forEach((b) => b.onclick = () => { const w = $('.chart-wrap'); if (w._zoom) w._zoom(+b.dataset.z); });
@@ -1315,21 +1345,28 @@ VIEWS.s = {
   },
   leave() { window.removeEventListener('resize', this._rs); document.removeEventListener('fullscreenchange', this._fs); if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); },
   async chart() {
-    const sym = this.sym; const [range, count] = RANGES[S.pref.range] || RANGES['6M'];
+    const sym = this.sym; const [range, count, iv] = rangeOf(S.pref.range); const ctype = S.pref.ctype || 'candle';
     $('#sb').style.visibility = range === '1d' ? 'hidden' : '';
     if (range === '1d') {
       $('#cmsg').textContent = '載入當日走勢…';
-      const r = await fetchYahoo(ysym(sym), '1d', '1m', 30);
+      const bars5 = ctype === 'candle' || ctype === 'ohlc';
+      const r = await fetchYahoo(ysym(sym), '1d', bars5 ? '5m' : '1m', 30);
       if (S.route !== 's' || this.sym !== sym) return;
       if (!r || !r.timestamp) { $('#cmsg').textContent = '無法取得當日走勢'; return; }
-      const q0 = r.indicators.quote[0];
+      const q0 = r.indicators.quote[0]; const prev = r.meta.chartPreviousClose || r.meta.previousClose;
+      const dd = new Date((r.timestamp[0] + 8 * 3600) * 1000); const wk = '日一二三四五六'[dd.getUTCDay()];
+      $('#cmsg').textContent = '交易日 ' + dd.getUTCFullYear() + '/' + String(dd.getUTCMonth() + 1).padStart(2, '0') + '/' + String(dd.getUTCDate()).padStart(2, '0') + '（週' + wk + '）' + (bars5 ? '・5 分 K' : '');
+      if (bars5) {
+        const bs = r.timestamp.map((t, i) => (q0.close[i] == null || q0.open[i] == null ? null : { d: hm(t * 1000), t: t * 1000, o: q0.open[i], h: q0.high[i], l: q0.low[i], c: q0.close[i], v: isUs(sym) ? q0.volume[i] : (q0.volume[i] || 0) / 1000 })).filter(Boolean);
+        drawChart($('.chart-wrap'), bs, { key: sym + '1d5', count: 0, mas: [], type: ctype, intraday: true, base: prev });
+        return;
+      }
       const pts = r.timestamp.map((t, i) => [t * 1000, q0.close[i], q0.volume[i]]).filter((p) => p[1] != null);
-      $('#cmsg').textContent = '';
-      drawLine($('.chart-wrap'), pts, r.meta.chartPreviousClose || r.meta.previousClose, isUs(sym));
+      drawLine($('.chart-wrap'), pts, prev, isUs(sym), ctype);
       return;
     }
-    const key = sym + range; $('#cmsg').textContent = barCache[key] ? '' : '載入 K 線…';
-    const bars = barCache[key] || (barCache[key] = await loadBars(sym, range));
+    const key = sym + range + (iv || ''); $('#cmsg').textContent = barCache[key] ? '' : '載入 K 線…';
+    const bars = barCache[key] || (barCache[key] = await loadBars(sym, range, iv));
     if (S.route !== 's' || this.sym !== sym) return;
     if (!bars.length) { $('#cmsg').textContent = '無法取得 K 線資料'; return; }
     // 盤中：以即時價補上今日 K 棒
@@ -1341,8 +1378,9 @@ VIEWS.s = {
     }
     $('#cmsg').innerHTML = can('CHART') ? '' : '🔒 KD／RSI／MACD 副圖為會員功能（進階圖表）。<a href="#/member">查看方案 ›</a>';
     const hh = holdings().find((x) => x.symbol === sym); const fsEl = document.fullscreenElement;
-    drawChart($('.chart-wrap'), all, { key: sym + range, count, sub: can('CHART') ? S.pref.sub : null, boll: can('CHART') && S.pref.boll, mas: S.pref.mas, pats: S.pref.kpat !== false && can('KLINE'), avg: S.pref.kavg !== false && hh ? hh.avgCost : null, H: fsEl && fsEl.contains($('.chart-wrap')) ? Math.max(400, window.innerHeight - 150) : null });
-    this.bars = all; this.signals(); this.pro();
+    drawChart($('.chart-wrap'), all, { key: sym + range + (iv || '') + count, count: count || all.length, type: ctype, weekly: iv === '1wk', sub: can('CHART') ? S.pref.sub : null, boll: can('CHART') && S.pref.boll, mas: S.pref.mas, pats: S.pref.kpat !== false && can('KLINE'), avg: S.pref.kavg !== false && hh ? hh.avgCost : null, H: fsEl && fsEl.contains($('.chart-wrap')) ? Math.max(400, window.innerHeight - 150) : null });
+    if (iv === '1wk') $('#cmsg').textContent = '週 K（' + all[0].d + ' 起）'; else if (S.pref.range === 'C') $('#cmsg').textContent = '自訂區間：近 ' + rcLabel(S.pref.rcDays || 365);
+    if (iv !== '1wk') { this.bars = all; this.signals(); this.pro(); }
   },
   fill() {
     const sym = this.sym; const q = S.q[sym] || {}; const us = isUs(sym); const ch = q.price && q.prev ? q.price - q.prev : 0;
@@ -2608,21 +2646,24 @@ function stockTabs(sym, all) {
   return vis.length ? vis : sorted;
 }
 function stabBar(view) {
-  return `<div class="seg" id="stab" style="margin-top:12px;flex-wrap:wrap">${stockTabs(view.sym).map(([k, n]) => `<button data-st="${k}" class="${view.tab() === k ? 'on' : ''}">${n}</button>`).join('')}<button id="stabE" title="分頁列排版：順序、顯示、預設分頁、位置">⚙</button></div>`;
+  const full = (S.pref.stabL || {}).w === 'full';
+  return `<div class="seg${full ? ' full' : ''}" id="stab" style="margin-top:12px;flex-wrap:wrap${full ? ';display:flex;width:100%' : ''}">${stockTabs(view.sym).map(([k, n]) => `<button data-st="${k}" class="${view.tab() === k ? 'on' : ''}">${n}</button>`).join('')}<button id="stabE" title="分頁列排版：順序、顯示、預設分頁、位置">⚙</button></div>`;
 }
 /** 分頁列排版設定 */
 function stabEditor() {
   const L0 = S.pref.stabL || {};
-  let L = { o: L0.o || [], h: L0.h || [], def: L0.def || 'last', pos: L0.pos || 'bottom' };
+  let L = { o: L0.o || [], h: L0.h || [], def: L0.def || 'last', pos: L0.pos || 'bottom', w: L0.w || '' };
   const draw = (box) => {
     const list = STABS.map((t, i) => [t, L.o.indexOf(t[0]) >= 0 ? L.o.indexOf(t[0]) : 100 + i]).sort((a, b) => a[1] - b[1]).map(([t]) => t);
     box.innerHTML = `<div class="small muted" style="margin-bottom:8px">個股頁的分頁列：勾選要顯示的分頁、用 ↑↓ 調整順序（「成分」只在 ETF 顯示）。設定存在這個瀏覽器。</div>
       <div class="row wrap" style="margin-bottom:8px"><span class="small">分頁列位置</span><div class="seg">${[['top', '圖表上方'], ['bottom', '圖表下方']].map(([v, n]) => `<button data-sp="${v}" class="${L.pos === v ? 'on' : ''}">${n}</button>`).join('')}</div></div>
+      <div class="row wrap" style="margin-bottom:8px"><span class="small">分頁列寬度</span><div class="seg">${[['', '依文字'], ['full', '等寬整列']].map(([v, n]) => `<button data-sw="${v}" class="${(L.w || '') === v ? 'on' : ''}">${n}</button>`).join('')}</div></div>
       <div class="row wrap" style="margin-bottom:10px"><span class="small">開啟個股時顯示</span><select id="sdef" style="width:auto"><option value="last" ${L.def === 'last' ? 'selected' : ''}>上次看的分頁</option>${list.map(([k, n]) => `<option value="${k}" ${L.def === k ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
       <div class="list">${list.map(([k, n], i) => `<div class="it" style="cursor:default;padding:6px 2px;gap:6px"><input type="checkbox" data-sh="${k}" ${L.h.includes(k) ? '' : 'checked'} style="width:auto"><div class="l"><div class="t1">${n}</div></div>
         <button class="btn sm" data-sm="${i}:-1" ${i ? '' : 'disabled'}>↑</button><button class="btn sm" data-sm="${i}:1" ${i < list.length - 1 ? '' : 'disabled'}>↓</button></div>`).join('')}</div>`;
     const save = () => { S.pref.stabL = { ...L }; savePref(); draw(box); };
     $$('[data-sp]', box).forEach((b) => b.onclick = () => { L.pos = b.dataset.sp; save(); });
+    $$('[data-sw]', box).forEach((b) => b.onclick = () => { L.w = b.dataset.sw; save(); });
     $('#sdef', box).onchange = (e) => { L.def = e.target.value; save(); };
     $$('[data-sh]', box).forEach((x) => x.onchange = () => { const h = new Set(L.h); if (x.checked) h.delete(x.dataset.sh); else h.add(x.dataset.sh); if (h.size >= STABS.length) { toast('至少要顯示一個分頁'); x.checked = true; return; } L.h = Array.from(h); save(); });
     $$('[data-sm]', box).forEach((b) => b.onclick = () => { const o = list.map(([k]) => k); const [i, d] = b.dataset.sm.split(':').map(Number); [o[i], o[i + d]] = [o[i + d], o[i]]; L.o = o; save(); });
