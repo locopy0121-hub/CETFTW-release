@@ -68,7 +68,7 @@ async function logout(msg) {
 
 // ───────── 主畫面 ─────────
 /** 網頁版本（發布時由 .github/public/sync.sh 填入） */
-const WEB_VER = /*WEBVER*/{"v":"","sha":"2c7a95a","at":"2026-11-21 18:41"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"39ba9f7","at":"2026-11-21 18:41"};
 const verText = () => (WEB_VER ? (WEB_VER.v ? (/^v/i.test(WEB_VER.v) ? WEB_VER.v : 'v' + WEB_VER.v) + ' · ' : '') + WEB_VER.sha + (WEB_VER.at ? ' · ' + WEB_VER.at : '') : '開發版');
 const TABS = [['home', '總覽'], ['req', '申請'], ['mem', '會員'], ['pol', '政策'], ['tier', '會員等級'], ['rel', '發布'], ['line', 'LINE'], ['job', '工作紀錄']];
 /** 功能位元（與 App License.Feature 順序相同，不可調整） */
@@ -186,12 +186,17 @@ function render() {
     v.innerHTML = `<div class="card"><h2>發布版本給使用者</h2>${!app.token ? '<div class="notice">管理員 App 尚未設定 GitHub 權杖，無法讀取版本與發布。</div>' : ''}
       ${bs.map((b) => { const ver = b.tag.replace('admin-', ''); const isRel = !b.draft; const live = rel && rel.tag === ver;
         return `<div class="tile" style="margin-top:8px"><div class="row"><b style="flex:1">${esc(b.tag)}</b>${isRel ? '<span class="tag up">正式版</span>' : '<span class="tag">測試版</span>'}<span class="small muted">${esc(b.at.replace('T', ' '))}</span>
-          ${b.draft && !live ? `<button class="btn sm primary" data-pv="${esc(ver)}">發布 ${esc(ver)}</button>` : ''}</div>${b.notes ? `<div class="small text2" style="white-space:pre-wrap;margin-top:4px">${esc(b.notes)}</div>` : ''}</div>`; }).join('') || '<div class="small muted">等待管理員 App 回報版本清單</div>'}</div>
+          ${b.draft ? `<button class="btn sm ${live ? '' : 'primary'}" data-pv="${esc(ver)}">${live ? '重新部署' : '🚀 一鍵發布及部署'}</button>` : ''}</div>${b.notes ? `<div class="small text2" style="white-space:pre-wrap;margin-top:4px">${esc(b.notes)}</div>` : ''}</div>`; }).join('') || '<div class="small muted">等待管理員 App 回報版本清單</div>'}</div>
       <div class="card" style="margin-top:12px"><h2>發佈站與 LINE 自動回覆</h2>${kv([['已部署版本', app.worker && app.worker.app ? 'v' + app.worker.app : '—'], ['狀態', app.worker ? (app.worker.need ? '有新版程式可部署' : '最新') : '—']])}
         <button class="btn" id="rdp2" style="margin-top:10px" ${app.worker && app.worker.ready ? '' : 'disabled'}>重新部署發佈站</button></div>`;
     $$('[data-pv]', v).forEach((b) => b.onclick = async () => {
-      const r = await dialog('發布 ' + b.dataset.pv, `<div class="text2">把 ${esc(b.dataset.pv)} 的使用者版發布為正式版，使用者 App 即可線上更新，網頁版同步換成這一版。</div><div class="field" style="margin-top:10px"><label>更新說明（選填，空白沿用建置說明）</label><textarea id="rn" rows="4"></textarea></div>`, [['', '取消'], ['ok', '發布', 'primary']]);
-      if (r.v === 'ok') job('promote', { version: b.dataset.pv, notes: $('#rn', r.box).value.trim() }, '已送出發布');
+      const ver = b.dataset.pv; const live = rel && rel.tag === ver;
+      const ck = (id, on, t, d) => `<label class="row small" style="gap:6px;margin-top:6px;cursor:pointer;align-items:flex-start"><input type="checkbox" id="${id}" style="width:auto" ${on ? 'checked' : ''}><span><b>${t}</b><br><span class="muted">${d}</span></span></label>`;
+      const r = await dialog('一鍵發布及部署 ' + ver, `<div class="text2">由管理員 App 依序執行（後端先、前端後），程式取自這次建置的原始碼：</div>
+        ${ck('rS', true, '1. 更新會員伺服器', '版本較新才更新（Apps Script 一鍵更新）')}${ck('rW', true, '2. 部署轉送站', '網頁版、管理後台、發佈站、LINE 自動回覆；程式有變更才部署')}
+        ${ck('rP', !live, '3. 發布使用者版', live ? '已是正式版，勾選＝重新發布' : '使用者 App 線上更新，網頁版同步切換到這一版')}${ck('rL', false, '4. LINE 群發更新通知', '發布後通知所有好友')}
+        <div class="field" style="margin-top:10px"><label>更新說明（選填，空白沿用建置說明）</label><textarea id="rn" rows="3"></textarea></div>`, [['', '取消'], ['ok', '開始', 'primary']]);
+      if (r.v === 'ok') { const g = (id) => $('#' + id, r.box).checked; job('release', { version: ver, notes: $('#rn', r.box).value.trim(), server: g('rS'), worker: g('rW'), promote: g('rP'), line: g('rP') && g('rL') }, '已送出一鍵發布及部署'); }
     });
     $('#rdp2').onclick = () => job('redeploy', {}, '已送出重新部署');
   } else if (S.tab === 'job') {
@@ -200,7 +205,7 @@ function render() {
   }
 }
 const kindN = (k) => ({ new: '開通', renew: '續約', change: '變更方案', register: '註冊' }[k] || k);
-const JOBN = { broadcast: 'LINE 群發', issue: '開通授權', revoke: '停用授權', edit: '編輯會員', account: '帳號管理', policy: '更新政策', promote: '發布版本', redeploy: '重新部署', sync: '同步會員', remove: '刪除資料', request: '處理申請' };
+const JOBN = { broadcast: 'LINE 群發', issue: '開通授權', revoke: '停用授權', edit: '編輯會員', account: '帳號管理', policy: '更新政策', promote: '發布版本', release: '一鍵發布及部署', redeploy: '重新部署', sync: '同步會員', remove: '刪除資料', request: '處理申請' };
 function kv(items) { return `<div class="grid g2" style="gap:8px">${items.map(([k, x]) => `<div><div class="small muted">${esc(k)}</div><div>${esc(x)}</div></div>`).join('')}</div>`; }
 function jobRow(j) {
   let p = {}; try { p = JSON.parse(j.payload); } catch (e) {}
