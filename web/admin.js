@@ -68,7 +68,7 @@ async function logout(msg) {
 
 // ───────── 主畫面 ─────────
 /** 網頁版本（發布時由 .github/public/sync.sh 填入） */
-const WEB_VER = /*WEBVER*/{"v":"v1.1.355","sha":"928c596","at":"2026-11-22 02:51"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"20907fb","at":"2026-11-22 03:07"};
 const verText = () => (WEB_VER ? (WEB_VER.v ? (/^v/i.test(WEB_VER.v) ? WEB_VER.v : 'v' + WEB_VER.v) + ' · ' : '') + WEB_VER.sha + (WEB_VER.at ? ' · ' + WEB_VER.at : '') : '開發版');
 const TABS = [['home', '總覽'], ['req', '申請'], ['mem', '會員'], ['pol', '政策'], ['tier', '會員等級'], ['rel', '發布'], ['line', 'LINE'], ['forum', '討論區'], ['job', '工作紀錄']];
 /** 功能位元（與 App License.Feature 順序相同，不可調整） */
@@ -95,7 +95,7 @@ function renderLive() {
 async function refresh() {
   // 編輯中的頁面（政策、等級、LINE）不自動重畫，避免輸入到一半被覆蓋
   try {
-    S.d = await call('state', S.tab === 'line' ? { want: 'line' } : {}); renderLive(); renderTabs();
+    S.d = await call('state', S.tab === 'line' ? { want: 'line' } : {}); renderLive(); renderTabs(); jobsDone();
     const done = lineJobsDone();
     // LINE 頁：沒有在輸入、沒有開對話框時才重畫（輸入內容都保存在 S，重畫不會遺失）
     if (S.tab === 'line' && S.rendered === 'line') { if (!lineFocused() && !$('.modal-bg')) render(); else renderLineRes(); if (done) renderLineRes(); }
@@ -107,9 +107,26 @@ function pendingReqs() {
   const app = (S.d.app && S.d.app.requests) || []; const sheet = (S.d.requests || []).filter((r) => r.state === '待處理');
   return app.map((r) => ({ ...r, src: 'app' })).concat(sheet.map((r) => ({ key: '', kind: r.kind, name: r.name, contact: r.contact, msg: r.message, no: r.no, dev: r.device, at: r.at, src: 'sheet', id: r.id })));
 }
+/**
+ * 送出操作：資料庫在 D1 時，會員資料、強制登出、回覆 LINE 由轉送站直接完成（不必等管理員 App）；
+ * 其他需要手機金鑰的操作（開通、政策、發布…）交給管理員 App，App 開著時約 2 秒內完成並顯示結果。
+ */
+const DIRECT = { edit: 1, account: 1, linePush: 1 };
 async function job(type, payload, label) {
-  try { const r = await call('job', { type, payload }); toast((label || '已送出') + (appOnline() ? '，管理員 App 處理中…' : '：管理員 App 開啟後執行')); S.fast = 12; await refresh(); return r.id; }
-  catch (e) { toast('送出失敗：' + e.message, 6000); }
+  if (S.d && S.d.d1 && DIRECT[type]) {
+    try { const r = await call('direct', { type, payload }); if (!r.ok) throw new Error(r.err || '失敗'); toast('✓ ' + (r.result || '已完成')); await refresh(); return 'direct'; }
+    catch (e) { toast('✗ ' + e.message, 6000); return null; }
+  }
+  try {
+    const r = await call('job', { type, payload }); S.jwait = S.jwait || {}; S.jwait[r.id] = { at: Date.now(), label: label || '' };
+    toast(appOnline() ? '處理中…' : (label || '已送出') + '：管理員 App 開啟後自動執行'); S.fast = 20; await refresh(); return r.id;
+  } catch (e) { toast('送出失敗：' + e.message, 6000); }
+}
+/** 交給管理員 App 的操作完成時顯示結果 */
+function jobsDone() {
+  const w = S.jwait || {}; const jobs = (S.d && S.d.jobs) || [];
+  Object.keys(w).forEach((id) => { const j = jobs.find((x) => String(x.id) === String(id)); if (!j) { if (Date.now() - w[id].at > 600000) delete w[id]; return; }
+    if (['完成', '失敗', '已取消'].includes(j.state)) { delete w[id]; if (j.type !== 'line') toast((j.state === '完成' ? '✓ ' : '✗ ') + String(j.result || j.state).slice(0, 120), 5000); } });
 }
 
 // ───────── 個股討論區管理（直接連轉送站的討論資料庫，以後台登入確認身分）─────────
@@ -533,6 +550,25 @@ async function editRule(r, isNew) {
   S.lrDirty = true; render();
 }
 function newRule(key) { const R = S.lr || { rules: [] }; return { id: (R.rules || []).reduce((m, x) => Math.max(m, x.id || 0), 0) + 1, k: [key || ''], c: false, kind: 'TEXT', t: '' }; }
+/** 收件匣依 LINE 好友（ID）收合：每位好友一列，顯示則數、待回覆數與最新一則，點開看全部訊息（索引對應 list） */
+const ibNeed = (m) => !m.g || m.g === '預設回覆' || String(m.g).includes('失敗');
+function ibGroups(list, L) {
+  const open = S.ibOpen = S.ibOpen || new Set(); const by = new Map();
+  list.forEach((m, k) => { const u = m.u || '?'; if (!by.has(u)) by.set(u, []); by.get(u).push([m, k]); });
+  const gs = Array.from(by.entries()).sort((a, b) => Math.max(...b[1].map(([m]) => m.at)) - Math.max(...a[1].map(([m]) => m.at)));
+  return `<div class="small muted" style="margin-top:8px">${gs.length} 位好友 · ${list.length} 則訊息</div>` + gs.slice(0, 80).map(([u, arr]) => {
+    arr.sort((a, b) => b[0].at - a[0].at); const [last, lk] = arr[0]; const name = (arr.find(([m]) => m.n) || [{}])[0].n || '好友';
+    const need = arr.filter(([m]) => ibNeed(m)).length; const on = open.has(u); const me = L.me && L.me.id === u;
+    return `<div class="tile" style="margin-top:6px;padding:0"><div class="row" data-ibg="${esc(u)}" style="cursor:pointer;padding:10px 12px;align-items:flex-start">
+        <div class="sp"><div class="row" style="gap:6px;justify-content:flex-start"><b>${esc(name)}</b><span class="tag" style="color:var(--primary);border-color:var(--primary)">${arr.length} 則</span>${need ? `<span class="tag up" style="border-color:currentColor">待回 ${need}</span>` : ''}${me ? '<span class="small" style="color:var(--primary)">我</span>' : ''}</div>
+          <div class="small muted">ID …${esc(String(u).slice(-6))} · ${fmtT(last.at)}</div>${on ? '' : `<div class="small text2" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(last.t)}</div>`}</div>
+        <span class="muted small">${on ? '▲' : '▼'}</span></div>
+      ${on ? `<div style="padding:0 12px 10px">${last.g !== '封鎖' && u !== '?' ? `<div class="row" style="gap:6px;justify-content:flex-start;margin-bottom:6px"><button class="btn sm" data-ibr="${lk}">回覆</button><button class="btn sm" data-ibm="${lk}">${me ? '✓ 我' : '設為我'}</button></div>` : ''}
+        ${arr.slice(0, 40).map(([m, k]) => `<div class="row" style="align-items:flex-start;padding:6px 0;border-top:1px solid var(--border)"><div class="sp"><div class="small ${ibNeed(m) ? 'up' : 'muted'}">${fmtT(m.at)} · ${esc(m.g || '未自動回覆')}</div><div class="small" style="white-space:pre-wrap">${esc(m.t)}</div></div>
+          ${!/^[（［]/.test(m.t) && !String(m.g).startsWith('關鍵字') ? `<button class="btn sm" data-ibk="${k}">＋規則</button>` : ''}</div>`).join('')}
+        ${arr.length > 40 ? '<div class="small muted">（只顯示最近 40 則）</div>' : ''}</div>` : ''}</div>`;
+  }).join('');
+}
 function inboxCat(t) { return t.startsWith('關鍵字') ? '關鍵字' : t === '智慧問答' ? '智慧問答' : t === '預設回覆' ? '預設回覆' : t.includes('失敗') ? '回覆失敗' : !t ? '未回覆' : '其他'; }
 
 const lineAuto = {
@@ -556,7 +592,7 @@ const lineAuto = {
     }
     const F = S.ibf = S.ibf || { q: '', f: 0 };
     const list = inbox.filter((m) => !F.q || [m.t, m.n, m.g].some((x) => String(x || '').toLowerCase().includes(F.q.toLowerCase())))
-      .filter((m) => F.f === 0 || (F.f === 1 && (!m.g || m.g === '預設回覆' || String(m.g).includes('失敗'))) || (F.f === 2 && m.g === '智慧問答')).slice(0, 80);
+      .filter((m) => F.f === 0 || (F.f === 1 && (!m.g || m.g === '預設回覆' || String(m.g).includes('失敗'))) || (F.f === 2 && m.g === '智慧問答')).slice(0, 400);
     return `<div class="card"><h2>自動回覆（Webhook）<span class="r small ${dep ? 'down' : 'muted'}">${dep ? '● 運作中 · 關鍵字 ' + (R.rules || []).filter((r) => !r.off).length + ' 組' : '尚未部署'}</span></h2>
         <div class="small muted">關鍵字回覆、加入好友歡迎、盤後報告即時查詢、智慧問答；回覆不扣訊息額度。${A.creds ? '' : '<br><span class="up">管理員 App 尚未設定 Cloudflare 帳戶 ID、API 權杖與 LINE Channel secret（請在 App「會員 › LINE › 自動回覆」輸入）。</span>'}</div></div>
       <div class="grid g2 stack" style="margin-top:12px"><div class="card"><h2>回覆規則${S.lrDirty ? '<span class="r small up">未套用</span>' : ''}</h2>
@@ -591,14 +627,13 @@ const lineAuto = {
         ${stats}
         <div class="row wrap" style="gap:8px;margin-top:10px"><input id="ibq" placeholder="搜尋訊息、好友名稱" value="${esc(F.q)}" style="flex:1;min-width:180px">
           <div class="seg">${['全部', '需人工回覆', '智慧問答'].map((n, k) => `<button data-ibf="${k}" class="${F.f === k ? 'on' : ''}">${n}</button>`).join('')}</div><button class="btn sm" id="ibcsv">匯出 CSV</button></div>
-        ${list.length ? list.map((m, k) => `<div class="tile" style="margin-top:6px"><div class="row" style="align-items:flex-start"><div class="sp"><div class="small muted">${fmtT(m.at)} · ${esc(m.n || '好友')} · ${esc(m.g || '未自動回覆')}</div><div class="small" style="white-space:pre-wrap">${esc(m.t)}</div></div>
-          ${m.g !== '封鎖' ? `<div class="row" style="gap:4px;flex-wrap:wrap;justify-content:flex-end"><button class="btn sm" data-ibr="${k}">回覆</button><button class="btn sm" data-ibm="${k}">${L.me && L.me.id === m.u ? '✓ 我' : '設為我'}</button>${!/^[（［]/.test(m.t) && !String(m.g).startsWith('關鍵字') ? `<button class="btn sm" data-ibk="${k}">＋規則</button>` : ''}</div>` : ''}</div></div>`).join('') : '<div class="small muted" style="margin-top:8px">目前沒有訊息</div>'}</div>` : ''}`;
+        ${list.length ? ibGroups(list, L) : '<div class="small muted" style="margin-top:8px">目前沒有訊息</div>'}</div>` : ''}`;
   },
   bind(v, L) {
     const R = S.lr = S.lr || { rules: [] }; const dirty = () => { S.lrDirty = true; };
     const F = S.ibf; const inbox = L.inbox || [];
     const list = inbox.filter((m) => !F.q || [m.t, m.n, m.g].some((x) => String(x || '').toLowerCase().includes(F.q.toLowerCase())))
-      .filter((m) => F.f === 0 || (F.f === 1 && (!m.g || m.g === '預設回覆' || String(m.g).includes('失敗'))) || (F.f === 2 && m.g === '智慧問答')).slice(0, 80);
+      .filter((m) => F.f === 0 || (F.f === 1 && (!m.g || m.g === '預設回覆' || String(m.g).includes('失敗'))) || (F.f === 2 && m.g === '智慧問答')).slice(0, 400);
     $$('[data-re]', v).forEach((el) => el.onclick = () => editRule(R.rules.find((x) => String(x.id) === el.dataset.re), false));
     $('#radd', v).onclick = () => editRule(newRule(''), true);
     $('#rdef', v).onclick = async () => { const c = await dialog('還原預設規則', '<div class="text2">目前的規則會被預設規則取代（已部署時會直接套用）。</div>', [['', '取消'], ['ok', '還原', 'primary']]); if (c.v === 'ok') { S.lrDirty = false; lineJob('arDefaults'); } };
@@ -627,6 +662,7 @@ const lineAuto = {
     $$('[data-mk]', v).forEach((el) => el.onclick = () => editRule(newRule(el.dataset.mk), true));
     const ibq = $('#ibq', v); if (ibq) ibq.onchange = () => { F.q = ibq.value.trim(); render(); };
     $$('[data-ibf]', v).forEach((b) => b.onclick = () => { F.f = +b.dataset.ibf; render(); });
+    $$('[data-ibg]', v).forEach((b) => b.onclick = () => { const o = S.ibOpen = S.ibOpen || new Set(); const u = b.dataset.ibg; if (o.has(u)) o.delete(u); else o.add(u); render(); });
     if ($('#ibcsv', v)) $('#ibcsv', v).onclick = () => {
       const qq = (x) => '"' + String(x || '').replace(/"/g, '""').replace(/\n/g, ' ') + '"';
       const csv = '﻿時間,好友,訊息,回覆類型\n' + inbox.map((m) => [fmtT(m.at), m.n, m.t, m.g || '未回覆'].map(qq).join(',')).join('\n');
@@ -641,7 +677,7 @@ const lineAuto = {
       const c = await dialog('回覆 ' + (m.n || '好友'), `<div class="small muted">對方：${esc(String(m.t).slice(0, 160))}</div><div class="row wrap" style="gap:4px;margin-top:6px">${tpl.map(([n], k) => `<button class="btn sm" data-rt="${k}">${n}</button>`).join('')}</div>
         <textarea id="rpt" rows="4" maxlength="4900" style="margin-top:6px" placeholder="回覆內容（扣 1 則額度）"></textarea><div id="derr" class="small up"></div>`, [['', '取消'], ['ok', '傳送', 'primary']],
         (bg) => { $$('[data-rt]', bg).forEach((x) => x.onclick = () => { $('#rpt', bg).value = tpl[+x.dataset.rt][1].replace('{name}', m.n || '').trim(); }); return (val) => (val === 'ok' && !$('#rpt', bg).value.trim() ? '請輸入回覆內容' : null); });
-      if (c.v === 'ok') lineJob('arPush', { u: m.u, n: m.n, text: $('#rpt', c.box).value.trim() });
+      if (c.v === 'ok') { if (S.d && S.d.d1) job('linePush', { u: m.u, n: m.n, text: $('#rpt', c.box).value.trim() }); else lineJob('arPush', { u: m.u, n: m.n, text: $('#rpt', c.box).value.trim() }); }
     });
   },
 };

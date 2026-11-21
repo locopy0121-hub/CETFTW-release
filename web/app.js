@@ -814,7 +814,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"v1.1.355","sha":"928c596","at":"2026-11-22 02:51"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"20907fb","at":"2026-11-22 03:07"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -1590,9 +1590,17 @@ VIEWS.s = {
   },
   /** 進階分析：三關價、股價光譜、分價量、月份季節性（個股進階資料） */
   async pro() {
-    const el = $('#pro'); if (!el || !this.bars || this.bars.length < 30) return;
+    const el = $('#pro'); if (!el) return;
     if (!can('STOCKPRO')) { el.innerHTML = lockCard('STOCKPRO', '三關價、股價光譜、分價量、月份漲跌（個股進階資料）'); return; }
-    const sym = this.sym; const us = isUs(sym); const etf = D.isEtf(sym); const b = this.bars; const today = ymd();
+    // 一律用近兩年日 K 計算（不受圖表區間影響：當日、1 個月、週 K 時資料不足或不是日 K，光譜會算不出來）
+    const sym = this.sym; const us = isUs(sym); const etf = D.isEtf(sym); const today = ymd();
+    const dk = sym + '2y'; const daily = barCache[dk] || (barCache[dk] = await loadBars(sym, '2y'));
+    if (S.route !== 's' || this.sym !== sym || !$('#pro')) return;
+    const b = (daily || []).slice();
+    { const q = S.q[sym]; if (b.length && q && q.price && !us && twOpen()) { const last = b[b.length - 1]; const cur = { d: today, o: q.open || q.price, h: Math.max(q.high || q.price, q.price), l: Math.min(q.low || q.price, q.price), c: q.price, v: q.volLots || 0 }; if (last.d === today) b[b.length - 1] = cur; else b.push(cur); } }
+    if (b.length < 30) { el.innerHTML = '<div class="card"><h2>進階分析</h2><div class="small muted">日 K 資料不足（上市未滿 30 個交易日），暫無三關價、光譜與分價量。</div></div>'; return; }
+    if (this._proKey === sym + b.length + b[b.length - 1].c && $('#proBand')) return;   // 同一份資料不重畫（切換圖表區間時）
+    this._proKey = sym + b.length + b[b.length - 1].c;
     const snap = (v) => { if (us) return Math.round(v * 100) / 100; const t = twTick(v, etf); return Math.round(Math.round(v / t) * t * 100) / 100; };
     const base = b[b.length - 1].d === today && b.length > 1 ? b[b.length - 2] : b[b.length - 1];
     const r = base.h - base.l; const kp = [['上關', snap(base.l + r * 1.382)], ['中關', snap((base.h + base.l) / 2)], ['下關', snap(base.h - r * 1.382)]];
@@ -1608,7 +1616,8 @@ VIEWS.s = {
         <div class="small muted" style="margin-top:6px">橘色為成交最密集的價區（籌碼支撐／壓力），藍色為目前價格所在區間。</div></div>
       <div class="card" id="season"><h2>月份漲跌</h2><div class="muted small">載入中…</div></div>`;
     { const bd = bandInfo(b, price); const ss = bandSeries(b); const pb = $('#proBand');
-      if (bd && ss && pb) { pb.innerHTML = bandCardHtml('股價光譜（近一年）', bd, price, fmtPx, 'proBz'); drawBandZ($('#proBz'), ss, price, bd); } else if (pb) pb.remove(); }
+      if (bd && ss && pb) { pb.innerHTML = bandCardHtml('股價光譜（近一年）', bd, price, fmtPx, 'proBz'); requestAnimationFrame(() => drawBandZ($('#proBz'), ss, price, bd)); }
+      else if (pb) pb.innerHTML = '<h2>股價光譜（近一年）</h2><div class="small muted">需要至少 60 個交易日的日 K 才能計算光譜（目前 ' + b.length + ' 日）。</div>'; }
     const k = 'mx' + sym; const m = barCache[k] || (barCache[k] = await fetchYahoo(ysym(sym), 'max', '1mo', 86400));
     if (S.route !== 's' || this.sym !== sym || !$('#season')) return;
     if (!m || !m.timestamp) { $('#season').innerHTML = '<h2>月份漲跌</h2><div class="muted small">無資料</div>'; return; }
@@ -4706,7 +4715,11 @@ function bandCardHtml(title, bd, price, f, id) {
 }
 function drawBandZ(wrap, s, price, bd) {
   if (!wrap || !s) return; const cv = wrap.querySelector('canvas'); const tip = wrap.querySelector('.chart-tip');
-  const W = wrap.clientWidth, H = 170, dpr = window.devicePixelRatio || 1; cv.width = W * dpr; cv.height = H * dpr; cv.style.height = H + 'px';
+  const W = wrap.clientWidth, H = 170, dpr = window.devicePixelRatio || 1;
+  // 版面還沒排好（寬度 0）時稍後再畫；之後寬度改變（旋轉、側欄收合）自動重畫
+  if (W < 60) { wrap._try = (wrap._try || 0) + 1; if (wrap._try < 30) setTimeout(() => drawBandZ(wrap, s, price, bd), 150); return; }
+  if (!wrap._ro && window.ResizeObserver) { let lw = W; wrap._ro = new ResizeObserver(() => { if (document.body.contains(wrap) && Math.abs(wrap.clientWidth - lw) > 4) { lw = wrap.clientWidth; drawBandZ(wrap, s, price, bd); } }); wrap._ro.observe(wrap); }
+  cv.width = W * dpr; cv.height = H * dpr; cv.style.height = H + 'px';
   const g = cv.getContext('2d'); g.scale(dpr, dpr); g.clearRect(0, 0, W, H); g.font = '11px sans-serif'; g.textBaseline = 'middle';
   const z = s.z.slice(); z[z.length - 1] = bd.z; const n = z.length;
   const lim = Math.max(2.6, Math.ceil(Math.max(...z.map(Math.abs)) * 2) / 2 + 0.2);
