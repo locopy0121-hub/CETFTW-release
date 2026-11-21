@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1420">
+<title>台美股資產 網頁版</title>
+<meta name="description" content="台美股資產網頁版：自選行情、持股損益、交易紀錄、個股 K 線，與手機 App 同步。">
+<link rel="icon" href="/web/icon.svg" type="image/svg+xml">
+<link rel="manifest" href="/web/manifest.webmanifest">
+<script>
+  // 測試模式（?dev）：靜態檔改取最新原始碼
+  (function () {
+    // 每 5 分鐘換一次網址，避免瀏覽器沿用舊版程式
+    var q = /[?&]dev\b/.test(location.search) ? '?dev' : '?v=' + Math.floor(Date.now() / 300000);
+    document.write('<link rel="stylesheet" href="/web/style.css' + q + '">');
+    document.write('<script type="module" src="/web/app.js' + q + '"><\/script>');
+  })();
+</script>
+</head>
+<body>
+<div id="app"><div class="boot"><div class="logo">台</div><div>載入中…</div></div></div>
+<noscript>請開啟 JavaScript 才能使用網頁版。</noscript>
+</body>
+</html>

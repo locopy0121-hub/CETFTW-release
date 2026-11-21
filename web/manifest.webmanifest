@@ -1,0 +1,9 @@
+{
+  "name": "台美股資產",
+  "short_name": "台美股資產",
+  "start_url": "/web",
+  "display": "standalone",
+  "background_color": "#0f1420",
+  "theme_color": "#0f1420",
+  "icons": [{ "src": "/web/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
