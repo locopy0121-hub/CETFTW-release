@@ -68,7 +68,7 @@ async function logout(msg) {
 
 // ───────── 主畫面 ─────────
 /** 網頁版本（發布時由 .github/public/sync.sh 填入） */
-const WEB_VER = /*WEBVER*/{"v":"v1.1.345","sha":"57c5d1b","at":"2026-11-21 22:32"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"9cbc52a","at":"2026-11-21 22:52"};
 const verText = () => (WEB_VER ? (WEB_VER.v ? (/^v/i.test(WEB_VER.v) ? WEB_VER.v : 'v' + WEB_VER.v) + ' · ' : '') + WEB_VER.sha + (WEB_VER.at ? ' · ' + WEB_VER.at : '') : '開發版');
 const TABS = [['home', '總覽'], ['req', '申請'], ['mem', '會員'], ['pol', '政策'], ['tier', '會員等級'], ['rel', '發布'], ['line', 'LINE'], ['job', '工作紀錄']];
 /** 功能位元（與 App License.Feature 順序相同，不可調整） */
@@ -94,7 +94,13 @@ function renderLive() {
 }
 async function refresh() {
   // 編輯中的頁面（政策、等級、LINE）不自動重畫，避免輸入到一半被覆蓋
-  try { S.d = await call('state'); renderLive(); renderTabs(); if (!(['pol', 'tier', 'line'].includes(S.tab) && S.rendered === S.tab)) render(); }
+  try {
+    S.d = await call('state', S.tab === 'line' ? { want: 'line' } : {}); renderLive(); renderTabs();
+    const done = lineJobsDone();
+    // LINE 頁：沒有在輸入、沒有開對話框時才重畫（輸入內容都保存在 S，重畫不會遺失）
+    if (S.tab === 'line' && S.rendered === 'line') { if (!lineFocused() && !$('.modal-bg')) render(); else renderLineRes(); if (done) renderLineRes(); }
+    else if (!(['pol', 'tier'].includes(S.tab) && S.rendered === S.tab)) render();
+  }
   catch (e) { if (S.ses) { const el = $('#live'); if (el) el.querySelector('span').textContent = '讀取失敗：' + e.message; } }
 }
 function pendingReqs() {
@@ -150,37 +156,14 @@ function render() {
       <div class="field"><label>試用可用功能</label>${featBoxes('tf', p.trialF ?? 65535)}</div>
       <div class="field"><label>到期（免費）可用功能</label>${featBoxes('ff', p.freeF ?? 0)}</div>
       <button class="btn primary" id="psave">儲存並回傳政策</button><div class="small muted" style="margin-top:6px">由管理員 App 簽章後回傳，使用者約半天內生效（會員頁可手動重新整理）。${p.updated ? '上次回傳 ' + new Date(p.updated).toLocaleString('zh-TW') : ''}</div></div>
-      <div class="card"><h2>會員等級</h2>${(p.tiers || []).map((t) => `<div class="row" style="padding:6px 0;border-bottom:1px solid var(--border)"><span class="badge" style="color:${argb(t.color)};border-color:${argb(t.color)}">${esc(t.name)}</span><span class="sp small text2">${esc(t.desc || '')}</span><span class="small muted">${t.days > 0 ? t.days + ' 天' : '永久'}</span></div>`).join('')}
-        <div class="small muted" style="margin-top:6px">等級內容與功能請在管理員 App「會員 › 政策」調整。</div></div></div>`;
+      <div class="card" id="tierBox"></div></div>`;
+    tierEditor($('#tierBox', v), p);
     $('#psave').onclick = () => { const o = {}; $$('[data-pk]', v).forEach((el) => { const k = el.dataset.pk; o[k] = /trialName|notice/.test(k) ? el.value : parseInt(el.value, 10) || 0; }); o.trialF = maskOf(v, 'tf'); o.freeF = maskOf(v, 'ff'); job('policy', o, '已送出政策更新'); };
   } else if (S.tab === 'tier') {
     const p = app.policy || {}; if (!app.policy) { v.innerHTML = '<div class="card empty">等待管理員 App 回報政策（開啟 App 即可）</div>'; return; }
-    if (!S.tiers) S.tiers = JSON.parse(JSON.stringify(p.tiers || []));
-    const T = S.tiers;
-    v.innerHTML = `<div class="card"><h2>會員等級<span class="r small muted">開通時選擇等級即套用其功能與預設期限</span></h2>
-      ${T.map((t, i) => `<div class="tile" style="margin-top:10px"><div class="grid g4" style="gap:8px"><div class="field"><label>名稱</label><input data-ti="${i}" data-tk="name" value="${esc(t.name)}" maxlength="12"></div>
-        <div class="field"><label>說明</label><input data-ti="${i}" data-tk="desc" value="${esc(t.desc || '')}" maxlength="30"></div><div class="field"><label>預設天數（0＝永久）</label><input data-ti="${i}" data-tk="days" type="number" min="0" value="${t.days}"></div>
-        <div class="field"><label>顏色</label><input data-ti="${i}" data-tk="color" type="color" value="${argb(t.color)}" style="height:38px;padding:2px"></div></div>
-        <div class="field"><label>開放功能</label>${featBoxes('tm' + i, t.f)}</div><div class="row" style="justify-content:flex-end;gap:6px">${i ? `<button class="btn sm" data-tu="${i}">↑</button>` : ''}<button class="btn sm" data-td="${i}">刪除</button></div></div>`).join('')}
-      <div class="row" style="gap:8px;margin-top:12px"><button class="btn" id="tadd">＋ 新增等級</button><span class="sp"></span><button class="btn" id="treset">還原</button><button class="btn primary" id="tsave">儲存並回傳政策</button></div>
-      <div class="small muted" style="margin-top:6px">儲存後由管理員 App 簽章回傳；已開通的授權碼依其等級編號顯示新名稱，功能以授權碼為準（調整既有會員權限請在會員頁「續約／變更方案」）。</div></div>`;
-    const sync = () => { $$('[data-ti]', v).forEach((el) => { const t = T[+el.dataset.ti]; const k = el.dataset.tk; t[k] = k === 'days' ? Math.max(0, parseInt(el.value, 10) || 0) : k === 'color' ? (0xFF000000 + parseInt(el.value.slice(1), 16)) : el.value; });
-      T.forEach((t, i) => { t.f = maskOf(v, 'tm' + i); }); };
-    $$('[data-td]', v).forEach((b) => b.onclick = () => { sync(); T.splice(+b.dataset.td, 1); render(); });
-    $$('[data-tu]', v).forEach((b) => b.onclick = () => { sync(); const i = +b.dataset.tu; [T[i - 1], T[i]] = [T[i], T[i - 1]]; render(); });
-    $('#tadd').onclick = () => { sync(); T.push({ id: 0, name: '新等級', desc: '', days: 30, color: 0xFF22C55E, f: 0 }); render(); };
-    $('#treset').onclick = () => { S.tiers = null; render(); };
-    $('#tsave').onclick = () => { sync(); if (!T.length) return toast('至少要有一個會員等級'); job('policy', { tiers: T }, '已送出會員等級'); S.tiers = null; };
+    v.innerHTML = '<div class="card" id="tierBox"></div>'; tierEditor($('#tierBox', v), p);
   } else if (S.tab === 'line') {
-    const L = app.line || {};
-    v.innerHTML = `<div class="grid g2 stack"><div class="card"><h2>LINE 官方帳號</h2>${L.name ? kv([['名稱', L.name], ['ID', L.id], ['好友數（前一日）', L.friends >= 0 ? L.friends : '—'], ['本月訊息', L.used + (L.limit >= 0 ? ' / ' + L.limit + '（剩 ' + Math.max(0, L.limit - L.used) + '）' : ' / 不限')]]) : `<div class="small muted">${L.ready === false ? '管理員 App 尚未設定 LINE 頻道存取權杖' : '等待管理員 App 回報（約 30 分鐘更新一次）'}</div>`}
-        <div class="small muted" style="margin-top:8px">自動回覆規則、圖文選單與每日報告請在管理員 App「LINE」頁設定。</div></div>
-      <div class="card"><h2>群發訊息</h2><textarea id="bct" rows="6" maxlength="4900" placeholder="輸入要群發給所有好友的文字（每位好友計 1 則訊息額度）"></textarea>
-        <div class="row" style="margin-top:8px"><span class="sp small muted" id="bcn">0 字</span><button class="btn primary" id="bcs">群發給所有好友</button></div></div></div>`;
-    $('#bct').oninput = () => { $('#bcn').textContent = $('#bct').value.length + ' 字'; };
-    $('#bcs').onclick = async () => { const t = $('#bct').value.trim(); if (!t) return toast('請輸入訊息內容');
-      const c = await dialog('確認群發', `<div class="text2">將傳送給所有 LINE 好友${L.friends >= 0 ? '（約 ' + L.friends + ' 人，會用掉同數量的訊息額度）' : ''}：</div><div class="tile" style="margin-top:8px;white-space:pre-wrap">${esc(t)}</div>`, [['', '取消'], ['ok', '群發', 'primary']]);
-      if (c.v === 'ok') { job('broadcast', { text: t }, '已送出群發'); $('#bct').value = ''; } };
+    renderLine(v, app);
   } else if (S.tab === 'rel') {
     const bs = app.builds || []; const rel = bs.find((b) => !b.draft);
     v.innerHTML = `<div class="card"><h2>發布版本給使用者</h2>${!app.token ? '<div class="notice">管理員 App 尚未設定 GitHub 權杖，無法讀取版本與發布。</div>' : ''}
@@ -205,11 +188,11 @@ function render() {
   }
 }
 const kindN = (k) => ({ new: '開通', renew: '續約', change: '變更方案', register: '註冊' }[k] || k);
-const JOBN = { broadcast: 'LINE 群發', issue: '開通授權', revoke: '停用授權', edit: '編輯會員', account: '帳號管理', policy: '更新政策', promote: '發布版本', release: '一鍵發布及部署', redeploy: '重新部署', sync: '同步會員', remove: '刪除資料', request: '處理申請' };
+const JOBN = { line: 'LINE', broadcast: 'LINE 群發', issue: '開通授權', revoke: '停用授權', edit: '編輯會員', account: '帳號管理', policy: '更新政策', promote: '發布版本', release: '一鍵發布及部署', redeploy: '重新部署', sync: '同步會員', remove: '刪除資料', request: '處理申請' };
 function kv(items) { return `<div class="grid g2" style="gap:8px">${items.map(([k, x]) => `<div><div class="small muted">${esc(k)}</div><div>${esc(x)}</div></div>`).join('')}</div>`; }
 function jobRow(j) {
   let p = {}; try { p = JSON.parse(j.payload); } catch (e) {}
-  const what = JOBN[j.type] + (p.no ? ' ' + p.no : '') + (p.version ? ' ' + p.version : '');
+  const what = (JOBN[j.type] || j.type) + (j.type === 'line' && p.act ? '・' + (LACT[p.act] || p.act) : '') + (p.no ? ' ' + p.no : '') + (p.version ? ' ' + p.version : '');
   return `<div class="row" style="padding:6px 0;border-bottom:1px solid var(--border);align-items:flex-start"><div class="sp"><div><b>${esc(what)}</b> <span class="small st-${esc(j.state)}">${esc(j.state)}</span></div>
     <div class="small muted">${esc(j.at.slice(0, 16))}${j.doneAt ? ' → ' + esc(j.doneAt.slice(11, 16)) : ''}${j.src ? ' · ' + esc(j.src) : ''}</div>${j.result ? `<div class="small ${j.state === '失敗' ? 'down' : 'text2'}">${esc(j.result)}</div>` : ''}</div>
     ${j.state === '待處理' ? `<button class="btn sm" data-cancel="${esc(j.id)}">取消</button>` : ''}</div>`;
@@ -284,3 +267,410 @@ function boot() {
   if (S.ses) start(); else loginView();
 }
 boot();
+
+// ───────── LINE（與管理員 App「會員 › LINE」相同：連線設定、群發、自動回覆、下載發布、建置素材）─────────
+// 網頁開著 LINE 頁時，管理員 App 會回報完整 LINE 狀態；每個動作排成工作（type=line）由 App 執行，權杖只在手機。
+const LSECS = ['連線設定', '群發', '自動回覆', '下載發布', '建置素材'];
+const LACT = { bc: '群發', validate: '檢查格式', testMe: '傳給自己', cancel: '取消排程', setMe: '設為我', arSave: '套用規則', arDefaults: '還原預設規則', arDeploy: '部署自動回覆', arTest: '測試連線',
+  arDisable: '停用自動回覆', arAuto: '自動重新部署', arSync: '同步 App 資料', arAsk: '測試提問', arCheck: '檢查所有問答', arPush: '回覆好友', arReport: '更新盤後報告', notify: '待回覆通知',
+  distDrive: '雲端硬碟', distPrefer: '下載連結', distFollow: '檢查最新版', distApk: '上架安裝檔', distAuto: '自動上架', distManual: '上架說明書', distImg: '報表圖', distReport: '上架盤後報告',
+  rb: '定時群發設定', rbPreview: '預覽報表', rbMe: '報表傳給自己', rbNow: '立即群發報表', kitDeploy: '部署圖文選單', kitRemove: '移除圖文選單', refresh: '重新整理' };
+const fmtT = (ms) => { const d = new Date(ms); const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
+const sw = (id, on, label, sub) => `<label class="row" style="gap:10px;margin-top:8px;cursor:pointer;align-items:flex-start"><input type="checkbox" ${id} style="width:auto;margin-top:3px" ${on ? 'checked' : ''}><span class="sp"><span>${label}</span>${sub ? `<br><span class="small muted">${sub}</span>` : ''}</span></label>`;
+async function copyTxt(t, msg) { try { await navigator.clipboard.writeText(t); toast(msg || '已複製'); } catch (e) { toast('無法複製，請手動選取'); } }
+
+/** 送出 LINE 動作；結果完成後顯示在頁面上方（有些動作的結果要用對話框看，例如預覽、測試提問） */
+async function lineJob(act, payload = {}, opt = {}) {
+  const id = await job('line', { act, ...payload }, opt.label || ('已送出「' + (LACT[act] || act) + '」'));
+  if (id) { S.lwait = S.lwait || {}; S.lwait[id] = { act, show: !!opt.show, at: Date.now() }; renderLineRes(); }
+  return id;
+}
+/** 檢查送出的 LINE 工作是否完成 */
+function lineJobsDone() {
+  const w = S.lwait || {}; const jobs = (S.d && S.d.jobs) || []; let changed = false;
+  Object.keys(w).forEach((id) => {
+    const j = jobs.find((x) => String(x.id) === String(id)); if (!j) { if (Date.now() - w[id].at > 600000) delete w[id]; return; }
+    if (j.state === '完成' || j.state === '失敗' || j.state === '已取消') {
+      const info = w[id]; const ok = j.state === '完成'; const r = { act: info.act, ok, text: j.result || j.state, at: Date.now() };
+      delete w[id]; changed = true; S.lres = r;
+      if (info.show && r.ok) dialog(LACT[r.act] || '結果', `<div class="tile" style="white-space:pre-wrap;max-height:60vh;overflow:auto;font-size:13px">${esc(r.text)}</div>`, [['', '關閉']]);
+    }
+  });
+  return changed;
+}
+function renderLineRes() {
+  const el = $('#lres'); if (!el) return;
+  const wait = Object.values(S.lwait || {}); const r = S.lres;
+  el.innerHTML = (wait.length ? `<div class="notice" style="margin-bottom:10px">⏳ ${wait.map((x) => esc(LACT[x.act] || x.act)).join('、')}：${appOnline() ? '管理員 App 處理中…' : '等待管理員 App 開啟'}</div>` : '') +
+    (r && Date.now() - r.at < 120000 ? `<div class="notice ${r.ok ? '' : 'err'}" style="margin-bottom:10px;white-space:pre-wrap">${r.ok ? '✓' : '✗'} ${esc(LACT[r.act] || r.act)}：${esc(String(r.text).slice(0, 600))}</div>` : '');
+}
+function lineFocused() { const a = document.activeElement; return a && /INPUT|TEXTAREA|SELECT/.test(a.tagName) && $('#view') && $('#view').contains(a); }
+
+function renderLine(v, app) {
+  const L = S.d.line; const base = app.line || {};
+  S.lsec = S.lsec == null ? store.get('lsec', 0) : S.lsec;
+  if (L && L.ar && !S.lrDirty) { try { S.lr = JSON.parse(L.ar.rules || '{}'); } catch (e) { S.lr = null; } }
+  const seen = store.get('inboxSeen', 0); const unread = L ? (L.inbox || []).filter((m) => m.at > seen && !String(m.t).startsWith('（')).length : 0;
+  const head = `<div class="adm-tabs" style="margin-bottom:10px">${LSECS.map((n, i) => `<button data-ls="${i}" class="${S.lsec === i ? 'on' : ''}">${n}${i === 2 && unread && S.lsec !== 2 ? `<span class="cnt">${unread}</span>` : ''}</button>`).join('')}
+    <span class="sp"></span><button class="btn sm" id="lrf">重新整理</button></div><div id="lres"></div>`;
+  if (!L) {
+    v.innerHTML = head + `<div class="card"><h2>LINE 官方帳號</h2>${base.name ? kv([['名稱', base.name], ['ID', base.id], ['好友數（前一日）', base.friends >= 0 ? base.friends : '—']]) : ''}
+      <div class="notice" style="margin-top:10px">${appOnline() ? '正在向管理員 App 取得完整 LINE 資料（約 10–20 秒）…' : '📱 管理員 App 開啟後會回報完整 LINE 資料；所有 LINE 功能都由 App 執行（權杖只在手機）。'}</div>
+      ${(S.d.version || 0) < 12 ? '<div class="notice err" style="margin-top:8px">雲端會員伺服器需更新到第 12 版才能在網頁使用完整 LINE 功能：管理員 App「會員 › 發布 › 一鍵發布及部署」或「設定與備份 › 雲端會員伺服器 › 一鍵更新」。</div>' : ''}</div>`;
+    bindLineHead(v); renderLineRes(); return;
+  }
+  const sec = [lineSetup, lineBroadcast, lineAuto, lineDist, lineKit][S.lsec] || lineSetup;
+  const needTok = !L.token && S.lsec !== 0;
+  v.innerHTML = head + (needTok ? '<div class="card"><div class="notice err">管理員 App 尚未設定 LINE 頻道存取權杖：請在 App「會員 › LINE › 連線設定」輸入（權杖不經過網頁）。</div></div>' : sec.html(L));
+  bindLineHead(v); if (!needTok) sec.bind(v, L); renderLineRes();
+  if (S.lsec === 2) store.set('inboxSeen', Date.now());
+}
+function bindLineHead(v) {
+  $$('[data-ls]', v).forEach((b) => b.onclick = () => { S.lsec = +b.dataset.ls; store.set('lsec', S.lsec); render(); });
+  $('#lrf').onclick = () => lineJob('refresh', {}, { label: '已要求管理員 App 重新整理 LINE 資料' });
+}
+
+// ── ① 連線設定：帳號、額度、好友數據、管理入口 ──
+const lineSetup = {
+  html(L) {
+    const i = L.info; const ins = L.insight;
+    let quota = '';
+    if (i && i.friends > 0 && i.left >= 0) {
+      const t = new Date(); const dim = new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate(); const days = dim - t.getDate() + 1;
+      let wd = 0; for (let k = 0; k < days; k++) { const d = new Date(t.getFullYear(), t.getMonth(), t.getDate() + k).getDay(); if (d >= 1 && d <= 5) wd++; }
+      const times = Math.floor(i.left / i.friends);
+      quota = `<div class="small ${times < 3 ? 'up' : 'muted'}" style="margin-top:6px">本月還可群發約 ${times} 次（每次 ${i.friends} 則）· 到月底平均每天 ${Math.floor(i.left / days)} 則${L.rb && L.rb.on && times < wd ? `<br>⚠ 每日盤後群發到月底約需 ${i.friends * wd} 則（${wd} 個交易日），額度不足` : ''}</div>`;
+    }
+    let insH = '<div class="small muted">讀取中…（LINE 每天更新前一日統計）</div>';
+    if (ins && ins.days) {
+      const d = ins.days; if (!d.length) insH = '<div class="small muted">尚無統計（新帳號隔天起才有資料）</div>';
+      else {
+        const last = d[d.length - 1], first = d[0], g = last[1] - first[1];
+        const mx = Math.max(...d.map((x) => x[1]), 1), mn = Math.min(...d.map((x) => x[1]));
+        insH = `${kv([['好友', last[1] + ' 人'], [d.length + ' 天增減', (g >= 0 ? '+' : '') + g], ['可傳送', last[2] + ' 人'], ['封鎖', last[3] + ' 人' + (last[3] - first[3] > 0 ? '（+' + (last[3] - first[3]) + '）' : '')]])}
+          ${ins.sent != null ? `<div class="small muted" style="margin-top:6px">昨日群發送達 ${ins.sent} 人</div>` : ''}
+          <div style="display:flex;align-items:flex-end;gap:3px;height:56px;margin-top:8px">${d.map((x) => `<div title="${x[0]}：${x[1]} 人" style="flex:1;height:${mx === mn ? 100 : 25 + 75 * (x[1] - mn) / (mx - mn)}%;background:var(--primary);opacity:.55;border-radius:3px"></div>`).join('')}</div>
+          <div class="row small muted"><span class="sp">${d[0][0].slice(5).replace('-', '/')}</span><span>${last[0].slice(5).replace('-', '/')}</span></div>
+          ${ins.demo ? [['性別', ins.demo.g], ['年齡', ins.demo.a], ['地區', ins.demo.r]].filter((x) => x[1] && x[1].length).map(([n, l]) => `<div class="small text2">${n}：${l.slice(0, 4).map((y) => esc(y[0]) + ' ' + y[1] + '%').join('、')}</div>`).join('') : ''}`;
+      }
+    }
+    const steps = ['1. LINE 官方帳號 App › 設定 › Messaging API › 啟用，建立服務提供者。', '2. developers.line.biz › 頻道 › Messaging API › Channel access token 按 Issue。',
+      '3. 在管理員 App「會員 › LINE › 連線設定」貼上權杖（以裝置加密保存，不經過網頁、不進備份）。', '4. 「自動回覆」輸入 Cloudflare 帳戶 ID、API 權杖與 Channel secret 後一鍵部署；「下載發布」上架安裝檔與說明書；「建置素材」部署圖文選單。'];
+    return `<div class="grid g2 stack"><div class="card"><h2>LINE 官方帳號連線</h2>
+        ${L.token ? (i ? `<div class="up" style="font-weight:700">✓ ${esc(i.name)}（${esc(i.id)}）</div>${kv([['本月已用', i.used + ' 則'], ['額度', i.limit >= 0 ? i.limit + ' 則（剩 ' + i.left + ' 則）' : '無上限方案'], ['好友', i.friends >= 0 ? i.friends + ' 人' : '統計中'], ['我的 LINE', L.me && L.me.id ? (L.me.name || '已設定') : '未設定（收件匣按「設為我」）']])}${quota}` : '<div class="small muted">已設定權杖，查詢中…</div>')
+          : '<div class="notice err">管理員 App 尚未設定 LINE 頻道存取權杖。</div>'}
+        <div class="small muted" style="margin-top:8px">權杖、Cloudflare 與 Channel secret 只能在管理員 App 輸入，網頁不會接觸到。</div></div>
+      <div class="card"><h2>設定步驟</h2>${steps.map((s) => `<div class="small text2" style="margin-top:4px">${esc(s)}</div>`).join('')}</div>
+      ${L.token ? `<div class="card"><h2>好友數據</h2><div class="small muted" style="margin-bottom:6px">LINE 每天更新前一日統計；好友 20 人以上才提供屬性分析。</div>${insH}</div>` : ''}
+      <div class="card"><h2>管理入口</h2><div class="small muted">一對一聊天、自動回應、加入好友歡迎訊息、大頭貼與主頁，LINE 只開放在官方帳號後台設定。</div>
+        <div class="row wrap" style="gap:8px;margin-top:10px"><a class="btn primary" href="https://manager.line.biz/" target="_blank" rel="noopener">管理後台</a><a class="btn" href="https://chat.line.biz/" target="_blank" rel="noopener">聊天</a>
+          <a class="btn" href="https://developers.line.biz/console/" target="_blank" rel="noopener">Developers</a>${i && i.id ? `<a class="btn" href="https://line.me/R/ti/p/${encodeURIComponent(i.id)}" target="_blank" rel="noopener">好友連結</a>` : ''}</div></div></div>`;
+  },
+  bind() {},
+};
+
+// ── ② 群發：每日盤後報表定時群發、群發訊息（文字／按鈕卡片、排程）、排程中、傳送紀錄 ──
+const lineBroadcast = {
+  html(L) {
+    const B = S.bc = S.bc || { kind: 'text', text: '', title: '', button: '下載 App', url: (L.links || {}).download || '', later: false, at: '' };
+    const rb = L.rb || {}; const i = L.info || {};
+    const est = i.friends > 0 ? ` · 預計使用 ${i.friends} 則` + (i.left >= 0 ? (i.friends > i.left ? `（超過剩餘 ${i.left} 則！）` : `，送出後剩 ${i.left - i.friends} 則`) : '') : '';
+    const times = [[15, 0], [16, 0], [17, 0], [17, 30], [18, 0], [19, 0], [20, 0], [21, 0]];
+    return `<div class="grid g2 stack"><div class="card"><h2>每日盤後報表定時群發</h2><div class="small muted">交易日於指定時間自動產生報表並群發摘要給所有好友；休市日不發，同一天只發一次。</div>
+        ${sw('data-rbon', rb.on, '開啟定時群發')}
+        ${rb.on ? `<div class="small text2" style="margin-top:8px">群發時間（台灣時間）</div><div class="row wrap" style="gap:6px;margin-top:4px">${times.map(([h, m]) => `<button class="btn sm ${rb.h === h && rb.m === m ? 'primary' : ''}" data-rbt="${h}:${m}">${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}</button>`).join('')}</div>
+          <div class="small muted" style="margin-top:6px">證交所約 15:00、三大法人約 16:30 公布；建議 17:00 之後。開啟管理員版時若已逾時會自動補發。<br>上次群發：${esc(rb.last || '尚未群發')}</div>` : ''}
+        ${rb.result ? `<div class="small text2" style="margin-top:6px">${esc(rb.result)}</div>` : ''}
+        <div class="row wrap" style="gap:8px;margin-top:10px"><button class="btn" id="rbp">預覽內容</button><button class="btn" id="rbme">傳給自己</button><button class="btn primary" id="rbnow">立即群發今日</button></div></div>
+      <div class="card"><h2>群發訊息</h2><div class="small muted">傳給所有加入官方帳號的好友；每位好友計 1 則額度。</div>
+        <div class="row wrap" style="gap:6px;margin-top:8px">${(L.tpl || []).map((t, k) => `<button class="btn sm" data-tpl="${k}">${esc(t[0])}</button>`).join('')}</div>
+        <div class="seg" style="margin-top:8px;display:inline-flex"><button data-bk="text" class="${B.kind === 'text' ? 'on' : ''}">純文字</button><button data-bk="card" class="${B.kind === 'card' ? 'on' : ''}">按鈕卡片</button></div>
+        ${B.kind === 'card' ? `<div class="field" style="margin-top:8px"><label>卡片標題</label><input data-bf="title" maxlength="80" value="${esc(B.title)}"></div>` : ''}
+        <div class="field" style="margin-top:8px"><label>${B.kind === 'card' ? '卡片內文' : '訊息內容'}</label><textarea data-bf="text" rows="${B.kind === 'card' ? 4 : 7}" maxlength="${B.kind === 'card' ? 1500 : 4900}">${esc(B.text)}</textarea></div>
+        ${B.kind === 'card' ? `<div class="grid g2" style="gap:8px"><div class="field"><label>按鈕文字</label><input data-bf="button" maxlength="20" value="${esc(B.button)}"></div><div class="field"><label>按鈕連結</label><input data-bf="url" value="${esc(B.url)}"></div></div>
+          <div class="row" style="gap:6px"><button class="btn sm" data-lk="download">下載頁</button><button class="btn sm" data-lk="manual">說明書</button></div>` : ''}
+        <div class="small muted" id="bcn" style="margin-top:6px">${B.text.length} 字${est}</div>
+        ${sw('data-later', B.later, '排程群發', '由手機在指定時間送出（需開機連網；省電模式可能延後幾分鐘，開啟管理員版時會補發）')}
+        ${B.later ? `<div class="field" style="margin-top:6px"><label>日期與時間（台灣時間）</label><input type="datetime-local" data-bf="at" value="${esc(B.at)}"></div>` : ''}
+        <div class="row wrap" style="gap:8px;margin-top:10px"><button class="btn" id="bcv">檢查格式</button><button class="btn" id="bcme">傳給自己</button><span class="sp"></span><button class="btn primary" id="bcs">${B.later ? '加入排程' : '群發給所有好友'}</button></div></div></div>
+      ${(L.sched || []).length ? `<div class="card" style="margin-top:12px"><h2>排程中<span class="r small muted">${L.sched.length} 則</span></h2>${L.sched.map((s) => `<div class="tile" style="margin-top:8px"><div class="row"><span class="sp small muted">${fmtT(s.at)} · ${s.kind === 'card' ? '按鈕卡片' : '文字'}</span><button class="btn sm" data-scx="${s.id}">取消</button></div><div class="small" style="white-space:pre-wrap">${esc((s.kind === 'card' ? s.title + '\n' : '') + s.text).slice(0, 300)}</div></div>`).join('')}</div>` : ''}
+      ${(L.hist || []).length ? `<div class="card" style="margin-top:12px"><h2>傳送紀錄<span class="r small muted">點一下帶入重發</span></h2>${L.hist.map((h, k) => `<div class="tile" style="margin-top:8px;cursor:pointer" data-hi="${k}"><div class="small muted">${fmtT(h.at)}</div><div class="small" style="white-space:pre-wrap">${esc(h.text.slice(0, 300))}</div></div>`).join('')}</div>` : ''}`;
+  },
+  bind(v, L) {
+    const B = S.bc; const re = () => render();
+    const payload = () => ({ kind: B.kind, text: B.text.trim(), title: B.title, button: B.button, url: B.url });
+    $$('[data-bf]', v).forEach((el) => el.oninput = () => { B[el.dataset.bf] = el.value; if (el.dataset.bf === 'text') { const n = $('#bcn', v); if (n) n.textContent = B.text.length + ' 字'; } });
+    $$('[data-bk]', v).forEach((b) => b.onclick = () => { B.kind = b.dataset.bk; re(); });
+    $$('[data-tpl]', v).forEach((b) => b.onclick = () => { B.text = L.tpl[+b.dataset.tpl][1]; re(); });
+    $$('[data-lk]', v).forEach((b) => b.onclick = () => { const k = b.dataset.lk; B.button = k === 'download' ? '下載 App' : '使用說明'; B.url = (L.links || {})[k] || ''; re(); });
+    $('[data-later]', v).onchange = (e) => { B.later = e.target.checked; if (B.later && !B.at) { const d = new Date(Date.now() + 3600000); d.setMinutes(0); B.at = new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); } re(); };
+    $('#bcv').onclick = () => { if (!B.text.trim()) return toast('請輸入訊息內容'); lineJob('validate', payload()); };
+    $('#bcme').onclick = () => { if (!B.text.trim()) return toast('請輸入訊息內容'); lineJob('testMe', payload()); };
+    $('#bcs').onclick = async () => {
+      if (!B.text.trim()) return toast('請輸入訊息內容');
+      if (B.kind === 'card' && !/^https:\/\//.test(B.url)) return toast('按鈕連結需為 https:// 網址');
+      if (B.later) {
+        const at = new Date(B.at).getTime(); if (!at || at <= Date.now()) return toast('排程時間必須晚於現在');
+        if (await lineJob('bc', { ...payload(), at })) { B.text = ''; re(); } return;
+      }
+      const i = L.info || {};
+      const c = await dialog('確認群發', `<div class="text2">將傳給所有好友${i.friends > 0 ? `（約 ${i.friends} 人，使用 ${i.friends} 則額度）` : ''}，送出後無法收回。</div><div class="tile" style="margin-top:8px;white-space:pre-wrap">${esc((B.kind === 'card' ? '【卡片】' + B.title + '\n' : '') + B.text)}</div>`, [['', '取消'], ['ok', '送出', 'primary']]);
+      if (c.v === 'ok' && await lineJob('bc', payload())) { B.text = ''; re(); }
+    };
+    $$('[data-scx]', v).forEach((b) => b.onclick = () => lineJob('cancel', { id: Number(b.dataset.scx) }));
+    $$('[data-hi]', v).forEach((el) => el.onclick = () => { B.kind = 'text'; B.text = L.hist[+el.dataset.hi].text; re(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
+    $('[data-rbon]', v).onchange = (e) => lineJob('rb', { on: e.target.checked });
+    $$('[data-rbt]', v).forEach((b) => b.onclick = () => { const [h, m] = b.dataset.rbt.split(':').map(Number); lineJob('rb', { on: true, h, m }); });
+    $('#rbp').onclick = () => lineJob('rbPreview', {}, { show: true });
+    $('#rbme').onclick = () => lineJob('rbMe');
+    $('#rbnow').onclick = async () => { const c = await dialog('立即群發今日報表', '<div class="text2">產生今日盤後報表並群發給所有好友（每位好友計 1 則額度）。</div>', [['', '取消'], ['ok', '群發', 'primary']]); if (c.v === 'ok') lineJob('rbNow'); };
+  },
+};
+
+// ── ③ 自動回覆：規則、歡迎／預設／非服務時間、智慧問答、部署與狀態、收件匣 ──
+const KINDN = { TEXT: '文字', CARD: '按鈕卡片', REPORT: '盤後報告' };
+function ruleDialog(r, isNew) {
+  const x = { id: r.id, k: (r.k || []).slice(), c: !!r.c, kind: r.kind || 'TEXT', t: r.t || '', ti: r.ti || '', b: r.b || '', u: r.u || '', off: !!r.off, fr: r.fr || '', to: r.to || '' };
+  return dialog(isNew ? '新增規則' : '編輯規則', `<div class="field"><label>關鍵字（多個用頓號或逗號分隔）</label><input id="rk" value="${esc(x.k.join('、'))}"></div>
+    <label class="row small" style="gap:6px;cursor:pointer"><input type="checkbox" id="rc" style="width:auto" ${x.c ? 'checked' : ''}> 訊息「包含」關鍵字就回覆（未勾選＝完全相同）</label>
+    <div class="field" style="margin-top:8px"><label>回覆類型</label><select id="rkind">${Object.entries(KINDN).map(([k, n]) => `<option value="${k}" ${x.kind === k ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+    <div class="field" id="rti"><label>卡片標題</label><input id="rtt" value="${esc(x.ti)}" maxlength="80"></div>
+    <div class="field"><label id="rtl">回覆內容</label><textarea id="rt" rows="5" maxlength="4900">${esc(x.t)}</textarea><div class="small muted">{name} 好友名稱；{price:2330}、{pct:2330}、{chg:2330} 即時股價、漲跌幅、漲跌；{download}、{manual} 下載與說明書連結</div></div>
+    <div class="grid g2" id="rbu" style="gap:8px"><div class="field"><label>按鈕文字</label><input id="rb" value="${esc(x.b)}" maxlength="20"></div><div class="field"><label>按鈕連結</label><input id="ru" value="${esc(x.u)}"></div></div>
+    <div class="grid g2" style="gap:8px"><div class="field"><label>生效起（yyyy/MM/dd，空白＝即日）</label><input id="rfr" value="${esc(x.fr)}" placeholder="2026/12/01"></div><div class="field"><label>生效迄（空白＝不限）</label><input id="rto" value="${esc(x.to)}" placeholder="2026/12/31"></div></div>
+    <label class="row small" style="gap:6px;cursor:pointer;margin-top:6px"><input type="checkbox" id="roff" style="width:auto" ${x.off ? 'checked' : ''}> 暫停這條規則</label><div id="derr" class="small up"></div>`,
+  isNew ? [['', '取消'], ['ok', '加入', 'primary']] : [['del', '刪除'], ['', '取消'], ['ok', '儲存', 'primary']], (bg) => {
+    const sync = () => { const k = $('#rkind', bg).value; $('#rti', bg).style.display = k === 'CARD' ? '' : 'none'; $('#rbu', bg).style.display = k === 'CARD' ? '' : 'none'; $('#rtl', bg).textContent = k === 'REPORT' ? '前言（選填，放在報告前面）' : k === 'CARD' ? '卡片內文' : '回覆內容'; };
+    $('#rkind', bg).onchange = sync; sync();
+    return (val) => {
+      if (val !== 'ok') return null;
+      const keys = $('#rk', bg).value.split(/[、,，\n]/).map((s) => s.trim()).filter(Boolean);
+      if (!keys.length) return '請輸入關鍵字';
+      const kind = $('#rkind', bg).value;
+      if (kind !== 'REPORT' && !$('#rt', bg).value.trim()) return '請輸入回覆內容';
+      if (kind === 'CARD' && !/^(https:\/\/|\{download\}|\{manual\})/.test($('#ru', bg).value.trim())) return '按鈕連結需為 https:// 網址或 {download}／{manual}';
+      const dt = /^(\d{4}\/\d{2}\/\d{2})?$/; if (!dt.test($('#rfr', bg).value.trim()) || !dt.test($('#rto', bg).value.trim())) return '日期格式請用 yyyy/MM/dd';
+      return null;
+    };
+  }).then((r2) => {
+    if (r2.v === 'del') return { del: true };
+    if (r2.v !== 'ok') return null;
+    const b = r2.box;
+    return { id: x.id, k: $('#rk', b).value.split(/[、,，\n]/).map((s) => s.trim()).filter(Boolean), c: $('#rc', b).checked, kind: $('#rkind', b).value, t: $('#rt', b).value, ti: $('#rtt', b).value.trim(),
+      b: $('#rb', b).value.trim(), u: $('#ru', b).value.trim(), off: $('#roff', b).checked, fr: $('#rfr', b).value.trim(), to: $('#rto', b).value.trim() };
+  });
+}
+async function editRule(r, isNew) {
+  const n = await ruleDialog(r, isNew); if (!n) return;
+  const R = S.lr; R.rules = R.rules || [];
+  if (n.del) R.rules = R.rules.filter((x) => x.id !== r.id);
+  else if (R.rules.some((x) => x.id === n.id)) R.rules = R.rules.map((x) => (x.id === n.id ? n : x)); else R.rules.push(n);
+  S.lrDirty = true; render();
+}
+function newRule(key) { const R = S.lr || { rules: [] }; return { id: (R.rules || []).reduce((m, x) => Math.max(m, x.id || 0), 0) + 1, k: [key || ''], c: false, kind: 'TEXT', t: '' }; }
+function inboxCat(t) { return t.startsWith('關鍵字') ? '關鍵字' : t === '智慧問答' ? '智慧問答' : t === '預設回覆' ? '預設回覆' : t.includes('失敗') ? '回覆失敗' : !t ? '未回覆' : '其他'; }
+
+const lineAuto = {
+  html(L) {
+    const A = L.ar || {}; const R = S.lr || { rules: [] }; const dep = A.at > 0;
+    const sm = R.sCfg || {}; const smart = (k) => sm[k] !== false;
+    const ruleList = (R.rules || []).map((r) => `<div class="tile" style="margin-top:6px;cursor:pointer" data-re="${r.id}"><div class="row"><b class="sp" style="${r.off ? 'opacity:.5' : ''}">${esc((r.k || []).join('／'))}${r.c ? '（包含）' : ''}</b><span class="small" style="color:var(--primary)">編輯</span></div>
+      <div class="small muted">${r.kind === 'REPORT' ? '回覆最新盤後報告' + (r.t ? '＋前言' : '') : r.kind === 'CARD' ? '按鈕卡片：' + esc(r.ti) : esc(String(r.t || '').replace(/\n/g, ' ').slice(0, 60))}${r.fr || r.to ? ' · ' + esc(r.fr || '即日') + '～' + esc(r.to || '不限') : ''}${r.off ? ' · 已停用' : ''}</div></div>`).join('');
+    // 收件匣統計（近 7 天）
+    const inbox = L.inbox || []; const wk = inbox.filter((m) => m.at >= Date.now() - 7 * 864e5); const msgs = wk.filter((m) => !String(m.t).startsWith('（'));
+    let stats = '';
+    if (msgs.length) {
+      const by = {}; msgs.forEach((m) => { const c = inboxCat(m.g || ''); by[c] = (by[c] || 0) + 1; });
+      const hit = msgs.filter((m) => ['關鍵字', '智慧問答'].includes(inboxCat(m.g || ''))).length; const rate = Math.round(hit * 100 / msgs.length);
+      const miss = {}; msgs.filter((m) => ['預設回覆', '未回覆'].includes(inboxCat(m.g || ''))).forEach((m) => { const q = String(m.t).trim(); if (q.length >= 1 && q.length <= 30) miss[q] = (miss[q] || 0) + 1; });
+      const top = Object.entries(miss).sort((a, b) => b[1] - a[1]).slice(0, 5);
+      stats = `<div class="tile" style="margin-top:8px"><b>近 7 天</b><div class="small text2">訊息 ${msgs.length} 則 · 好友 ${new Set(wk.map((m) => m.u)).size} 人 · 加入 ${wk.filter((m) => m.g === '加入好友').length} · 封鎖 ${wk.filter((m) => m.g === '封鎖').length}</div>
+        <div class="small text2">${Object.entries(by).sort((a, b) => b[1] - a[1]).map(([k, n]) => k + ' ' + Math.round(n * 100 / msgs.length) + '%').join('　')}</div>
+        <div class="small ${rate >= 70 ? 'down' : 'up'}">自動回答率 ${rate}%</div>
+        ${top.length ? `<div class="small muted" style="margin-top:4px">沒對到的常見問題（點一下建立規則）</div>${top.map(([q, n]) => `<div class="small" style="cursor:pointer;color:var(--primary)" data-mk="${esc(q)}">・${esc(q)}（${n} 次）＋規則</div>`).join('')}` : ''}</div>`;
+    }
+    const F = S.ibf = S.ibf || { q: '', f: 0 };
+    const list = inbox.filter((m) => !F.q || [m.t, m.n, m.g].some((x) => String(x || '').toLowerCase().includes(F.q.toLowerCase())))
+      .filter((m) => F.f === 0 || (F.f === 1 && (!m.g || m.g === '預設回覆' || String(m.g).includes('失敗'))) || (F.f === 2 && m.g === '智慧問答')).slice(0, 80);
+    return `<div class="card"><h2>自動回覆（Webhook）<span class="r small ${dep ? 'down' : 'muted'}">${dep ? '● 運作中 · 關鍵字 ' + (R.rules || []).filter((r) => !r.off).length + ' 組' : '尚未部署'}</span></h2>
+        <div class="small muted">關鍵字回覆、加入好友歡迎、盤後報告即時查詢、智慧問答；回覆不扣訊息額度。${A.creds ? '' : '<br><span class="up">管理員 App 尚未設定 Cloudflare 帳戶 ID、API 權杖與 LINE Channel secret（請在 App「會員 › LINE › 自動回覆」輸入）。</span>'}</div></div>
+      <div class="grid g2 stack" style="margin-top:12px"><div class="card"><h2>回覆規則${S.lrDirty ? '<span class="r small up">未套用</span>' : ''}</h2>
+        <div class="small muted">由上而下比對，對到第一組就回覆。{name} 換成好友名稱；{price:2330}、{pct:2330}、{chg:2330} 換成即時股價、漲跌幅、漲跌。</div>
+        ${ruleList || '<div class="small muted" style="margin-top:6px">尚無規則</div>'}
+        <div class="row wrap" style="gap:8px;margin-top:8px"><button class="btn" id="radd">＋ 新增規則</button><button class="btn" id="rdef">還原預設</button><button class="btn" id="rexp">匯出規則</button><button class="btn" id="rimp">匯入規則</button></div>
+        ${sw('data-wo', R.wOn !== false, '加入好友歡迎訊息')}${R.wOn !== false ? `<textarea data-rf="w" rows="3" style="margin-top:4px">${esc(R.w || '')}</textarea>` : ''}
+        ${sw('data-fo', R.fOn !== false, '沒對到關鍵字時的預設回覆', '同一位好友 6 小時內只回一次，不會洗版')}${R.fOn !== false ? `<textarea data-rf="f" rows="3" style="margin-top:4px">${esc(R.f || '')}</textarea>` : ''}
+        ${sw('data-oo', !!R.oOn, '非服務時間回覆', '服務時間外沒對到關鍵字時，改送這則（同一位好友 6 小時內一次）')}
+        ${R.oOn ? `<div class="grid g2" style="gap:8px;margin-top:4px"><div class="field"><label>開始 HH:mm</label><input data-rf="oS" value="${esc(R.oS || '21:00')}"></div><div class="field"><label>結束 HH:mm</label><input data-rf="oE" value="${esc(R.oE || '09:00')}"></div></div>
+          ${sw('data-ow', R.oW !== false, '週末全天算非服務時間')}<textarea data-rf="oT" rows="3" style="margin-top:4px">${esc(R.oT || '')}</textarea>` : ''}
+        <button class="btn primary" id="rsave" style="margin-top:12px;width:100%">${dep ? '儲存並套用規則' : '儲存規則'}</button></div>
+      <div class="card"><h2>智慧問答</h2><div class="small muted">沒對到關鍵字時，自動辨識問題並查即時行情與 App 資料回覆（附快速回覆按鈕）。</div>
+        ${sw('data-so', R.sOn !== false, '開啟智慧問答')}
+        ${R.sOn !== false ? (A.smart || []).map(([k, n, ex]) => sw(`data-sk="${esc(k)}"`, smart(k), esc(n), '例：' + esc(ex))).join('') : ''}
+        <div class="small muted" style="margin-top:6px">代號名稱、除權息、歷史股利、休市日與盤後摘要由管理員 App 同步${A.smartAt ? '（上次 ' + fmtT(A.smartAt) + '）' : '（尚未同步）'}；改動開關後按左側「儲存並套用規則」。</div>
+        ${dep ? `<div class="row wrap" style="gap:8px;margin-top:8px"><button class="btn" id="asy">立即同步 App 資料</button><button class="btn" id="achk">一鍵檢查所有問答</button></div>
+          <div class="small text2" style="margin-top:10px">測試提問（不經 LINE、不扣額度；規則需先套用）</div>
+          <div class="row" style="gap:6px;margin-top:4px"><input id="aq" placeholder="例：0056 股息" value="${esc(S.aq || '')}"><button class="btn" id="aqs">送出</button></div>
+          <div class="row wrap" style="gap:4px;margin-top:4px">${['加權指數', '2330', '0056 股息', '本週除息', '明天有開盤嗎'].map((q) => `<button class="btn sm" data-aqx="${q}">${q}</button>`).join('')}</div>` : ''}</div></div>
+      <div class="card" style="margin-top:12px"><h2>部署與狀態</h2>
+        ${dep ? kv([['網址', A.url], ['上次部署', fmtT(A.at)], ['已部署版本', (A.app || '未記錄') + (A.hash ? '（' + A.hash.slice(0, 7) + '）' : '')], ['App 內版本', 'v' + A.appVer + '（' + String(A.bundled || '').slice(0, 7) + '）']]) : '<div class="small muted">尚未部署</div>'}
+        ${dep ? `<div class="small ${A.stale ? 'up' : 'muted'}" style="margin-top:6px">${A.stale ? '⚠ 發佈站程式不是最新版，按「重新部署」更新' : '✓ 發佈站程式是最新版'}</div>` : ''}
+        ${A.autoLog ? `<div class="small muted">上次自動部署 ${fmtT(A.autoLog[0])}：${esc(A.autoLog[1])}</div>` : ''}
+        <div class="row wrap" style="gap:8px;margin-top:10px"><button class="btn ${dep ? '' : 'primary'}" id="adep" ${A.ready ? '' : 'disabled'}>${dep ? '重新部署' : '一鍵部署'}</button>${dep ? '<button class="btn" id="atest">測試連線</button><button class="btn" id="arep">更新盤後報告</button><button class="btn" id="adis">停用</button>' : ''}</div>
+        ${dep ? sw('data-aauto', A.auto, '新版更新後自動重新部署', '安裝新的管理員版後，在背景自動上傳新版自動回覆程式，完成後發通知') : ''}
+        ${dep && smart('alert') ? `<div class="small muted" style="margin-top:6px">到價提醒：${A.subs >= 0 ? A.subs + ' 位好友訂閱中' : '讀取中…'}；本月剩餘額度少於 30 則時自動暫停推播，保留給群發。</div>` : ''}
+        ${dep ? '<div class="small muted" style="margin-top:4px">報表定時群發時會同步更新「盤後報告」的回覆內容。</div>' : ''}</div>
+      ${dep ? `<div class="card" style="margin-top:12px"><h2>收件匣<span class="r small muted">最近 ${inbox.length} 則</span></h2>
+        <div class="small muted">好友傳來的訊息與自動回覆結果；可直接回覆（主動傳送會扣訊息額度）。</div>
+        ${sw('data-ntf', A.notify, '待回覆訊息通知', '每 15 分鐘檢查，好友訊息沒被自動回答時在手機通知你')}
+        ${stats}
+        <div class="row wrap" style="gap:8px;margin-top:10px"><input id="ibq" placeholder="搜尋訊息、好友名稱" value="${esc(F.q)}" style="flex:1;min-width:180px">
+          <div class="seg">${['全部', '需人工回覆', '智慧問答'].map((n, k) => `<button data-ibf="${k}" class="${F.f === k ? 'on' : ''}">${n}</button>`).join('')}</div><button class="btn sm" id="ibcsv">匯出 CSV</button></div>
+        ${list.length ? list.map((m, k) => `<div class="tile" style="margin-top:6px"><div class="row" style="align-items:flex-start"><div class="sp"><div class="small muted">${fmtT(m.at)} · ${esc(m.n || '好友')} · ${esc(m.g || '未自動回覆')}</div><div class="small" style="white-space:pre-wrap">${esc(m.t)}</div></div>
+          ${m.g !== '封鎖' ? `<div class="row" style="gap:4px;flex-wrap:wrap;justify-content:flex-end"><button class="btn sm" data-ibr="${k}">回覆</button><button class="btn sm" data-ibm="${k}">${L.me && L.me.id === m.u ? '✓ 我' : '設為我'}</button>${!/^[（［]/.test(m.t) && !String(m.g).startsWith('關鍵字') ? `<button class="btn sm" data-ibk="${k}">＋規則</button>` : ''}</div>` : ''}</div></div>`).join('') : '<div class="small muted" style="margin-top:8px">目前沒有訊息</div>'}</div>` : ''}`;
+  },
+  bind(v, L) {
+    const R = S.lr = S.lr || { rules: [] }; const dirty = () => { S.lrDirty = true; };
+    const F = S.ibf; const inbox = L.inbox || [];
+    const list = inbox.filter((m) => !F.q || [m.t, m.n, m.g].some((x) => String(x || '').toLowerCase().includes(F.q.toLowerCase())))
+      .filter((m) => F.f === 0 || (F.f === 1 && (!m.g || m.g === '預設回覆' || String(m.g).includes('失敗'))) || (F.f === 2 && m.g === '智慧問答')).slice(0, 80);
+    $$('[data-re]', v).forEach((el) => el.onclick = () => editRule(R.rules.find((x) => String(x.id) === el.dataset.re), false));
+    $('#radd', v).onclick = () => editRule(newRule(''), true);
+    $('#rdef', v).onclick = async () => { const c = await dialog('還原預設規則', '<div class="text2">目前的規則會被預設規則取代（已部署時會直接套用）。</div>', [['', '取消'], ['ok', '還原', 'primary']]); if (c.v === 'ok') { S.lrDirty = false; lineJob('arDefaults'); } };
+    $('#rexp', v).onclick = () => copyTxt('CETF-RULES:' + JSON.stringify(R), '已複製規則備份，可貼到記事本保存');
+    $('#rimp', v).onclick = async () => {
+      const c = await dialog('匯入規則', '<div class="small text2">貼上以 CETF-RULES: 開頭的規則備份：</div><textarea id="rimt" rows="6" style="margin-top:6px"></textarea><div id="derr" class="small up"></div>', [['', '取消'], ['ok', '匯入', 'primary']],
+        (bg) => (val) => { if (val !== 'ok') return null; try { const o = JSON.parse($('#rimt', bg).value.trim().replace(/^CETF-RULES:/, '')); return o.rules ? null : '格式不符'; } catch (e) { return '格式不符（請貼上以 CETF-RULES: 開頭的文字）'; } });
+      if (c.v === 'ok') { S.lr = JSON.parse($('#rimt', c.box).value.trim().replace(/^CETF-RULES:/, '')); S.lrDirty = true; toast('已匯入 ' + S.lr.rules.length + ' 組規則，按「儲存並套用規則」生效'); render(); }
+    };
+    $$('[data-rf]', v).forEach((el) => el.oninput = () => { R[el.dataset.rf] = el.value; dirty(); });
+    const tog = (sel, key, rerender = true) => { const el = $(sel, v); if (el) el.onchange = (e) => { R[key] = e.target.checked; dirty(); if (rerender) render(); }; };
+    tog('[data-wo]', 'wOn'); tog('[data-fo]', 'fOn'); tog('[data-oo]', 'oOn'); tog('[data-ow]', 'oW', false); tog('[data-so]', 'sOn');
+    $$('[data-sk]', v).forEach((el) => el.onchange = (e) => { R.sCfg = R.sCfg || {}; R.sCfg[el.dataset.sk] = e.target.checked; dirty(); });
+    $('#rsave', v).onclick = async () => { if (await lineJob('arSave', { rules: JSON.stringify(R) })) S.lrDirty = false; };
+    const q = $('#aq', v); if (q) { q.oninput = () => { S.aq = q.value; }; q.onkeydown = (e) => { if (e.key === 'Enter') $('#aqs', v).click(); }; }
+    if ($('#aqs', v)) $('#aqs', v).onclick = () => { if (!(S.aq || '').trim()) return toast('請輸入問題'); lineJob('arAsk', { q: S.aq.trim() }, { show: true }); };
+    $$('[data-aqx]', v).forEach((b) => b.onclick = () => { S.aq = b.dataset.aqx; lineJob('arAsk', { q: S.aq }, { show: true }); render(); });
+    if ($('#asy', v)) $('#asy', v).onclick = () => lineJob('arSync');
+    if ($('#achk', v)) $('#achk', v).onclick = () => lineJob('arCheck', {}, { show: true, label: '已送出檢查（約 1 分鐘）' });
+    $('#adep', v).onclick = () => lineJob('arDeploy', {}, { show: true });
+    if ($('#atest', v)) $('#atest', v).onclick = () => lineJob('arTest', {}, { show: true });
+    if ($('#arep', v)) $('#arep', v).onclick = () => lineJob('arReport');
+    if ($('#adis', v)) $('#adis', v).onclick = async () => { const c = await dialog('停用自動回覆', '<div class="text2">停用後 LINE 不再送訊息到自動回覆，好友傳訊息不會自動回答。</div>', [['', '取消'], ['ok', '停用', 'primary']]); if (c.v === 'ok') lineJob('arDisable'); };
+    const au = $('[data-aauto]', v); if (au) au.onchange = (e) => lineJob('arAuto', { on: e.target.checked });
+    const nt = $('[data-ntf]', v); if (nt) nt.onchange = (e) => lineJob('notify', { on: e.target.checked });
+    $$('[data-mk]', v).forEach((el) => el.onclick = () => editRule(newRule(el.dataset.mk), true));
+    const ibq = $('#ibq', v); if (ibq) ibq.onchange = () => { F.q = ibq.value.trim(); render(); };
+    $$('[data-ibf]', v).forEach((b) => b.onclick = () => { F.f = +b.dataset.ibf; render(); });
+    if ($('#ibcsv', v)) $('#ibcsv', v).onclick = () => {
+      const qq = (x) => '"' + String(x || '').replace(/"/g, '""').replace(/\n/g, ' ') + '"';
+      const csv = '﻿時間,好友,訊息,回覆類型\n' + inbox.map((m) => [fmtT(m.at), m.n, m.t, m.g || '未回覆'].map(qq).join(',')).join('\n');
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = 'LINE收件匣.csv'; a.click();
+    };
+    $$('[data-ibm]', v).forEach((b) => b.onclick = () => { const m = list[+b.dataset.ibm]; lineJob('setMe', { u: m.u, n: m.n }); });
+    $$('[data-ibk]', v).forEach((b) => b.onclick = () => editRule(newRule(String(list[+b.dataset.ibk].t).trim().slice(0, 30)), true));
+    $$('[data-ibr]', v).forEach((b) => b.onclick = async () => {
+      const m = list[+b.dataset.ibr]; const dl = (L.links || {}).download || '';
+      const tpl = [['收到', '{name} 您好，已收到您的訊息，我們會盡快處理 🙏'], ['要截圖', '麻煩提供問題畫面截圖與 App 版本（App › 設置 › 關於與更新），方便我們確認，謝謝！'],
+        ['授權碼', '您的授權碼已傳送，長按複製整段後打開 App 即可自動開通。'], ['更新', '請先更新到最新版：App › 設置 › 關於與更新 › 檢查更新，或點選單「下載 App」。'], ['下載', '📲 下載 App：' + dl]];
+      const c = await dialog('回覆 ' + (m.n || '好友'), `<div class="small muted">對方：${esc(String(m.t).slice(0, 160))}</div><div class="row wrap" style="gap:4px;margin-top:6px">${tpl.map(([n], k) => `<button class="btn sm" data-rt="${k}">${n}</button>`).join('')}</div>
+        <textarea id="rpt" rows="4" maxlength="4900" style="margin-top:6px" placeholder="回覆內容（扣 1 則額度）"></textarea><div id="derr" class="small up"></div>`, [['', '取消'], ['ok', '傳送', 'primary']],
+        (bg) => { $$('[data-rt]', bg).forEach((x) => x.onclick = () => { $('#rpt', bg).value = tpl[+x.dataset.rt][1].replace('{name}', m.n || '').trim(); }); return (val) => (val === 'ok' && !$('#rpt', bg).value.trim() ? '請輸入回覆內容' : null); });
+      if (c.v === 'ok') lineJob('arPush', { u: m.u, n: m.n, text: $('#rpt', c.box).value.trim() });
+    });
+  },
+};
+
+// ── ④ 下載發布：發布管道、App 安裝檔、說明書、每日盤後報告、對外連結 ──
+const lineDist = {
+  html(L) {
+    const D = L.dist || {}; const off = D.official;
+    const behind = off && ((D.ready && off !== D.apkTag) || (D.drive && D.paired && off !== D.driveApkTag));
+    const prefer = [['github', 'GitHub 直連'], ['site', '發佈站'], ['drive', '雲端硬碟']];
+    return `<div class="grid g2 stack"><div class="card"><h2>發布管道</h2><div class="small muted">正式版由伺服器轉送或存到 Google 雲端硬碟；好友、會員只看到發佈站或雲端硬碟連結。</div>
+        <div class="small ${D.ready ? 'down' : 'muted'}" style="margin-top:8px">發佈站（Cloudflare）：${D.ready ? '✓ 已部署' : '未部署（先完成「自動回覆」的一鍵部署）'}</div>
+        ${sw('data-ddr', D.drive, '同時存到 Google 雲端硬碟', D.paired ? '由雲端會員伺服器存到「台美股資產 發佈」資料夾，設為知道連結即可下載' : '需先在管理員 App 配對雲端會員伺服器')}
+        <div class="small text2" style="margin-top:10px">LINE「下載 App」使用的連結</div>
+        <div class="seg" style="margin-top:4px;display:inline-flex">${prefer.map(([k, n]) => `<button data-dpf="${k}" class="${D.prefer === k ? 'on' : ''}">${n}</button>`).join('')}</div>
+        <div class="small muted" style="margin-top:6px;word-break:break-all">${D.prefer === 'github' ? '直接下載最新正式版安裝檔；發布新版後自動換成新版網址，並同步自動回覆與圖文選單。' : D.prefer === 'drive' ? '使用 Google 雲端硬碟分享連結（需開啟雲端硬碟並上架）。' : '使用自己的發佈站下載頁（不顯示原始來源）。'}<br>目前：${esc((L.links || {}).download || '')}</div>
+        ${D.prefer === 'github' ? '<button class="btn" id="dfl" style="margin-top:8px">立即檢查最新版並更新連結</button>' : ''}</div>
+      <div class="card"><h2>App 安裝檔</h2>${kv([['正式版', off || '查詢中…'], ['發佈站', D.ready ? D.apkTag || '尚未上架' : '—'], ['雲端硬碟', D.drive ? D.driveApkTag || '尚未存入' : '未開啟']])}
+        <button class="btn ${behind ? 'primary' : ''}" id="dapk" style="margin-top:10px;width:100%">${behind ? '上架 ' + esc(off) : '重新上架'}</button>
+        ${sw('data-dau', D.auto, '正式版發布後自動上架', '開啟管理員版時檢查（每小時一次）')}</div>
+      <div class="card"><h2>使用說明書</h2><div class="small muted">${D.pdf ? '已上架（正式版發布時說明書會隨 APK 一起更新；需要時可再按一次）' : '尚未上架'}</div><button class="btn" id="dman" style="margin-top:8px">${D.pdf ? '更新說明書' : '上架說明書'}</button></div>
+      ${D.ready ? `<div class="card"><h2>每日盤後報告</h2><div class="small muted">由管理員 App 產生報表圖與摘要後上架；定時群發時自動執行。${D.reportDate ? '<br>目前上架：' + esc(D.reportDate) : ''}</div>
+        ${sw('data-dimg', D.reportImage, '群發附報表圖')}<button class="btn" id="drep" style="margin-top:8px">產生並上架今日報告</button></div>` : ''}
+      <div class="card"><h2>對外連結</h2>${(D.links || []).map(([n, u]) => `<div class="row" style="margin-top:6px;align-items:flex-start"><div class="sp"><div class="small">${esc(n)}</div><div class="small muted" style="word-break:break-all">${esc(u)}</div></div><a class="btn sm" href="${esc(u)}" target="_blank" rel="noopener">開啟</a><button class="btn sm" data-cp="${esc(u)}">複製</button></div>`).join('') || '<div class="small muted">尚未上架</div>'}
+        <div class="small muted" style="margin-top:8px">LINE 目前使用：${esc((L.links || {}).download || '')}<br>上架後，圖文選單、自動回覆、群發範本的「下載」「說明書」會改用上面的連結。</div></div></div>`;
+  },
+  bind(v, L) {
+    const ddr = $('[data-ddr]', v); ddr.onchange = (e) => lineJob('distDrive', { on: e.target.checked });
+    $$('[data-dpf]', v).forEach((b) => b.onclick = () => lineJob('distPrefer', { v: b.dataset.dpf }));
+    if ($('#dfl', v)) $('#dfl', v).onclick = () => lineJob('distFollow');
+    $('#dapk', v).onclick = () => lineJob('distApk', {}, { label: '已送出上架（約 1–2 分鐘）' });
+    $('[data-dau]', v).onchange = (e) => lineJob('distAuto', { on: e.target.checked });
+    $('#dman', v).onclick = () => lineJob('distManual');
+    const im = $('[data-dimg]', v); if (im) im.onchange = (e) => lineJob('distImg', { on: e.target.checked });
+    if ($('#drep', v)) $('#drep', v).onclick = () => lineJob('distReport');
+    $$('[data-cp]', v).forEach((b) => b.onclick = () => copyTxt(b.dataset.cp, '已複製連結'));
+  },
+};
+
+// ── ⑤ 建置素材：圖文選單、圖片素材、文案 ──
+const lineKit = {
+  html(L) {
+    const K = L.kit || {};
+    if (!K.has) return '<div class="card"><div class="small muted">此版本管理員 App 沒有內附官方帳號建置素材。</div></div>';
+    const st = K.rich === true ? '✓ 已上線' : K.rich === false ? (K.richId ? 'LINE 上目前不是此選單' : '尚未部署') : L.token ? '查詢中…' : '需先設定權杖';
+    return `<div class="grid g2 stack"><div class="card"><h2>圖文選單</h2><div class="small muted">6 格：${(K.areas || []).map((a) => esc(a[0])).join('、')}。文字按鈕會送出關鍵字，對應「自動回覆」的規則。</div>
+        <div class="small ${K.rich === true ? 'down' : 'muted'}" style="margin-top:6px">狀態：${st}</div>
+        <div class="row wrap" style="gap:8px;margin-top:8px"><button class="btn primary" id="kdep">${K.rich === true ? '重新部署' : '部署圖文選單'}</button>${K.rich === true ? '<button class="btn" id="krm">移除</button>' : ''}</div>
+        <div class="small text2" style="margin-top:10px">手動設定時（LINE 官方帳號 App › 圖文選單 › 動作設定）每格填：</div>
+        ${(K.areas || []).map((a, k) => `<div class="row" style="margin-top:4px;align-items:flex-start"><b style="width:110px;flex:none">${String.fromCharCode(65 + k)}  ${esc(a[0])}</b><span class="sp small text2" style="word-break:break-all">${esc(a[1])}：${esc(a[2])}</span><button class="btn sm" data-cp="${esc(a[2])}">複製</button></div>`).join('')}</div>
+      <div class="card"><h2>圖片素材</h2><div class="small muted">大頭貼、主頁背景、歡迎圖等圖片內附在管理員 App：請在 App「會員 › LINE › 建置素材」存到相簿後，於 LINE 官方帳號 App 上傳。</div>
+        ${(K.images || []).map((a) => `<div class="tile" style="margin-top:6px"><b>${esc(a[0])}</b>（${esc(a[1])}）<div class="small muted">${esc(a[2])}</div></div>`).join('')}</div></div>
+      <div class="card" style="margin-top:12px"><h2>文案</h2><div class="small muted">依目前會員政策與群發時間自動產生；點「複製」後貼到 LINE 官方帳號對應位置。{Nickname} 會自動換成好友名稱。</div>
+        ${(K.copies || []).map((c, k) => `<div class="tile" style="margin-top:8px"><div class="row"><div class="sp"><b>${esc(c.title)}</b>${c.limit > 0 ? `<span class="small muted"> · ${c.text.length}/${c.limit} 字</span>` : ''}<div class="small muted">${esc(c.where)}</div></div><button class="btn sm" data-cpk="${k}">複製</button></div><div class="small text2" style="white-space:pre-wrap;margin-top:4px">${esc(c.text)}</div></div>`).join('')}</div>`;
+  },
+  bind(v, L) {
+    const K = L.kit || {};
+    if ($('#kdep', v)) $('#kdep', v).onclick = () => lineJob('kitDeploy');
+    if ($('#krm', v)) $('#krm', v).onclick = () => lineJob('kitRemove');
+    $$('[data-cp]', v).forEach((b) => b.onclick = () => copyTxt(b.dataset.cp, '已複製'));
+    $$('[data-cpk]', v).forEach((b) => b.onclick = () => copyTxt(K.copies[+b.dataset.cpk].text, '已複製「' + K.copies[+b.dataset.cpk].title + '」'));
+  },
+};
+
+// ───────── 會員等級編輯（政策頁與會員等級頁共用；與管理員 App「會員 › 政策 › 會員等級」相同）─────────
+function tierEditor(box, p) {
+  if (!S.tiers) S.tiers = JSON.parse(JSON.stringify(p.tiers || []));
+  const T = S.tiers;
+  const draw = () => {
+    box.innerHTML = `<h2>會員等級<span class="r small muted">開通時選擇等級即套用其功能與預設期限</span></h2>
+      ${T.map((t, i) => `<div class="tile" style="margin-top:10px"><div class="row" style="gap:8px;margin-bottom:6px"><span class="badge" style="color:${argb(t.color)};border-color:${argb(t.color)}">${esc(t.name || '未命名')}</span><span class="sp small muted">${t.days > 0 ? t.days + ' 天' : '永久'} · 編號 ${t.id || '新'}</span>
+          ${i ? `<button class="btn sm" data-tu="${i}" title="上移">↑</button>` : ''}${i < T.length - 1 ? `<button class="btn sm" data-tdn="${i}" title="下移">↓</button>` : ''}<button class="btn sm" data-td="${i}">刪除</button></div>
+        <div class="grid g4" style="gap:8px"><div class="field"><label>名稱</label><input data-ti="${i}" data-tk="name" value="${esc(t.name)}" maxlength="12"></div>
+        <div class="field"><label>說明</label><input data-ti="${i}" data-tk="desc" value="${esc(t.desc || '')}" maxlength="30"></div>
+        <div class="field"><label>預設天數（0＝永久）</label><input data-ti="${i}" data-tk="days" type="number" min="0" max="3650" value="${t.days}"></div>
+        <div class="field"><label>顏色</label><input data-ti="${i}" data-tk="color" type="color" value="${argb(t.color)}" style="height:38px;padding:2px"></div></div>
+        <div class="field"><label>開放功能</label>${featBoxes('tm' + i, t.f)}</div></div>`).join('')}
+      <div class="row wrap" style="gap:8px;margin-top:12px"><button class="btn" id="tadd">＋ 新增等級</button><span class="sp"></span><button class="btn" id="treset">還原</button><button class="btn primary" id="tsave">儲存並回傳會員等級</button></div>
+      <div class="small muted" style="margin-top:6px">每個等級都可修改名稱、說明、天數、顏色與功能，也可新增、刪除、調整順序。儲存後由管理員 App 簽章回傳；已開通的授權碼依其等級編號顯示新名稱，功能以授權碼為準（調整既有會員權限請在會員頁「續約／變更方案」）。</div>`;
+    // 輸入即寫回 S.tiers：自動重新整理或切換分頁都不會遺失
+    $$('[data-ti]', box).forEach((el) => el.oninput = () => { const t = T[+el.dataset.ti]; const k = el.dataset.tk;
+      t[k] = k === 'days' ? Math.max(0, Math.min(3650, parseInt(el.value, 10) || 0)) : k === 'color' ? (0xFF000000 + parseInt(el.value.slice(1), 16)) : el.value; S.tierDirty = true; });
+    T.forEach((t, i) => $$(`[data-tm${i}]`, box).forEach((el) => el.onchange = () => { t.f = maskOf(box, 'tm' + i); S.tierDirty = true; }));
+    $$('[data-td]', box).forEach((b) => b.onclick = () => { if (T.length <= 1) return toast('至少要有一個會員等級'); T.splice(+b.dataset.td, 1); S.tierDirty = true; draw(); });
+    $$('[data-tu]', box).forEach((b) => b.onclick = () => { const i = +b.dataset.tu; [T[i - 1], T[i]] = [T[i], T[i - 1]]; S.tierDirty = true; draw(); });
+    $$('[data-tdn]', box).forEach((b) => b.onclick = () => { const i = +b.dataset.tdn; [T[i + 1], T[i]] = [T[i], T[i + 1]]; S.tierDirty = true; draw(); });
+    $('#tadd', box).onclick = () => { T.push({ id: 0, name: '新等級', desc: '', days: 30, color: 0xFF22C55E, f: 0 }); S.tierDirty = true; draw(); };
+    $('#treset', box).onclick = () => { S.tiers = null; S.tierDirty = false; tierEditor(box, p); };
+    $('#tsave', box).onclick = async () => {
+      if (!T.length) return toast('至少要有一個會員等級');
+      if (T.some((t) => !String(t.name).trim())) return toast('請輸入每個等級的名稱');
+      const names = T.map((t) => t.name.trim()); if (new Set(names).size !== names.length) return toast('等級名稱不能重複');
+      if (await job('policy', { tiers: T.map((t) => ({ id: t.id || 0, name: t.name.trim(), desc: t.desc || '', days: t.days, color: Number(t.color) >>> 0, f: t.f })) }, '已送出會員等級')) { S.tiers = null; S.tierDirty = false; }
+    };
+  };
+  draw();
+}
