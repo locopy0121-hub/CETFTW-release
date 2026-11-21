@@ -721,12 +721,26 @@ async function loadBars(sym, range, interval = '1d') {
 const NAV = [['', '總覽', '🏠'], ['watch', '行情', '📈'], ['hold', '持股', '💼'], ['trades', '交易', '🧾'], ['div', '股息', '💰'], ['analysis', '分析', '📊'], ['compare', '比較', '⚖️'], ['calendar', '行事曆', '📅'], ['sim', '模擬交易', '🎮'], ['tools', '工具', '🧮'],
   ['alerts', '提醒', '🔔'], ['market', '市場', '🌐'], ['news', '新聞', '📰'], ['cash', '現金與帳戶', '🏦'], ['member', '會員', '👤'], ['settings', '設定', '⚙️']];
 const BOTTOM = ['', 'watch', 'hold', 'market', 'more'];
-const PARENT = { crash: 'market', s: 'none', limits: 'market', rank: 'market', index: 'market', us: 'market', etf: 'market', report: 'market', diag: 'settings', more: 'more' };
+const PARENT = { ix: 'market', crash: 'market', s: 'none', limits: 'market', rank: 'market', index: 'market', us: 'market', etf: 'market', report: 'market', diag: 'settings', more: 'more' };
 /** 下載手機 App（Android）：連到發佈站下載頁，顯示 App 圖示與最新版本 */
 function dlAppHtml(big) {
   return `<a class="dlapp${big ? ' big' : ''}" href="/" target="_blank" rel="noopener" title="下載 Android App（與網頁同一帳號同步）"><img src="/web/app-icon.png" alt="台美股資產 App" width="${big ? 52 : 38}" height="${big ? 52 : 38}">
     <div class="l"><b>下載手機 App</b><div class="small muted dlv">Android · 與網頁同步</div></div><span class="muted">›</span></a>`;
 }
+/** LINE 官方帳號：加入好友按鈕與 QR Code（ID 來自會員政策 lineOa） */
+function lineOaId() { const id = String((S.policy && S.policy.lineOa) || '').trim(); return id ? (id.startsWith('@') ? id : '@' + id) : ''; }
+function lineJoinHtml(big) {
+  const id = lineOaId(); if (!id) return '';
+  return `<a class="dlapp line${big ? ' big' : ''}" href="javascript:void 0" data-linejoin title="加入台美股資產 LINE 官方帳號"><span class="lineic" style="width:${big ? 52 : 38}px;height:${big ? 52 : 38}px">LINE</span>
+    <div class="l"><b>加入 LINE 好友</b><div class="small muted">${esc(id)}${big ? ' · 開通、續約、盤後報告' : ''}</div></div><span class="muted">›</span></a>`;
+}
+function lineModal() {
+  const id = lineOaId(); if (!id) return; const raw = id.slice(1); const url = 'https://line.me/R/ti/p/' + encodeURIComponent(id);
+  dialog('加入台美股資產 LINE 官方帳號', `<div style="text-align:center"><img src="https://qr-official.line.me/sid/L/${encodeURIComponent(raw)}.png" alt="LINE QR Code" width="200" height="200" style="border-radius:12px;background:#fff;padding:8px" onerror="this.outerHTML='<div class=&quot;small muted&quot;>QR Code 載入失敗，請用下方按鈕加入</div>'">
+    <div class="num" style="font-size:18px;margin-top:8px">${esc(id)}</div><div class="small text2" style="margin-top:6px">用手機 LINE 掃描 QR Code，或在 LINE 搜尋 ID 加入好友。<br>可詢問開通／續約、接收每日盤後報告、下載 App。</div>
+    <a class="btn primary" href="${url}" target="_blank" rel="noopener" style="margin-top:12px;display:inline-block;background:#06C755;border-color:#06C755">在 LINE 開啟並加入</a></div>`, [['', '關閉']]);
+}
+document.addEventListener('click', (e) => { if (e.target.closest('[data-linejoin]')) { e.preventDefault(); lineModal(); } });
 async function dlAppVer() {
   try { const j = await (await fetch('/api/latest', { cache: 'no-store' })).json(); if (j && j.tag) $$('.dlv').forEach((el) => { el.textContent = 'Android ' + j.tag + (j.size ? ' · ' + (j.size / 1048576).toFixed(0) + ' MB' : ''); }); } catch (e) {}
 }
@@ -737,7 +751,7 @@ function shell() {
     <aside class="side"><div class="brand"><div class="logo">台</div>台美股資產</div>
       <div class="search gsearch"><input id="gs" placeholder="搜尋個股（按 / ）" autocomplete="off"><div class="res hide"></div></div>
       <nav class="nav">${navHtml}</nav>
-      <div class="foot">${dlAppHtml()}<div id="mb"></div><div class="small syncst" style="margin-top:6px"></div></div></aside>
+      <div class="foot">${dlAppHtml()}${lineJoinHtml()}<div id="mb"></div><div class="small syncst" style="margin-top:6px"></div></div></aside>
     <main class="main" id="view"></main>
     <nav class="bottom">${botHtml}</nav></div>`;
   bindSearch($('#gs'), (sym) => { location.hash = '#/s/' + sym; });
@@ -752,7 +766,7 @@ function head(title, right = '') { return `<div class="top"><h1>${esc(title)}</h
 function tickerHtml() {
   return '<div class="ticker">' + INDEXES.map((x) => {
     const q = S.q[x.k] || {}; const ch = q.price && q.prev ? q.price - q.prev : 0;
-    return `<div class="tk" data-go="${x.k === 't00' || x.k === 'o00' ? '#/market' : ''}"><div class="n">${x.n}</div><div class="p num ${cls(ch)}">${q.price ? fmt(q.price, x.k === 'TWD=X' ? 3 : 2) : '—'}</div>
+    return `<div class="tk" data-go="#/ix/${encodeURIComponent(IX_FROM[x.k] || x.k)}"><div class="n">${x.n}</div><div class="p num ${cls(ch)}">${q.price ? fmt(q.price, x.k === 'TWD=X' ? 3 : 2) : '—'}</div>
       <div class="c num ${cls(ch)}">${q.price ? arrow(ch) + fmt(Math.abs(ch), 2) + ' ' + fmtPct(ch / q.prev * 100) : ''}</div></div>`;
   }).join('') + '</div>' +
   `<div class="limitbar" data-go="#/limits"><span class="muted">今日</span><span class="tag up" style="border-color:currentColor">漲停</span><b class="num up">${LIMIT.at ? LIMIT.up.length : '…'}</b>家
@@ -1850,7 +1864,7 @@ VIEWS.index = {
     await Promise.all(all.filter((k) => !S.q[k] || Date.now() - (S.q[k].at || 0) > 60000).map(async (k) => { const v = await fetchUs(k); if (v) S.q[k] = { ...v, at: Date.now() }; }));
     if (S.route !== 'index') return;
     const card = ([k, n], d) => { const q = S.q[k] || {}; const ch = q.price && q.prev ? q.price - q.prev : 0;
-      return `<div class="wt" data-go="#/s/${encodeURIComponent(k)}"><div class="hd"><span class="nm">${esc(n)}</span><span class="cd" style="font-size:11px">${esc(k)}</span></div><div class="bd">
+      return `<div class="wt" data-go="#/ix/${encodeURIComponent(k)}"><div class="hd"><span class="nm">${esc(n)}</span><span class="cd" style="font-size:11px">${esc(k)}</span></div><div class="bd">
         <div class="px num ${cls(ch)}" style="font-size:24px">${q.price ? fmt(q.price, d) : '—'}</div><div class="ch num ${cls(ch)}">${q.price ? arrow(ch) + ' ' + fmt(Math.abs(ch), d) : ''}</div><div class="pc num ${cls(ch)}">${q.prev ? fmtPct(ch / q.prev * 100) : ''}</div>
         ${sparkSvg(q.spark, css(ch >= 0 ? '--up' : '--down'))}</div></div>`; };
     let h = `<h2 style="font-size:16px">全球指數</h2><div class="wall">${WORLD.map((x) => card(x, 2)).join('')}</div>
@@ -1869,6 +1883,130 @@ VIEWS.index = {
   },
   syms() { return []; },
 };
+// ───────── 指數詳情（台股加權、櫃買、美股與全球指數）：圖表、關鍵數據、技術面、波動、回撤、每年報酬、月份季節性、盤後摘要／VIX ─────────
+const IX_TW = { '^TWII': 't00', '^TWOII': 'o00' };
+const IX_FROM = { t00: '^TWII', o00: '^TWOII' };
+function ixName(sym) { const w = WORLD.concat(FXS).find(([k]) => k === sym); return w ? w[1] : (INDEXES.find((x) => x.k === sym) || {}).n || sym; }
+function ixQuote(sym) { return S.q[IX_TW[sym] || sym] || {}; }
+VIEWS.ix = {
+  title: '指數',
+  render(sym) {
+    this.sym = sym = IX_FROM[sym] || sym || '^TWII'; const tw = !!IX_TW[sym];
+    return `<div class="top"><a class="btn sm" href="javascript:history.back()">‹ 返回</a><h1>${esc(ixName(sym))} <span class="muted num" style="font-size:16px">${esc(sym)}</span></h1>
+      <div class="seg">${['^TWII', '^TWOII', '^GSPC', '^IXIC', '^DJI', '^SOX'].map((k) => `<a class="btn sm ${k === sym ? 'primary' : ''}" href="#/ix/${encodeURIComponent(k)}">${esc(ixName(k).replace('台灣', ''))}</a>`).join('')}</div></div>
+      <div id="ixq"></div>
+      <div class="card" style="margin-top:12px"><div class="row wrap" style="margin-bottom:8px;gap:8px"><div class="seg" id="rg" style="flex-wrap:wrap">${Object.keys(RANGES).map((k) => `<button data-r="${k}" class="${(S.pref.ixRange || '1Y') === k ? 'on' : ''}">${RANGE_N[k]}</button>`).join('')}</div>
+        <div class="seg" id="ctp">${CTYPES.map(([k, n]) => `<button data-ct="${k}" class="${(S.pref.ixType || 'line') === k ? 'on' : ''}">${n}</button>`).join('')}</div>
+        <span class="sp"></span><div class="seg" id="sb">${['KD', 'RSI', 'MACD'].map((k) => `<button data-s="${k}" class="${S.pref.ixSub === k ? 'on' : ''}">${k}</button>`).join('')}</div></div>
+        <div class="chart-wrap"><canvas></canvas><div class="chart-tip"></div></div><div class="row between small muted" style="margin-top:4px"><span id="cmsg"></span><span class="zinfo"></span><span class="d-only">滾輪縮放 · 拖曳平移 · 雙擊還原</span></div></div>
+      <div id="ixs" class="grid g2 stack" style="margin-top:12px"></div>`;
+  },
+  bind() {
+    $$('[data-r]', $('#rg')).forEach((b) => b.onclick = () => { S.pref.ixRange = b.dataset.r; savePref(); $$('[data-r]', $('#rg')).forEach((x) => x.classList.toggle('on', x === b)); this.chart(); });
+    $$('[data-ct]', $('#ctp')).forEach((b) => b.onclick = () => { S.pref.ixType = b.dataset.ct; savePref(); $$('[data-ct]', $('#ctp')).forEach((x) => x.classList.toggle('on', x === b)); this.chart(); });
+    $$('[data-s]', $('#sb')).forEach((b) => b.onclick = () => { S.pref.ixSub = S.pref.ixSub === b.dataset.s ? '' : b.dataset.s; savePref(); $$('[data-s]', $('#sb')).forEach((x) => x.classList.toggle('on', x.dataset.s === S.pref.ixSub)); this.chart(); });
+    this.chart(); this.stats();
+  },
+  fill() {
+    const sym = this.sym; const q = ixQuote(sym); const ch = q.price && q.prev ? q.price - q.prev : 0; const el = $('#ixq'); if (!el) return;
+    const vol = q.vol ? (IX_TW[sym] ? fmt(q.vol / 1e8, 0) + ' 億' : fmtVol(q.vol)) : '—';
+    el.innerHTML = `<div class="card"><div class="row wrap" style="align-items:flex-end;gap:18px">
+      <div><div class="num ${cls(ch)}" style="font-size:40px;font-weight:800;line-height:1">${q.price ? fmt(q.price, 2) : '—'}</div>
+        <div class="num ${cls(ch)}" style="font-size:16px;margin-top:4px">${q.price ? arrow(ch) + ' ' + fmt(Math.abs(ch), 2) + ' 點　' + fmtPct(ch / q.prev * 100) : '—'}</div></div>
+      <div class="grid g4" style="flex:1;min-width:280px;gap:8px">${[['開盤', q.open], ['最高', q.high], ['最低', q.low], ['昨收', q.prev]].map(([k, v]) => `<div><div class="small muted">${k}</div><div class="num">${v ? fmt(v, 2) : '—'}</div></div>`).join('')}
+        <div><div class="small muted">${IX_TW[sym] ? '成交金額' : '成交量'}</div><div class="num">${vol}</div></div><div><div class="small muted">振幅</div><div class="num">${q.high && q.low && q.prev ? ((q.high - q.low) / q.prev * 100).toFixed(2) + '%' : '—'}</div></div>
+        <div><div class="small muted">52 週區間</div><div class="num small">${q.l52 ? fmt(q.l52, 0) + '～' + fmt(q.h52, 0) : (this.r52 || '—')}</div></div><div><div class="small muted">更新</div><div class="num">${q.time ? hm(q.time) : '—'}</div></div></div></div></div>`;
+  },
+  syms() { return IX_TW[this.sym] ? [] : [this.sym]; },
+  async chart() {
+    const sym = this.sym; const [range, count, iv] = rangeOf(S.pref.ixRange || '1Y'); const ctype = S.pref.ixType || 'line'; const wrap = $('.chart-wrap'); if (!wrap) return;
+    $('#sb').style.visibility = range === '1d' ? 'hidden' : '';
+    if (range === '1d') {
+      const bars5 = ctype === 'candle' || ctype === 'ohlc'; $('#cmsg').textContent = '載入當日走勢…';
+      const r = await fetchYahoo(sym, '1d', bars5 ? '5m' : '1m', 30); if (S.route !== 'ix' || this.sym !== sym) return;
+      if (!r || !r.timestamp) { $('#cmsg').textContent = '無法取得當日走勢'; return; }
+      const q0 = r.indicators.quote[0]; const prev = r.meta.chartPreviousClose || r.meta.previousClose; const dd = new Date((r.timestamp[0] + 8 * 3600) * 1000);
+      $('#cmsg').textContent = '交易日 ' + dd.toISOString().slice(0, 10).replace(/-/g, '/') + '（週' + '日一二三四五六'[dd.getUTCDay()] + '）';
+      if (bars5) { const bs = r.timestamp.map((t, i) => (q0.close[i] == null || q0.open[i] == null ? null : { d: hm(t * 1000), o: q0.open[i], h: q0.high[i], l: q0.low[i], c: q0.close[i], v: q0.volume[i] || 0 })).filter(Boolean);
+        drawChart(wrap, bs, { key: sym + '1d5', count: 0, type: ctype, intraday: true, base: prev }); return; }
+      drawLine(wrap, r.timestamp.map((t, i) => [t * 1000, q0.close[i], q0.volume[i]]).filter((p) => p[1] != null), prev, true, ctype); return;
+    }
+    const key = sym + range + (iv || ''); $('#cmsg').textContent = barCache[key] ? '' : '載入走勢…';
+    const bars = barCache[key] || (barCache[key] = await loadBars(sym, range, iv)); if (S.route !== 'ix' || this.sym !== sym) return;
+    if (!bars.length) { $('#cmsg').textContent = '無法取得走勢資料'; return; }
+    const q = ixQuote(sym); const all = bars.slice(); const today = ymd();
+    if (q.price && iv !== '1wk' && (IX_TW[sym] ? twOpen() : true)) { const last = all[all.length - 1]; const cur = { d: today, o: q.open || q.price, h: Math.max(q.high || q.price, q.price), l: Math.min(q.low || q.price, q.price), c: q.price, v: last.d === today ? last.v : 0 }; if (last.d === today) all[all.length - 1] = cur; else if (IX_TW[sym]) all.push(cur); }
+    $('#cmsg').textContent = iv === '1wk' ? '週 K（' + all[0].d + ' 起）' : '';
+    drawChart(wrap, all, { key: key + count, count: count || all.length, type: ctype, weekly: iv === '1wk', sub: can('CHART') ? S.pref.ixSub || null : null, mas: S.pref.mas, pats: ctype === 'candle' && S.pref.kpat !== false && can('KLINE') });
+  },
+  async stats() {
+    const sym = this.sym; const tw = !!IX_TW[sym]; const el = $('#ixs'); if (!el) return;
+    el.innerHTML = `<div class="card" id="ixKey" style="grid-column:1/-1"><h2>關鍵數據</h2><div class="small muted">計算中…</div></div>${tw ? '<div class="card" id="ixMkt"></div>' : '<div class="card" id="ixVix"></div>'}
+      <div class="card" id="ixTech"></div><div class="card" id="ixVol"></div><div class="card" id="ixKa" style="grid-column:1/-1"></div><div class="card" id="ixDd"></div><div class="card" id="ixBand"></div>
+      <div class="card" id="ixYr"></div><div class="card" id="ixSeason"></div>`;
+    const [d2, wk, mo] = await Promise.all([loadBars(sym, '2y').catch(() => []), fetchYahoo(sym, 'max', '1wk', 3600), fetchYahoo(sym, 'max', '1mo', 86400)]);
+    if (S.route !== 'ix' || this.sym !== sym) return;
+    const q = ixQuote(sym); const b = d2.slice(); if (q.price && b.length) { const l = b[b.length - 1]; if (l.d === ymd()) l.c = q.price; else if (tw && twOpen()) b.push({ d: ymd(), o: q.open || q.price, h: q.high || q.price, l: q.low || q.price, c: q.price, v: 0 }); }
+    const px0 = q.price || (b.length ? b[b.length - 1].c : 0);
+    const W = wk && wk.timestamp ? wk.timestamp.map((t, i) => [new Date((t + 8 * 3600) * 1000).toISOString().slice(0, 10), wk.indicators.quote[0].close[i]]).filter((x) => x[1] != null) : [];
+    const M = mo && mo.timestamp ? mo.timestamp.map((t, i) => [new Date((t + 8 * 3600) * 1000), mo.indicators.quote[0].close[i]]).filter((x) => x[1] != null) : [];
+    // 關鍵數據：各期報酬、52 週位置、年化報酬
+    const back = (days) => { const t = tpeNow(); t.setDate(t.getDate() - days); const ds = ymd(t); const x = b.filter((k) => k.d <= ds).pop(); return x ? (px0 / x.c - 1) * 100 : null; };
+    const backW = (yrs) => { const t = new Date(); t.setFullYear(t.getFullYear() - yrs); const ds = t.toISOString().slice(0, 10); const x = W.filter((k) => k[0] <= ds).pop(); return x ? (px0 / x[1] - 1) * 100 : null; };
+    const ytdBase = b.filter((k) => k.d < tpeNow().getFullYear() + '/01/01').pop(); const y1 = b.slice(-250);
+    const h52 = y1.length ? Math.max(...y1.map((x) => x.h)) : null, l52 = y1.length ? Math.min(...y1.map((x) => x.l)) : null; this.r52 = h52 ? fmt(l52, 0) + '～' + fmt(h52, 0) : null;
+    const r5 = backW(5); const cagr5 = r5 != null ? (Math.pow(1 + r5 / 100, 1 / 5) - 1) * 100 : null; const r10 = backW(10); const cagr10 = r10 != null ? (Math.pow(1 + r10 / 100, 1 / 10) - 1) * 100 : null;
+    const ath = W.length ? Math.max(...W.map((x) => x[1]), px0) : null;
+    const pc = (v) => (v == null ? '—' : `<span class="${cls(v)}">${fmtPct(v)}</span>`);
+    $('#ixKey').innerHTML = `<h2>關鍵數據</h2><div class="grid g4" style="gap:10px">${[['今年以來', pc(ytdBase ? (px0 / ytdBase.c - 1) * 100 : null)], ['近 1 個月', pc(back(30))], ['近 3 個月', pc(back(91))], ['近 6 個月', pc(back(182))], ['近 1 年', pc(back(365))], ['近 3 年', pc(backW(3))], ['近 5 年', pc(r5)], ['近 10 年', pc(r10)],
+      ['5 年年化', pc(cagr5)], ['10 年年化', pc(cagr10)], ['52 週高／低', h52 ? fmt(h52, 0) + '／' + fmt(l52, 0) : '—'], ['52 週位置', h52 > l52 ? ((px0 - l52) / (h52 - l52) * 100).toFixed(0) + '%' : '—'],
+      ['距歷史高點', ath ? pc((px0 / ath - 1) * 100) : '—'], ['歷史高點', ath ? fmt(ath, 0) : '—'], ['距 52 週高', h52 ? pc((px0 / h52 - 1) * 100) : '—'], ['距 52 週低', l52 ? pc((px0 / l52 - 1) * 100) : '—']].map(([k, v]) => `<div><div class="small muted">${k}</div><div class="num">${v}</div></div>`).join('')}</div>`;
+    this.fill();
+    // 技術面：均線位置、乖離、RSI、KD、MACD
+    if (b.length >= 60) {
+      const c = b.map((x) => x.c), n = c.length - 1; const ma = (p) => sma(c, p)[n]; const m5 = ma(5), m20 = ma(20), m60 = ma(60), m120 = ma(120), m240 = ma(240);
+      const r = rsiArr(c)[n]; const [K, Dd] = kdArr(b.map((x) => x.h), b.map((x) => x.l), c); const [dif, dea] = macdArr(c);
+      const rows = [['月線 MA20', m20], ['季線 MA60', m60], ['半年線 MA120', m120], ['年線 MA240', m240]].filter(([, v]) => v).map(([k, v]) => [k, fmt(v, 0), (px0 >= v ? '站上' : '跌破') + ' ' + fmtPct((px0 / v - 1) * 100), px0 >= v ? 'up' : 'down']);
+      const trend = m5 > m20 && m20 > m60 ? ['多頭排列', 'up'] : m5 < m20 && m20 < m60 ? ['空頭排列', 'down'] : ['均線糾結', ''];
+      $('#ixTech').innerHTML = `<h2>技術面<span class="r tag ${trend[1]}">${trend[0]}</span></h2><div class="list">${rows.map(([k, v, t, cl]) => `<div class="it" style="cursor:default"><div class="l"><div class="t1">${k}</div><div class="t2 num">${v}</div></div><div class="num ${cl}">${t}</div></div>`).join('')}
+        <div class="it" style="cursor:default"><div class="l"><div class="t1">RSI(14)</div></div><div class="num ${r >= 70 ? 'up' : r <= 30 ? 'down' : ''}">${r != null ? r.toFixed(1) + (r >= 70 ? ' 超買' : r <= 30 ? ' 超賣' : '') : '—'}</div></div>
+        <div class="it" style="cursor:default"><div class="l"><div class="t1">KD(9)</div></div><div class="num">${K[n] != null ? K[n].toFixed(0) + '／' + Dd[n].toFixed(0) + (K[n - 1] <= Dd[n - 1] && K[n] > Dd[n] ? ' 黃金交叉' : K[n - 1] >= Dd[n - 1] && K[n] < Dd[n] ? ' 死亡交叉' : '') : '—'}</div></div>
+        <div class="it" style="cursor:default"><div class="l"><div class="t1">MACD</div></div><div class="num ${dif[n] >= dea[n] ? 'up' : 'down'}">${dif[n] != null ? 'DIF ' + dif[n].toFixed(1) + '／DEA ' + dea[n].toFixed(1) : '—'}</div></div></div>`;
+      const v = volaOf(b); const kr = klineAnalyze(b);
+      if (v) { $('#ixVol').innerHTML = voCardHtml(v, null).replace('<h2>波動', '<h2>波動（日 K）'); drawSeries($('#voChart'), v.series.map((x) => x[0]), [{ v: v.series.map((x) => x[1]), color: '#f59e0b', name: '年化波動', fill: true }], { h: 180, fmt: (x) => x.toFixed(0) + '%', key: 'ixvo' + sym }); }
+      if (kr) { $('#ixKa').innerHTML = kaCardHtml(kr, false, sym).replace(/<span class="seg" id="kaTf">[\s\S]*?<\/span><\/span><\/h2>/, '</h2>'); drawChart($('#kaChart'), b.slice(-120), { key: 'ixka' + sym, count: 60, pats: true, mas: [20, 60], H: 280 }); }
+      const bd = bandInfo(b, px0); if (bd) { const ZC2 = ['#16a34a', '#22c55e', '#84cc16', '#eab308', '#f97316', '#ef4444']; const pos = Math.max(2, Math.min(98, (bd.z + 3) / 6 * 100));
+        $('#ixBand').innerHTML = `<h2>一年光譜<span class="r tag" style="color:${ZC2[bd.zone]};border-color:${ZC2[bd.zone]}">${bd.name}</span></h2><div class="band">${ZC2.map((cc, i) => `<div style="background:${cc}33;border-top:3px solid ${cc}"><span>${['特價', '便宜', '合理偏低', '合理偏高', '昂貴', '極貴'][i]}</span></div>`).join('')}<i style="left:${pos}%"></i></div>
+          <div class="row between small muted" style="margin-top:6px">${bd.lines.map((x) => `<span class="num">${fmt(x, 0)}</span>`).join('')}</div><div class="small muted" style="margin-top:6px">近一年收盤迴歸趨勢 ${fmt(bd.trend, 0)}，目前偏離 ${(bd.z >= 0 ? '+' : '') + bd.z.toFixed(2)} 個標準差。</div>`; }
+    } else { $('#ixTech').innerHTML = '<h2>技術面</h2><div class="small muted">資料不足</div>'; }
+    // 回撤（週線，全期間）
+    if (W.length > 20) { let peak = 0, peakD = '', mdd = 0, mddD = ''; const ds = []; W.forEach(([d, v]) => { if (v > peak) { peak = v; peakD = d; } const x = (v / peak - 1) * 100; ds.push([d, x]); if (x < mdd) { mdd = x; mddD = d; } });
+      const cur = ds[ds.length - 1][1]; const recent = ds.slice(-520);
+      $('#ixDd').innerHTML = `<h2>回撤（週線）</h2><div class="grid g3"><div class="tile"><div class="k">目前距最高點</div><div class="v num ${cls(cur)}">${fmtPct(cur)}</div><div class="s muted">最高 ${fmt(peak, 0)}（${peakD}）</div></div>
+        <div class="tile"><div class="k">歷史最大回撤</div><div class="v num down">${fmtPct(mdd)}</div><div class="s muted">${mddD}</div></div><div class="tile"><div class="k">近 10 年回撤 ≥ 10% 週數</div><div class="v num">${(recent.filter((x) => x[1] <= -10).length / Math.max(1, recent.length) * 100).toFixed(0)}%</div></div></div>
+        <div class="chart-wrap" id="ixDdC" style="margin-top:10px"><canvas></canvas><div class="chart-tip"></div></div><div class="small muted" style="margin-top:4px">${tw ? '<a href="#/crash">歷次大跌與修復時間 ›</a>' : ''}</div>`;
+      drawSeries($('#ixDdC'), recent.map((x) => x[0]), [{ v: recent.map((x) => x[1]), color: '#ef4444', name: '回撤', fill: true }], { h: 180, fmt: (x) => x.toFixed(1) + '%', key: 'ixdd' + sym }); }
+    // 每年報酬（月線）
+    if (M.length > 12) { const yr = {}; M.forEach(([d, v]) => { yr[d.getUTCFullYear()] = v; }); const ys = Object.keys(yr).map(Number).sort(); const rows = [];
+      for (let i = 1; i < ys.length; i++) rows.push([ys[i], (yr[ys[i]] / yr[ys[i - 1]] - 1) * 100]); const last = rows.slice(-15).reverse(); const mx = Math.max(...last.map((x) => Math.abs(x[1])), 1);
+      const up = rows.filter((x) => x[1] > 0).length;
+      $('#ixYr').innerHTML = `<h2>每年報酬<span class="r small muted">上漲 ${up}／${rows.length} 年</span></h2>${last.map(([y, r]) => `<div class="row" style="gap:8px;height:24px"><span class="small num" style="width:42px">${y}${y === new Date().getFullYear() ? '*' : ''}</span><div class="sp" style="position:relative;height:10px"><div style="position:absolute;top:0;bottom:0;${r >= 0 ? 'left:50%' : 'right:50%'};width:${(Math.abs(r) / mx * 50).toFixed(1)}%;background:${css(r >= 0 ? '--up' : '--down')};border-radius:3px"></div></div><span class="num small ${cls(r)}" style="width:62px;text-align:right">${fmtPct(r, 1)}</span></div>`).join('')}<div class="small muted" style="margin-top:4px">＊今年為年初至今。價格指數不含股息。</div>`;
+      // 月份季節性（近 10 年）
+      const st = Array.from({ length: 12 }, () => []); const M10 = M.slice(-121); M10.forEach(([d, v], i) => { if (!i) return; st[d.getUTCMonth()].push((v / M10[i - 1][1] - 1) * 100); });
+      $('#ixSeason').innerHTML = `<h2>月份漲跌（近 10 年）</h2><div class="mcal">${st.map((arr, i) => { const avg = arr.length ? arr.reduce((a, x) => a + x, 0) / arr.length : 0; const win = arr.length ? arr.filter((x) => x > 0).length / arr.length * 100 : 0;
+        return `<div class="mc" style="background:color-mix(in srgb, ${css(avg >= 0 ? '--up' : '--down')} ${Math.round(Math.min(60, Math.abs(avg) * 8) + 8)}%, var(--card2))"><div class="small">${i + 1} 月</div><div class="num">${fmtPct(avg, 1)}</div><div class="small muted">勝率 ${win.toFixed(0)}%</div></div>`; }).join('')}</div>`; }
+    // 台股：盤後摘要；美股：VIX
+    if (tw) { const m = await kv('sx:mkt'); const el2 = $('#ixMkt'); if (!el2) return;
+      el2.innerHTML = `<h2>盤後摘要<span class="r small muted">${esc((m && m.d) || '')}</span></h2>${m ? `<div class="grid g2" style="gap:10px"><div><div class="small muted">上漲／下跌／平盤</div><div class="num big"><span class="up">${m.u}</span>／<span class="down">${m.dn}</span>／${m.f}</div><div class="small">漲停 <span class="up">${m.lu}</span>　跌停 <span class="down">${m.ld}</span></div></div>
+        <div><div class="small muted">成交值</div><div class="num big">${fmt(m.tv, 0)} 億</div><div class="small muted">上櫃 ${fmt(m.ov, 0)} 億</div></div>
+        <div style="grid-column:1/-1"><div class="small muted">三大法人買賣超（億）</div><div class="num">${m.inst ? `外資 <span class="${cls(m.fy)}">${fmtSigned(m.fy, 1)}</span>　投信 <span class="${cls(m.ty)}">${fmtSigned(m.ty, 1)}</span>　自營 <span class="${cls(m.dy)}">${fmtSigned(m.dy, 1)}</span>` : '—'}</div></div></div>
+        ${m.mood ? `<div class="small text2" style="margin-top:8px">市場情緒：${esc(m.mood)}</div>` : ''}` : '<div class="small muted">尚無盤後摘要（交易日收盤後更新）。</div>'}<a class="small" href="#/market">市場總覽 ›</a>`; }
+    else { const v = await fetchUs('^VIX'); const el2 = $('#ixVix'); if (!el2) return; const x = v && v.price; const ch = v && v.prev ? v.price - v.prev : 0;
+      el2.innerHTML = `<h2>恐慌指數 VIX</h2>${x ? `<div class="row" style="gap:12px;align-items:flex-end"><div class="num" style="font-size:32px;font-weight:800">${fmt(x, 2)}</div><div class="num ${cls(-ch)}">${arrow(ch)} ${fmt(Math.abs(ch), 2)}（${fmtPct(ch / v.prev * 100)}）</div></div>
+        <div class="small text2" style="margin-top:6px">${x < 15 ? '低波動：市場情緒樂觀' : x < 20 ? '正常區間' : x < 30 ? '波動升高：市場偏緊張' : '高度恐慌：波動劇烈'}</div><div class="small muted" style="margin-top:4px">VIX 衡量 S&P 500 未來 30 天預期波動；20 以下為常態，30 以上為恐慌。</div>` : '<div class="small muted">取不到 VIX</div>'}`; }
+  },
+};
+
 // 排行（Yahoo 奇摩股市）
 const RANK_SORT = [['up', '漲幅', '-changePercent'], ['down', '跌幅', 'changePercent'], ['vol', '成交量', '-volume'], ['amt', '成交值', '-turnoverK']];
 VIEWS.rank = {
@@ -3721,7 +3859,7 @@ VIEWS.more = {
   title: '更多',
   render() {
     return head('更多') + `<div class="search" style="margin-bottom:12px"><input id="ms2" placeholder="搜尋個股：代號或名稱" autocomplete="off"><div class="res hide"></div></div>
-      <div class="card" style="margin-bottom:12px;padding:10px">${dlAppHtml(true)}</div>
+      <div class="card" style="margin-bottom:12px;padding:10px">${dlAppHtml(true)}${lineJoinHtml(true) ? '<div style="border-top:1px solid var(--border);margin:6px 0"></div>' + lineJoinHtml(true) : ''}</div>
       <div class="card list">${NAV.filter(([r]) => !BOTTOM.includes(r)).map(([r, n, ic]) => `<a class="it" href="#/${r}" style="color:inherit"><span style="font-size:20px">${ic}</span><div class="l"><div class="t1">${n}</div></div><span class="muted">›</span></a>`).join('')}</div>`;
   },
   bind() { bindSearch($('#ms2'), (sym) => { location.hash = '#/s/' + sym; }); dlAppVer(); },
@@ -4240,6 +4378,7 @@ function loginView(msg, mode) {
       <div class="feat"><div>📈 自選行情牆、指數、今日漲跌停</div><div>💼 持股損益、資產配置、交易記帳</div><div>📊 個股 K 線、進場建議、籌碼與財務</div><div>🔄 與手機 App 自動同步</div></div>`}
     <div id="gbtn" class="gbtn" style="margin-top:14px">${p.gClient || MOCK ? '' : '<div class="notice">管理員尚未開放網頁登入（Google 登入未設定）。</div>'}</div>
     <div id="lerr" class="small up" style="margin-top:10px"></div>
+    ${lineOaId() ? `<div style="margin-top:14px">${lineJoinHtml()}</div>` : ''}
     <div class="small muted" style="margin-top:18px">${mode === 'reg' ? '已經在手機 App 用 Google 登入過？直接按「登入」即可，不需重新註冊。' : '還沒有帳號？按上方「註冊新帳號」。'}同一帳號網頁同時只能在一個瀏覽器使用。</div></div></div>`;
   $$('[data-lm]').forEach((b) => b.onclick = () => { store.set('lmode', b.dataset.lm); loginView('', b.dataset.lm); });
   const ready = () => mode !== 'reg' || ($('#agree') && $('#agree').checked);
