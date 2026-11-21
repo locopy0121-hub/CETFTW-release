@@ -68,9 +68,9 @@ async function logout(msg) {
 
 // ───────── 主畫面 ─────────
 /** 網頁版本（發布時由 .github/public/sync.sh 填入） */
-const WEB_VER = /*WEBVER*/{"v":"","sha":"292b547","at":"2026-11-22 00:09"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"709ce7b","at":"2026-11-22 00:50"};
 const verText = () => (WEB_VER ? (WEB_VER.v ? (/^v/i.test(WEB_VER.v) ? WEB_VER.v : 'v' + WEB_VER.v) + ' · ' : '') + WEB_VER.sha + (WEB_VER.at ? ' · ' + WEB_VER.at : '') : '開發版');
-const TABS = [['home', '總覽'], ['req', '申請'], ['mem', '會員'], ['pol', '政策'], ['tier', '會員等級'], ['rel', '發布'], ['line', 'LINE'], ['job', '工作紀錄']];
+const TABS = [['home', '總覽'], ['req', '申請'], ['mem', '會員'], ['pol', '政策'], ['tier', '會員等級'], ['rel', '發布'], ['line', 'LINE'], ['forum', '討論區'], ['job', '工作紀錄']];
 /** 功能位元（與 App License.Feature 順序相同，不可調整） */
 const FEATS = ['K 線分析與進場建議', 'AI 個股體檢', '提醒與進場鈴聲', '行情牆與熱度圖', '股息與稅務', '投資分析工具', '報告', '市場與排行', '群聊', '備份與設定檔', '盤中持股監控', '桌面小工具', '進階圖表', '新聞', '外觀自訂', '個股進階資料'];
 const featBoxes = (name, mask) => `<div class="grid g2" style="gap:4px 12px">${FEATS.map((f, i) => `<label class="row small" style="gap:6px;cursor:pointer"><input type="checkbox" data-${name}="${i}" style="width:auto" ${mask & (1 << i) ? 'checked' : ''}> ${esc(f)}</label>`).join('')}</div>`;
@@ -99,7 +99,7 @@ async function refresh() {
     const done = lineJobsDone();
     // LINE 頁：沒有在輸入、沒有開對話框時才重畫（輸入內容都保存在 S，重畫不會遺失）
     if (S.tab === 'line' && S.rendered === 'line') { if (!lineFocused() && !$('.modal-bg')) render(); else renderLineRes(); if (done) renderLineRes(); }
-    else if (!(['pol', 'tier'].includes(S.tab) && S.rendered === S.tab)) render();
+    else if (!(['pol', 'tier', 'forum'].includes(S.tab) && S.rendered === S.tab)) render();
   }
   catch (e) { if (S.ses) { const el = $('#live'); if (el) el.querySelector('span').textContent = '讀取失敗：' + e.message; } }
 }
@@ -110,6 +110,69 @@ function pendingReqs() {
 async function job(type, payload, label) {
   try { const r = await call('job', { type, payload }); toast((label || '已送出') + (appOnline() ? '，管理員 App 處理中…' : '：管理員 App 開啟後執行')); S.fast = 12; await refresh(); return r.id; }
   catch (e) { toast('送出失敗：' + e.message, 6000); }
+}
+
+// ───────── 個股討論區管理（直接連轉送站的討論資料庫，以後台登入確認身分）─────────
+async function fadm(a, p = {}) {
+  const r = await fetch('/api/f', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...p, a, adminSession: S.ses, src: 'admin' }) });
+  const j = await r.json().catch(() => ({ ok: false, err: r.status === 404 ? '轉送站尚未支援討論區，請重新部署' : '討論區回應錯誤' }));
+  if (!j.ok) throw new Error(j.err || '討論區錯誤');
+  return j;
+}
+const FK = [['reported', '被檢舉'], ['hidden', '已隱藏'], ['recent', '最新'], ['removed', '已刪除']];
+const FST = ['', '已自動隱藏', '作者刪除', '管理員移除'];
+async function renderForum(v) {
+  S.fk = S.fk || 'reported';
+  v.innerHTML = '<div class="card empty">載入中…</div>';
+  let st, cf, mu, ls;
+  try { [st, cf, mu, ls] = await Promise.all([fadm('adm.stats'), fadm('adm.cfg'), fadm('adm.mutes'), fadm('adm.list', { kind: S.fk })]); }
+  catch (e) { v.innerHTML = `<div class="card"><h2>個股討論區</h2><div class="notice">${esc(e.message)}</div><div class="small muted" style="margin-top:8px">討論區資料存在轉送站的 Cloudflare D1 資料庫：請在 Cloudflare API 權杖加上「D1：編輯」權限，再由管理員 App 重新部署轉送站。</div></div>`; return; }
+  if (S.tab !== 'forum') return;
+  const s = st.stats || {}; const c = cf.cfg;
+  v.innerHTML = `<div class="grid g4" style="gap:10px">${[['今日發文', s.day_n || 0], ['近 7 天', s.week_n || 0], ['全部', s.all_n || 0], ['待處理檢舉', s.reported || 0]].map(([k, x]) => `<div class="card"><div class="small muted">${k}</div><div style="font-size:24px;font-weight:700">${x}</div></div>`).join('')}</div>
+    <div class="grid g2 stack" style="margin-top:12px">
+      <div class="card"><h2>文章<span class="r"><button class="btn sm" id="frf">重新整理</button></span></h2>
+        <div class="seg" style="margin-bottom:10px">${FK.map(([k, n]) => `<button data-fk="${k}" class="${S.fk === k ? 'on' : ''}">${n}</button>`).join('')}</div>
+        <div id="fls">${ls.posts.length ? ls.posts.map(fRow).join('') : '<div class="small muted">沒有文章</div>'}</div></div>
+      <div><div class="card"><h2>規則設定</h2>
+        <label class="row" style="gap:8px;justify-content:flex-start"><input type="checkbox" style="width:auto" id="fon" ${c.on ? 'checked' : ''}>開放討論區</label>
+        <label class="row" style="gap:8px;margin-top:6px;justify-content:flex-start"><input type="checkbox" style="width:auto" id="flk" ${c.links ? 'checked' : ''}>允許會員貼連結</label>
+        <div class="grid g2" style="gap:8px;margin-top:8px">${[['hide', '檢舉幾次自動隱藏'], ['gap', '發文間隔（秒）'], ['daily', '每人每日上限'], ['max', '每則字數上限']].map(([k, n]) => `<div class="field"><label>${n}</label><input type="number" min="0" data-fc="${k}" value="${c[k]}"></div>`).join('')}</div>
+        <div class="field"><label>禁用字詞（以空白或逗號分隔）</label><textarea id="fwd" rows="3">${esc(c.words || '')}</textarea></div>
+        <button class="btn primary" id="fsave">儲存規則</button></div>
+      <div class="card" style="margin-top:12px"><h2>禁言中（${mu.list.length}）</h2>${mu.list.length ? mu.list.map((m) => `<div class="row" style="padding:6px 0;border-bottom:1px solid var(--border)"><div style="flex:1"><b>${esc(m.nick || '會員' + m.no)}</b>（${esc(m.no)}）<div class="small muted">至 ${new Date(m.until).toLocaleDateString('zh-TW')}${m.why ? '・' + esc(m.why) : ''}</div></div><button class="btn sm" data-unm="${esc(m.no)}">解除</button></div>`).join('') : '<div class="small muted">沒有</div>'}</div>
+      <div class="card" style="margin-top:12px"><h2>近 7 天熱門</h2><div class="small">${(st.top || []).map((x) => esc(x.sym) + '（' + x.n + '）').join('、') || '—'}</div></div>
+      <div class="card" style="margin-top:12px"><h2>管理紀錄</h2>${(st.log || []).map((x) => `<div class="small" style="padding:3px 0">${new Date(x.at).toLocaleString('zh-TW')}　${esc(x.who)}　${esc(x.act)}${x.pid ? ' #' + x.pid : ''}${x.no ? ' 會員 ' + esc(x.no) : ''}${x.note ? '（' + esc(x.note) + '）' : ''}</div>`).join('') || '<div class="small muted">尚無紀錄</div>'}</div></div></div>`;
+  $$('[data-fk]', v).forEach((b) => b.onclick = () => { S.fk = b.dataset.fk; renderForum(v); });
+  $('#frf').onclick = () => renderForum(v);
+  $('#fsave').onclick = async () => {
+    const set = { on: $('#fon').checked, links: $('#flk').checked, words: $('#fwd').value }; $$('[data-fc]', v).forEach((el) => { set[el.dataset.fc] = +el.value; });
+    try { await fadm('adm.cfg', { set }); toast('已儲存規則'); } catch (e) { toast(e.message, 5000); }
+  };
+  $$('[data-unm]', v).forEach((b) => b.onclick = async () => { try { await fadm('adm.mute', { no: b.dataset.unm, days: 0 }); toast('已解除禁言'); renderForum(v); } catch (e) { toast(e.message); } });
+  $$('[data-fa]', v).forEach((b) => b.onclick = async () => {
+    const id = +b.dataset.id; const a = b.dataset.fa; const p = ls.posts.find((x) => x.id === id);
+    try {
+      if (a === 'restore') await fadm('adm.state', { id, state: 0 });
+      if (a === 'remove') await fadm('adm.state', { id, state: 3 });
+      if (a === 'pin') await fadm('adm.pin', { id, pinned: !p.pinned });
+      if (a === 'mute') {
+        let o = null; const r = await dialog('禁言「' + p.nick + '」（會員 ' + p.no + '）', `<div class="field"><label>天數</label><select id="mdays"><option value="1">1 天</option><option value="7">7 天</option><option value="30">30 天</option><option value="3650">永久</option></select></div>
+          <div class="field"><label>原因（會顯示給該會員）</label><input id="mwhy" maxlength="60"></div><label class="row" style="gap:6px;justify-content:flex-start"><input type="checkbox" style="width:auto" id="mpurge">同時移除這位會員的全部文章</label>`,
+          [['', '取消'], ['ok', '禁言', 'primary']], (bx) => () => { o = { days: +$('#mdays', bx).value, why: $('#mwhy', bx).value, purge: $('#mpurge', bx).checked }; return null; });
+        if (r !== 'ok') return;
+        await fadm('adm.mute', { no: p.no, ...o });
+      }
+      toast('已完成'); renderForum(v);
+    } catch (e) { toast(e.message, 5000); }
+  });
+}
+function fRow(p) {
+  return `<div class="tile" style="margin-top:8px"><div class="row" style="gap:8px"><b style="flex:1">${esc(p.nick)}${p.official ? ' <span class="tag">官方</span>' : ''} <span class="small muted">會員 ${esc(p.no)}・${esc(p.sym)}・#${p.id}${p.parent ? '（回覆 #' + p.parent + '）' : ''}</span></b>
+      <span class="small muted">${new Date(p.at).toLocaleString('zh-TW')}</span></div>
+    <div style="white-space:pre-wrap;word-break:break-word;margin:6px 0">${esc(p.body)}</div>
+    <div class="small ${p.state === 1 ? 'up' : 'muted'}">${[p.stance === 1 ? '看多' : p.stance === -1 ? '看空' : '', '♥ ' + p.likes, p.parent ? '' : p.replies + ' 則回覆', p.reports ? '檢舉 ' + p.reports + (p.why ? '：' + esc(p.why) : '') : '', FST[p.state] || '', p.pinned ? '置頂' : ''].filter(Boolean).join('・')}</div>
+    <div class="row" style="gap:6px;margin-top:6px;flex-wrap:wrap">${p.state !== 0 ? `<button class="btn sm" data-fa="restore" data-id="${p.id}">恢復顯示</button>` : ''}${p.state <= 1 ? `<button class="btn sm" data-fa="remove" data-id="${p.id}">移除</button>` : ''}${p.reports && p.state === 0 ? `<button class="btn sm" data-fa="restore" data-id="${p.id}">忽略檢舉</button>` : ''}${!p.parent && p.state === 0 ? `<button class="btn sm" data-fa="pin" data-id="${p.id}">${p.pinned ? '取消置頂' : '置頂'}</button>` : ''}${!p.official ? `<button class="btn sm" data-fa="mute" data-id="${p.id}">禁言會員</button>` : ''}</div></div>`;
 }
 
 function render() {
@@ -164,6 +227,8 @@ function render() {
     v.innerHTML = '<div class="card" id="tierBox"></div>'; tierEditor($('#tierBox', v), p);
   } else if (S.tab === 'line') {
     renderLine(v, app);
+  } else if (S.tab === 'forum') {
+    renderForum(v);
   } else if (S.tab === 'rel') {
     const bs = app.builds || []; const rel = bs.find((b) => !b.draft);
     v.innerHTML = `<div class="card"><h2>發布版本給使用者</h2>${!app.token ? '<div class="notice">管理員 App 尚未設定 GitHub 權杖，無法讀取版本與發布。</div>' : ''}

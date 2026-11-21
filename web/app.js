@@ -814,7 +814,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"292b547","at":"2026-11-22 00:09"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"709ce7b","at":"2026-11-22 00:50"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -2981,7 +2981,7 @@ function etfOpsHtml(o) {
       : '<div class="small muted">與前一個資料日相比，持股沒有變動。</div>'}
     <div class="small muted" style="margin-top:6px">依每日揭露的持股（股數）比較；估算金額＝股數變化 × 目前股價，僅供參考，實際以投信公告為準。</div></div>`;
 }
-const STABS = [['ov', '概覽'], ['ta', '技術分析'], ['chip', '籌碼'], ['fin', '財務'], ['hold', '成分'], ['div', '股息'], ['news', '新聞'], ['co', '公司']];
+const STABS = [['ov', '概覽'], ['ta', '技術分析'], ['chip', '籌碼'], ['fin', '財務'], ['hold', '成分'], ['div', '股息'], ['news', '新聞'], ['talk', '討論'], ['co', '公司']];
 /** 個股分頁列：依「分頁列排版」設定排序與隱藏（S.pref.stabL＝{o:順序, h:隱藏, def:預設分頁, pos:'top'|'bottom'}） */
 function stockTabs(sym, all) {
   const q = S.q[sym] || {}; const etf = (!isUs(sym) && /^00/.test(sym)) || D.isEtf(sym) || q.type === 'ETF';
@@ -3310,6 +3310,110 @@ Object.assign(VIEWS.s, {
     $('#gnews').innerHTML = `<h2>相關新聞<span class="r small muted">${items[0] && items[0].via ? esc(items[0].via) + ' 新聞' : items.length ? '鉅亨網' : ''}</span></h2>${items.length ? `<div class="list">${items.map((n) => `<a class="it" href="${esc(n.l)}" target="_blank" rel="noopener" style="color:inherit"><div class="l"><div class="t1" style="white-space:normal">${esc(n.t)}</div><div class="t2">${esc(n.s || '')}${n.s ? ' · ' : ''}${ago(n.d)}</div></div></a>`).join('')}</div>` : (fail ? '<div class="muted small">新聞搜尋來源暫時讀不到（需管理員重新部署轉送站），請先看上方的個股新聞。</div>' : '<div class="muted small">沒有找到相關新聞</div>')}`;
   },
   // ── 公司 ──
+  // ── 討論區 ──
+  async t_talk() {
+    const sym = this.sym; const si = $('#si'); const F = this._f && this._f.sym === sym ? this._f : (this._f = { sym, hot: 0, posts: [], more: false, me: null, open: 0 });
+    if (F.open) return this.talkThread(F.open);
+    si.innerHTML = `<div class="f-wrap"><div class="card"><h2>${esc(D.name(sym))} 討論區<span class="r small muted" id="fTot"></span></h2><div id="fMeter">${fMeter(0, 0)}</div>
+        <div class="seg" id="fSort" style="margin-top:8px"><button data-v="0" class="${F.hot ? '' : 'on'}">最新</button><button data-v="1" class="${F.hot ? 'on' : ''}">熱門（30 天）</button></div></div>
+      <div class="card" id="fCompose"><div class="muted small">載入中…</div></div><div id="fList" class="f-list"><div class="muted small">載入中…</div></div>
+      <div id="fMoreW"></div><div class="small muted" style="margin:8px 4px">${F_NOTE}</div></div>`;
+    $$('#fSort button').forEach((b) => b.onclick = () => { F.hot = +b.dataset.v; F.posts = []; this.t_talk(); });
+    const meP = F.me ? Promise.resolve(F.me) : fapi('me').catch(() => ({ login: false }));
+    const load = async (more) => {
+      try {
+        const r = await fapi('list', { s: sym, sort: F.hot ? 'hot' : 'new', before: more && !F.hot ? (F.posts[F.posts.length - 1] || {}).id || 0 : 0, off: more ? F.posts.length : 0 });
+        if (this.sym !== sym || !$('#fList')) return;
+        F.posts = more ? F.posts.concat(r.posts.filter((p) => !F.posts.some((x) => x.id === p.id))) : r.posts; F.more = r.more;
+        $('#fMeter').innerHTML = fMeter(r.bull, r.bear); $('#fTot').textContent = r.total ? r.total + ' 則主題' : '';
+        if (!r.on) { $('#fCompose').remove(); $('#fList').innerHTML = '<div class="card muted small">討論區目前暫停開放。</div>'; return; }
+        this.talkRender();
+      } catch (e) { if ($('#fList')) $('#fList').innerHTML = `<div class="card small up">${esc(e.message)}</div>`; }
+    };
+    this._fload = load; load(false);
+    F.me = await meP; if (this.sym !== sym || !$('#fCompose')) return;
+    this.talkCompose();
+  },
+  talkCompose() {
+    const F = this._f; const me = F.me || {}; const el = $('#fCompose'); if (!el) return;
+    if (!me.login) { el.innerHTML = '<div>登入會員後即可發文、回覆與按讚</div><div class="small muted">發文以暱稱顯示，不會公開你的姓名或 Email。</div>'; return; }
+    const muted = me.muted > Date.now();
+    el.innerHTML = `${muted ? `<div class="small up" style="margin-bottom:6px">你目前被暫停發言至 ${new Date(me.muted).toLocaleString('zh-TW')}${me.why ? '（' + esc(me.why) + '）' : ''}</div>` : ''}
+      <div class="row between small muted"><span>以「${esc(me.nick || '會員' + me.no)}」發文</span><a href="javascript:void 0" id="fNick">改暱稱</a></div>
+      <textarea id="fTxt" rows="3" maxlength="1000" placeholder="分享你對這檔的看法…（最多 1000 字，不開放貼連結）" style="width:100%;margin-top:6px"></textarea>
+      <div class="row between" style="margin-top:6px"><span class="f-stance"><button data-s="1" class="up">看多</button><button data-s="0" class="on">中立</button><button data-s="-1" class="down">看空</button></span>
+        <span class="row" style="gap:8px"><span class="small muted" id="fCnt">0/1000</span><button class="btn primary" id="fSend">發布</button></span></div>`;
+    let stance = 0;
+    $$('.f-stance button', el).forEach((b) => b.onclick = () => { stance = +b.dataset.s; $$('.f-stance button', el).forEach((x) => x.classList.toggle('on', x === b)); });
+    $('#fTxt').oninput = () => { $('#fCnt').textContent = $('#fTxt').value.length + '/1000'; };
+    $('#fNick').onclick = () => this.talkNick();
+    $('#fSend').onclick = async () => {
+      const t = $('#fTxt').value.trim(); if (t.length < 2) return toast('內容太短');
+      $('#fSend').disabled = true;
+      try { const r = await fapi('post', { s: this.sym, body: t, stance }); F.posts.unshift(r.post); $('#fTxt').value = ''; $('#fCnt').textContent = '0/1000'; this.talkRender(); toast('已發布'); }
+      catch (e) { toast(e.message, 5000); }
+      if ($('#fSend')) $('#fSend').disabled = false;
+    };
+  },
+  async talkNick() {
+    const F = this._f; let box = null;
+    const v = await dialog('討論區暱稱', `<div class="field"><label>2～16 個字</label><input id="fNk" maxlength="16" value="${esc((F.me || {}).nick || '')}"></div><div class="small muted">暱稱會顯示在你所有的文章上（含舊文章），不能與他人重複。</div><div id="merr" class="small up"></div>`,
+      [['', '取消'], ['ok', '儲存', 'primary']], (b) => { box = b; return () => ($('#fNk', b).value.trim().length < 2 ? '暱稱至少 2 個字' : null); });
+    if (v !== 'ok') return;
+    try { const r = await fapi('nick', { nick: $('#fNk', box).value.trim() }); F.me.nick = r.nick; toast('已更新暱稱'); F.posts = []; this.t_talk(); } catch (e) { toast(e.message, 5000); }
+  },
+  talkRender() {
+    const F = this._f; const el = $('#fList'); if (!el) return;
+    el.innerHTML = F.posts.length ? F.posts.map((p) => fPost(p)).join('') : '<div class="card muted small">還沒有人討論這檔，來發表第一篇吧！</div>';
+    $('#fMoreW').innerHTML = F.more ? '<button class="btn" id="fMore" style="width:100%">載入更多</button>' : '';
+    if ($('#fMore')) $('#fMore').onclick = () => this._fload(true);
+    this.talkBind(el, F.posts);
+  },
+  /** 文章上的按讚、回覆、更多選單 */
+  talkBind(el, list, onRemoved) {
+    const F = this._f; const find = (id) => list.find((p) => p.id === +id);
+    $$('[data-fo]', el).forEach((b) => b.onclick = () => { F.open = +b.dataset.fo; this.talkThread(F.open); });
+    $$('.f-body.clamp', el).forEach((b) => b.onclick = () => { F.open = +b.closest('[data-fid]').dataset.fid; this.talkThread(F.open); });
+    $$('[data-fl]', el).forEach((b) => b.onclick = async () => {
+      if (!(F.me || {}).login) return toast('登入會員後即可按讚');
+      try { const r = await fapi('like', { id: +b.dataset.fl }); const p = find(b.dataset.fl); if (p) { p.liked = r.liked; p.likes = r.likes; } b.classList.toggle('on', r.liked); b.textContent = (r.liked ? '♥ ' : '♡ ') + r.likes; } catch (e) { toast(e.message); }
+    });
+    $$('[data-fm]', el).forEach((b) => b.onclick = async () => {
+      const p = find(b.dataset.fm); if (!p) return; const acts = [];
+      if ((F.me || {}).login && !p.mine && !p.official) acts.push(['rep', '檢舉']);
+      if (p.mine) acts.push(['del', '刪除']);
+      acts.push(['copy', '複製內容']);
+      const v = await dialog('文章 #' + p.id, '<div class="small muted">' + esc(p.nick) + '・' + fAgo(p.at) + '</div>', [['', '取消']].concat(acts));
+      if (v === 'copy') { navigator.clipboard.writeText(p.body).then(() => toast('已複製')); }
+      if (v === 'del') { try { await fapi('del', { id: p.id }); const i = list.indexOf(p); if (i >= 0) list.splice(i, 1); onRemoved ? onRemoved(p) : this.talkRender(); toast('已刪除'); } catch (e) { toast(e.message); } }
+      if (v === 'rep') {
+        let idx = 0; const w = await dialog('檢舉原因', F_REASONS.map((r, i) => `<label class="row" style="gap:6px;padding:4px 0"><input type="radio" name="frr" value="${i}" ${i ? '' : 'checked'}>${r}</label>`).join(''), [['', '取消'], ['ok', '送出', 'primary']], (bx) => () => { idx = +(($('input[name=frr]:checked', bx) || {}).value || 0); return null; });
+        if (w !== 'ok') return;
+        try { await fapi('report', { id: p.id, why: F_REASONS[idx] }); toast('已送出檢舉，謝謝你的回報'); } catch (e) { toast(e.message); }
+      }
+    });
+  },
+  async talkThread(id) {
+    const F = this._f; const si = $('#si'); const sym = this.sym;
+    si.innerHTML = `<div class="f-wrap"><div class="row" style="margin:4px 0 10px"><button class="btn" id="fBack">‹ 返回討論區</button></div><div id="fTh"><div class="muted small">載入中…</div></div></div>`;
+    $('#fBack').onclick = () => { F.open = 0; this.t_talk(); };
+    let r; try { r = await fapi('thread', { id }); } catch (e) { $('#fTh').innerHTML = `<div class="card small up">${esc(e.message)}</div>`; return; }
+    if (this.sym !== sym || !$('#fTh')) return;
+    const all = [r.post].concat(r.replies);
+    const draw = () => {
+      $('#fTh').innerHTML = fPost(r.post, { full: true }) + `<div class="small muted" style="margin:10px 4px 6px">${r.replies.length ? r.replies.length + ' 則回覆' : '還沒有回覆'}</div>`
+        + r.replies.map((x) => fPost(x, { full: true, reply: true })).join('')
+        + ((F.me || {}).login ? `<div class="card" style="margin-top:10px"><textarea id="fRe" rows="2" maxlength="1000" placeholder="回覆…" style="width:100%"></textarea><div class="row" style="justify-content:flex-end;margin-top:6px"><button class="btn primary" id="fReS">送出回覆</button></div></div>`
+          : '<div class="card small muted" style="margin-top:10px">登入會員後即可回覆。</div>');
+      this.talkBind($('#fTh'), all, (p) => { if (p.id === r.post.id) { F.open = 0; F.posts = F.posts.filter((x) => x.id !== p.id); this.t_talk(); return; } r.replies = r.replies.filter((x) => x.id !== p.id); r.post.replies = Math.max(0, r.post.replies - 1); draw(); });
+      if ($('#fReS')) $('#fReS').onclick = async () => {
+        const t = $('#fRe').value.trim(); if (t.length < 2) return toast('內容太短'); $('#fReS').disabled = true;
+        try { const x = await fapi('post', { parent: r.post.id, body: t }); r.replies.push(x.post); all.push(x.post); r.post.replies++; const lp = F.posts.find((p) => p.id === r.post.id); if (lp) lp.replies = r.post.replies; draw(); }
+        catch (e) { toast(e.message, 5000); if ($('#fReS')) $('#fReS').disabled = false; }
+      };
+    };
+    draw();
+  },
   async t_co() {
     const sym = this.sym; const us = isUs(sym); const si = $('#si'); si.innerHTML = '<div class="card empty" style="grid-column:1/-1">讀取中…</div>';
     let co = null;
@@ -3703,6 +3807,41 @@ async function upcomingEvents(days = 14) {
     if (p.pay && p.pay >= today && p.pay <= end && held[c]) out.push([p.pay, `${D.name(c)} 股利發放`, '#/s/' + c, held[c] && p.cash ? held[c].shares * p.cash : 0]); });
   const d0 = tpeNow(); for (let k = 0; k < 2; k++) { const d = new Date(Date.UTC(d0.getFullYear(), d0.getMonth() + k, 1)); macroEvents(d.getUTCFullYear(), d.getUTCMonth() + 1).forEach(([dd, t]) => { if (dd >= today && dd <= end) out.push([dd, t, '#/calendar', 0]); }); }
   return out.sort((a, b) => a[0].localeCompare(b[0]));
+}
+// ───────── 個股討論區（與 App 共用同一個資料庫）─────────
+async function fapi(a, p = {}) {
+  const r = await fetch('/api/f', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...p, a, session: S.session || '', src: 'web' }) });
+  const j = await r.json().catch(() => ({ ok: false, err: r.status === 404 ? '發佈站尚未支援討論區' : '討論區回應錯誤' }));
+  if (!j.ok) throw new Error(j.err || '討論區錯誤');
+  return j;
+}
+const F_REASONS = ['廣告／洗版', '不實或誤導資訊', '人身攻擊／不雅', '與本股無關', '其他'];
+const F_NOTE = '討論內容為會員個人意見，不代表本站立場，亦非投資建議；請勿張貼個資、廣告或明牌招攬。';
+function fAgo(t) {
+  const d = (Date.now() - t) / 1000; if (d < 60) return '剛剛'; if (d < 3600) return Math.floor(d / 60) + ' 分鐘前'; if (d < 86400) return Math.floor(d / 3600) + ' 小時前';
+  const a = new Date(t + 8 * 3600e3), n = new Date(Date.now() + 8 * 3600e3); const y = new Date(n); y.setUTCDate(y.getUTCDate() - 1);
+  if (a.toISOString().slice(0, 10) === y.toISOString().slice(0, 10)) return '昨天';
+  return (a.getUTCFullYear() === n.getUTCFullYear() ? '' : a.getUTCFullYear() + '/') + (a.getUTCMonth() + 1) + '/' + a.getUTCDate();
+}
+function fAvatar(p) {
+  const pal = ['#6366f1', '#0ea5e9', '#14b8a6', '#f59e0b', '#ec4899', '#8b5cf6', '#84cc16', '#f97316']; let h = 0; for (const ch of p.nick) h = (h * 31 + ch.charCodeAt(0)) | 0;
+  const c = p.official ? 'var(--primary)' : pal[Math.abs(h) % pal.length];
+  return `<span class="f-av" style="color:${c};background:color-mix(in srgb, ${c} 20%, transparent)">${esc(p.official ? '官' : [...p.nick][0] || '?')}</span>`;
+}
+function fPost(p, opt = {}) {
+  const t = (S.policy.tiers || []).find((x) => x.name === p.tier); const tc = t ? argb(t.color) : 'var(--primary)';
+  const st = p.stance === 1 ? '<span class="f-b up">看多</span>' : p.stance === -1 ? '<span class="f-b down">看空</span>' : '';
+  return `<div class="f-post${opt.reply ? ' reply' : ''}" data-fid="${p.id}">
+    <div class="f-hd">${fAvatar(p)}<div class="f-who"><div><b>${esc(p.nick)}</b>${p.official ? ' <span class="f-b" style="color:var(--primary)">官方</span>' : ''}${p.tier ? ` <span class="f-b" style="color:${tc}">${esc(p.tier)}</span>` : ''}${p.pinned ? ' <span class="f-b" style="color:var(--primary)">置頂</span>' : ''}</div><div class="small muted">${fAgo(p.at)}</div></div>${st}
+      <button class="f-more" data-fm="${p.id}" title="更多">⋯</button></div>
+    <div class="f-body${opt.full ? '' : ' clamp'}">${esc(p.body)}</div>
+    <div class="f-act"><button data-fl="${p.id}" class="${p.liked ? 'on' : ''}">${p.liked ? '♥' : '♡'} ${p.likes}</button>${opt.reply ? '' : `<button data-fo="${p.id}">💬 ${p.replies} 則回覆</button>`}</div></div>`;
+}
+function fMeter(bull, bear) {
+  const n = bull + bear; const pct = n ? Math.round(bull * 100 / n) : null;
+  return `<div class="f-meter"><div class="row between small"><span><b class="up">看多 ${pct == null ? '—' : pct + '%'}</b> <span class="muted">（${bull} 人）</span></span><span><span class="muted">（${bear} 人）</span> <b class="down">看空 ${pct == null ? '—' : 100 - pct + '%'}</b></span></div>
+    <div class="f-bar">${pct == null ? '' : `<i class="up-bg" style="width:${pct}%"></i><i class="down-bg" style="width:${100 - pct}%"></i>`}</div>
+    <div class="small muted">${pct == null ? '近 30 天還沒有會員表態' : '近 30 天會員表態（每人只計最新一次）'}</div></div>`;
 }
 // ───────── 會員 ─────────
 /** 註冊後的會員資料填寫 */

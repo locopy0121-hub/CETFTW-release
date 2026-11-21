@@ -300,3 +300,30 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--primary); o
 .bz-rng { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bz-dist { text-align: right; white-space: nowrap; }
 @media (max-width: 420px) { .bz-row { grid-template-columns: 34px 58px 1fr auto; gap: 6px; font-size: 12px; } }
+
+/* 個股討論區 */
+.f-list { display: flex; flex-direction: column; gap: 10px; }
+.f-post { background: var(--card); border-radius: 14px; padding: 12px 14px; }
+.f-post.reply { background: var(--card2); margin-left: 18px; margin-top: 8px; border-radius: 10px; }
+.f-hd { display: flex; align-items: center; gap: 10px; }
+.f-who { flex: 1; min-width: 0; }
+.f-who b { font-size: 14px; }
+.f-av { width: 34px; height: 34px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; flex: none; }
+.f-b { font-size: 11px; font-weight: 700; border: 1px solid currentColor; border-radius: 5px; padding: 0 5px; white-space: nowrap; }
+.f-more { border: 0; background: none; color: var(--muted); font-size: 18px; padding: 2px 8px; cursor: pointer; }
+.f-body { margin: 8px 0 6px; white-space: pre-wrap; word-break: break-word; line-height: 1.6; font-size: 14px; }
+.f-body.clamp { display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
+.f-act { display: flex; gap: 14px; }
+.f-act button { border: 0; background: none; color: var(--muted); font-size: 13px; padding: 2px 4px; cursor: pointer; }
+.f-act button.on { color: var(--up); font-weight: 600; }
+.f-meter { margin-top: 4px; }
+.f-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--bg); margin: 6px 0 4px; gap: 2px; }
+.f-bar .up-bg { background: var(--up); }
+.f-bar .down-bg { background: var(--down); }
+.f-stance { display: inline-flex; gap: 6px; }
+.f-stance button { border: 1px solid var(--border); background: var(--bg); color: var(--muted); border-radius: 16px; padding: 4px 12px; font-size: 13px; cursor: pointer; }
+.f-stance button.on { font-weight: 700; border-color: currentColor; }
+.f-stance button.up.on { color: var(--up); } .f-stance button.down.on { color: var(--down); } .f-stance button[data-s="0"].on { color: var(--text); }
+.f-stance button.up:not(.on), .f-stance button.down:not(.on) { color: var(--muted); }
+.f-wrap { grid-column: 1 / -1; max-width: 860px; width: 100%; display: flex; flex-direction: column; gap: 12px; }
+.f-wrap > .card { margin: 0; }
