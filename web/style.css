@@ -281,3 +281,11 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--primary); o
 #stab.full button[data-st] { flex: 1 1 0; text-align: center; }
 .dlapp.line .lineic { flex: none; border-radius: 10px; background: #06C755; color: #fff; font-weight: 800; font-size: 11px; display: flex; align-items: center; justify-content: center; letter-spacing: .5px; }
 .dlapp.line.big .lineic { font-size: 14px; }
+/* 經典型態／K 棒策略訊號（可點選在圖上顯示交易計畫） */
+.cp-pill { color: #fff; font-size: 11px; font-weight: 700; border-radius: 4px; padding: 1px 6px; flex: none; }
+.cp-pill.up { background: var(--up); } .cp-pill.down { background: var(--down); }
+.cp-it { margin-top: 6px; padding: 10px; cursor: pointer; border: 1px solid var(--border); }
+.cp-it:hover { border-color: var(--primary); }
+.webver { font-size: 11px; color: var(--muted); margin-top: 4px; cursor: pointer; }
+.webver b { color: var(--text2); font-weight: 600; }
+.line-qr { width: 92px; height: 92px; border-radius: 10px; background: #fff; padding: 4px; flex: none; }

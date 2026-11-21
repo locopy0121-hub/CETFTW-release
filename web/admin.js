@@ -67,13 +67,16 @@ async function logout(msg) {
 }
 
 // ───────── 主畫面 ─────────
+/** 網頁版本（發布時由 .github/public/sync.sh 填入） */
+const WEB_VER = /*WEBVER*/{"v":"","sha":"afd6f3a","at":"2026-11-21 18:11"};
+const verText = () => (WEB_VER ? (WEB_VER.v ? (/^v/i.test(WEB_VER.v) ? WEB_VER.v : 'v' + WEB_VER.v) + ' · ' : '') + WEB_VER.sha + (WEB_VER.at ? ' · ' + WEB_VER.at : '') : '開發版');
 const TABS = [['home', '總覽'], ['req', '申請'], ['mem', '會員'], ['pol', '政策'], ['tier', '會員等級'], ['rel', '發布'], ['line', 'LINE'], ['job', '工作紀錄']];
 /** 功能位元（與 App License.Feature 順序相同，不可調整） */
 const FEATS = ['K 線分析與進場建議', 'AI 個股體檢', '提醒與進場鈴聲', '行情牆與熱度圖', '股息與稅務', '投資分析工具', '報告', '市場與排行', '群聊', '備份與設定檔', '盤中持股監控', '桌面小工具', '進階圖表', '新聞', '外觀自訂', '個股進階資料'];
 const featBoxes = (name, mask) => `<div class="grid g2" style="gap:4px 12px">${FEATS.map((f, i) => `<label class="row small" style="gap:6px;cursor:pointer"><input type="checkbox" data-${name}="${i}" style="width:auto" ${mask & (1 << i) ? 'checked' : ''}> ${esc(f)}</label>`).join('')}</div>`;
 const maskOf = (box, name) => $$(`[data-${name}]`, box).reduce((a, el) => a | (el.checked ? 1 << +el.dataset[name] : 0), 0);
 function shell() {
-  $('#app').innerHTML = `<div class="adm"><div class="adm-top"><img src="/web/app-icon.png" alt=""><h1>管理後台</h1>
+  $('#app').innerHTML = `<div class="adm"><div class="adm-top"><img src="/web/app-icon.png" alt=""><h1>管理後台 <span class="small muted" style="font-weight:400" title="網頁版本">${esc(verText())}</span></h1>
       <span class="live" id="live"><i></i><span>連線中…</span></span><span class="small muted">${esc(S.email)}</span><a class="btn sm" href="/web" target="_blank">使用者網頁版</a><button class="btn sm" id="lo">登出</button></div>
     <div class="adm-tabs" id="tabs"></div><div id="view"></div></div>`;
   $('#lo').onclick = () => logout();

@@ -375,6 +375,89 @@ async function fetchTw(syms) {
   }));
   return out;
 }
+/** 富果 Fugle 串流（選填）：瀏覽器直接連 wss://api.fugle.tw，金鑰只在這個瀏覽器加密保存、不經過本站伺服器、不同步 */
+const FG_URL = 'wss://api.fugle.tw/marketdata/v1.0/stock/streaming';
+const FG = { ws: null, authed: false, status: '', subs: new Set(), rej: new Set(), queue: [], awaiting: null, awaitingAt: 0, limit: false, at: {}, msgs: 0, retry: 0, authFail: '', connAt: 0, timer: 0 };
+function fgWanted() { return S.pref.twSrc === 'fugle' && aiHas('fugle'); }
+function fgFresh(sym) { return FG.authed && Date.now() - (FG.at[sym] || 0) < 20000; }
+function fgStop(msg) { const w = FG.ws; FG.ws = null; FG.authed = false; FG.subs.clear(); FG.rej.clear(); FG.queue = []; FG.awaiting = null; FG.limit = false; if (w) try { w.close(1000, 'bye'); } catch (e) {} if (msg != null) FG.status = msg; }
+function fgSend(o) { try { FG.ws && FG.ws.readyState === 1 && FG.ws.send(JSON.stringify(o)); } catch (e) {} }
+function fgPump() {
+  if (!FG.authed) return;
+  if (FG.awaiting && Date.now() - FG.awaitingAt > 10000) { FG.subs.add(FG.awaiting); FG.awaiting = null; }
+  if (FG.awaiting) return;
+  if (FG.limit) { FG.queue.forEach((s) => FG.rej.add(s)); FG.queue = []; return; }
+  const s = FG.queue.shift(); if (!s) return;
+  FG.awaiting = s; FG.awaitingAt = Date.now(); fgSend({ event: 'subscribe', data: { channel: 'aggregates', symbol: s } });
+}
+function fgPriority(syms) {
+  const f = (location.hash.match(/^#\/s\/([^/?]+)/) || [])[1]; const held = new Set(holdings().map((h) => h.symbol));
+  const rank = (s) => (s === decodeURIComponent(f || '') ? 0 : held.has(s) ? 1 : 2);
+  return syms.slice().sort((a, b) => rank(a) - rank(b));
+}
+let fgRT = 0;
+function fgApply(d) {
+  const sym = d.symbol; if (!sym) return; const n = (v) => (v == null || isNaN(+v) ? null : +v);
+  const prev = n(d.referencePrice) ?? n(d.previousClose); const price = n(d.lastPrice) ?? n(d.closePrice); if (prev == null || price == null) return;
+  const t = d.total || {}; const q = S.q[sym] = { ...(S.q[sym] || {}) };
+  const tm = Number(d.lastUpdated) || Date.now();
+  Object.assign(q, { price, prev, open: n(d.openPrice) ?? q.open, high: n(d.highPrice) ?? q.high, low: n(d.lowPrice) ?? q.low, time: tm > 1e14 ? Math.floor(tm / 1000) : tm, src: 'fugle' });
+  if (t.tradeVolume != null) { q.vol = +t.tradeVolume; q.volLots = +t.tradeVolume; }
+  if (d.name) q.name = q.name || d.name;
+  const lv = (a) => (Array.isArray(a) ? a : []); const bids = lv(d.bids), asks = lv(d.asks);
+  if (bids.length || asks.length) q.book = { b: bids.map((x) => +x.price), g: bids.map((x) => +x.size), a: asks.map((x) => +x.price), f: asks.map((x) => +x.size) };
+  q.lu = !!(q.up && Math.abs(price - q.up) < 1e-6); q.ld = !!(q.down && Math.abs(price - q.down) < 1e-6);
+  FG.at[sym] = Date.now(); FG.status = '富果串流同步中（' + Object.keys(FG.at).filter((k) => Date.now() - FG.at[k] < 600000).length + ' 檔）';
+  // 推播很密時合併成每 3 秒重畫一次
+  if (!fgRT) fgRT = setTimeout(() => { fgRT = 0; softFill(); }, 3000);
+}
+function fgMsg(o) {
+  FG.msgs++;
+  const ev = o.event;
+  if (ev === 'authenticated') { FG.authed = true; FG.authFail = ''; FG.retry = 0; FG.connAt = Date.now(); FG.status = '富果串流已連線'; fgPump(); return; }
+  if (ev === 'subscribed') { const sym = (o.data && o.data.symbol) || FG.awaiting; if (sym) FG.subs.add(sym); if (!o.data || sym === FG.awaiting || !o.data.symbol) FG.awaiting = null; fgPump(); return; }
+  if (ev === 'error') {
+    const msg = String((o.data && o.data.message) || '錯誤');
+    if (/auth|credential|unauthor/i.test(msg)) { FG.authFail = FG.key || 'x'; fgStop('富果金鑰驗證失敗，改用證交所即時'); return; }
+    const limit = /limit|exceed|maximum|上限|超過/i.test(msg); if (FG.awaiting) FG.rej.add(FG.awaiting); FG.awaiting = null; if (limit) FG.limit = true;
+    FG.status = '富果：' + msg + (limit ? '（已優先訂閱正在看的個股與持股，其餘用證交所即時）' : ''); fgPump(); return;
+  }
+  if (ev === 'data' && o.channel === 'aggregates' && o.data) fgApply(o.data);
+}
+function fgConnect(key) {
+  FG.key = key; FG.status = '富果串流連線中…';
+  let w; try { w = new WebSocket(FG_URL); } catch (e) { FG.status = '無法建立富果連線：' + e.message; return; }
+  FG.ws = w;
+  w.onopen = () => w.send(JSON.stringify({ event: 'auth', data: { apikey: key } }));
+  w.onmessage = (e) => { try { fgMsg(JSON.parse(e.data)); } catch (x) {} };
+  w.onclose = () => { if (FG.ws !== w) return; FG.ws = null; FG.authed = false; FG.subs.clear(); FG.queue = []; FG.awaiting = null; FG.limit = false;
+    if (FG.authFail) return; FG.status = '富果串流中斷，' + Math.min(60, 2 << Math.min(FG.retry, 5)) + ' 秒後重連（期間用證交所即時）';
+    clearTimeout(FG.timer); FG.timer = setTimeout(() => { if (!FG.ws) tick(); }, Math.min(60000, 2000 << Math.min(FG.retry++, 5))); };
+}
+/** 每次更新行情時呼叫：盤中且選用富果時維持連線並補訂閱（正在看的個股 → 持股 → 其他） */
+async function fgSync(syms) {
+  const on = fgWanted() && twOpen() && (!document.hidden || S.pref.bgRefresh === '1');
+  if (!on) { if (FG.ws) fgStop(fgWanted() ? '非交易時間，富果串流已暫停' : ''); else if (!fgWanted()) FG.status = ''; else if (!FG.authFail) FG.status = '非交易時間，盤中自動連線富果串流'; return; }
+  const tw = fgPriority(Array.from(new Set(syms.filter((x) => x && !isUs(x) && x !== 't00' && x !== 'o00'))));
+  if (!FG.ws) { const key = await aiKeyGet('fugle'); if (!key) return; if (key === FG.authFail) { FG.status = '富果金鑰驗證失敗，請到「設定 › 即時行情」更新金鑰'; return; } fgConnect(key); return; }
+  if (!FG.authed) return;
+  tw.forEach((x) => { if (!FG.subs.has(x) && !FG.rej.has(x) && !FG.queue.includes(x) && FG.awaiting !== x) FG.queue.push(x); }); fgPump();
+}
+/** 測試富果金鑰：連線並驗證後立即關閉 */
+function fgTest(key) {
+  return new Promise((res) => {
+    let w; const done = (ok, msg) => { try { w && w.close(); } catch (e) {} res([ok, msg]); };
+    const to = setTimeout(() => done(false, '逾時：無法連上富果（請確認網路或防火牆）'), 9000);
+    try { w = new WebSocket(FG_URL); } catch (e) { clearTimeout(to); return done(false, e.message); }
+    w.onopen = () => w.send(JSON.stringify({ event: 'auth', data: { apikey: key } }));
+    w.onmessage = (e) => { let o = {}; try { o = JSON.parse(e.data); } catch (x) {} if (o.event === 'authenticated') { clearTimeout(to); done(true, '連線成功：金鑰驗證通過，盤中可用富果串流'); } else if (o.event === 'error') { clearTimeout(to); done(false, '驗證失敗：' + ((o.data && o.data.message) || '金鑰無效')); } };
+    w.onerror = () => { clearTimeout(to); done(false, '連線失敗：瀏覽器無法連上富果串流'); };
+  });
+}
+function fgStats() {
+  if (!fgWanted()) return '證交所 MIS 即時（約每 ' + (S.pref.refresh || 10) + ' 秒）';
+  return (FG.status || '富果串流（盤中自動連線）') + (FG.authed ? ' · 訂閱 ' + FG.subs.size + ' 檔' + (FG.rej.size ? '（' + FG.rej.size + ' 檔超出上限，改用證交所）' : '') + ' · 已收 ' + FG.msgs + ' 則' : '');
+}
 /** Yahoo 走勢（美股報價、台股與美股的當日走勢小圖） */
 async function fetchYahoo(sym, range = '1d', interval = '5m', ttl = 30) {
   try {
@@ -396,9 +479,12 @@ async function sparkTw(sym) {
 }
 async function refreshQuotes(syms) {
   syms = Array.from(new Set(syms.filter(Boolean)));
-  const tw = syms.filter((s) => !isUs(s)), us = syms.filter((s) => isUs(s));
+  const tw = syms.filter((s) => !isUs(s)); const usIv = (S.pref.usRefresh || 0) * 1000; S.usAt = S.usAt || {};
+  const us = syms.filter((s) => isUs(s) && (!usIv || !(S.q[s] && S.q[s].price) || Date.now() - (S.usAt[s] || 0) >= usIv - 500)); us.forEach((s) => { S.usAt[s] = Date.now(); });
   const [twq, usq] = await Promise.all([tw.length ? fetchTw(tw) : {}, Promise.all(us.map(async (s) => [s, await fetchUs(s)]))]);
-  Object.entries(twq).forEach(([k, v]) => { S.q[k] = { ...(S.q[k] || {}), ...v }; });
+  Object.entries(twq).forEach(([k, v]) => {
+    if (fgFresh(k)) { const o = S.q[k] || {}; S.q[k] = { ...o, name: o.name || v.name, up: v.up, down: v.down, otc: v.otc, book: o.book || v.book }; return; } // 富果串流較新，只補漲跌停價等欄位
+    S.q[k] = { ...(S.q[k] || {}), ...v, src: 'twse' }; });
   usq.forEach(([s, v]) => { if (v) S.q[s] = { ...(S.q[s] || {}), ...v }; });
   // 連線狀態：要查的都沒拿到 → 顯示提示
   const got = Object.keys(twq).length + usq.filter(([, v]) => v).length;
@@ -545,19 +631,24 @@ function drawChart(wrap, bars, opt) {
   const ma = { 20: sma(c, 20) }; MAS.forEach((p) => { ma[p] = sma(c, p); });
   const n = bars.length; const def = Math.min(n, opt.count || n); const z = zoomState(wrap, opt.key || 'k' + n, def, n);
   const from = Math.max(0, n - z.count - z.off); const vis = bars.slice(from, n - z.off);
-  const cw = (W - padL - padR) / Math.max(vis.length, 1);
+  const OV = opt.overlay || null; const fut = OV ? 6 : 0;
+  const cw = (W - padL - padR) / Math.max(vis.length + fut, 1);
   let hi = -Infinity, lo = Infinity, vmax = 0;
   vis.forEach((b, i) => { hi = Math.max(hi, b.h); lo = Math.min(lo, b.l); vmax = Math.max(vmax, b.v || 0);
     MAS.forEach((p) => { const v = ma[p][from + i]; if (v != null) { hi = Math.max(hi, v); lo = Math.min(lo, v); } }); });
   if (opt.avg && opt.avg > lo * 0.8 && opt.avg < hi * 1.25) { hi = Math.max(hi, opt.avg); lo = Math.min(lo, opt.avg); }
   if (opt.base) { hi = Math.max(hi, opt.base); lo = Math.min(lo, opt.base); }
-  const pad = (hi - lo) * 0.06 || 1; hi += pad; lo -= pad;
+  if (OV) OV.prices.forEach((v) => { if (v > 0 && isFinite(v)) { hi = Math.max(hi, v); lo = Math.min(lo, v); } });
+  const pad = (hi - lo) * (opt.overlay ? 0.1 : 0.06) || 1; hi += pad; lo -= pad;
   const y = (v) => top + (hi - v) / (hi - lo) * mainH;
   const x = (i) => padL + i * cw + cw / 2;
   g.clearRect(0, 0, W, H); g.font = '11px sans-serif'; g.textBaseline = 'middle';
   // 格線
   g.strokeStyle = GRID; g.lineWidth = 1; g.fillStyle = TXT;
   for (let k = 0; k <= 4; k++) { const v = lo + (hi - lo) * k / 4; const yy = y(v); g.beginPath(); g.moveTo(padL, yy); g.lineTo(W - padR, yy); g.stroke(); g.fillText(fmtPx(v), W - padR + 4, yy); }
+  // 交易計畫：獲利區／風險區（畫在 K 棒底下）
+  const ox = (k) => x(k - from); const clipMain = () => { g.save(); g.beginPath(); g.rect(0, 0, W - padR, top + mainH + 4); g.clip(); };
+  if (OV) { clipMain(); drawOverlayZones(g, OV, ox, y, cw, W - padR); g.restore(); }
   // K 棒
   if (opt.base) { g.strokeStyle = TXT; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(padL, y(opt.base)); g.lineTo(W - padR, y(opt.base)); g.stroke(); g.setLineDash([]); }
   vis.forEach((b, i) => {
@@ -593,6 +684,11 @@ function drawChart(wrap, bars, opt) {
     vis.forEach((_, i) => { const v = ma[p][from + i]; if (v == null) return; if (!st) { g.moveTo(x(i), y(v)); st = true; } else g.lineTo(x(i), y(v)); });
     g.stroke();
   });
+  // 交易計畫：進場／停損／目標線、型態線段與標記、右側價位標籤
+  if (OV) { clipMain(); drawOverlayLines(g, OV, ox, y, cw, W - padR, css('--text'), TXT); g.restore();
+    const used = []; [['目標', OV.target, PLAN_C.target], ['進場', OV.entry, css('--text2') || '#888'], ['停損', OV.stop, PLAN_C.risk]].sort((a, b) => y(a[1]) - y(b[1])).forEach(([t, v, col]) => {
+      let yy = Math.min(top + mainH - 8, Math.max(top + 8, y(v))); while (used.some((u) => Math.abs(u - yy) < 15)) yy += 15; used.push(yy);
+      g.fillStyle = col; g.fillRect(W - padR + 1, yy - 8, padR - 2, 16); g.fillStyle = '#fff'; g.font = '10px sans-serif'; g.fillText(t + fmtPx(v), W - padR + 3, yy); g.font = '11px sans-serif'; }); }
   g.fillStyle = TXT; g.fillText('量', W - padR + 4, volTop + 8);
   // 持股均價線
   if (opt.avg) { const yy = y(opt.avg); if (yy > top && yy < top + mainH) { g.strokeStyle = '#10b981'; g.setLineDash([6, 4]); g.lineWidth = 1.2; g.beginPath(); g.moveTo(padL, yy); g.lineTo(W - padR, yy); g.stroke(); g.setLineDash([]);
@@ -717,6 +813,29 @@ async function loadBars(sym, range, interval = '1d') {
   return out;
 }
 
+// ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
+const WEB_VER = /*WEBVER*/{"v":"","sha":"afd6f3a","at":"2026-11-21 18:11"};
+function webVerText(short) {
+  const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
+  const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
+  return short ? tag + (v.sha ? ' · ' + v.sha : '') : tag + (v.sha ? '（' + v.sha + '）' : '') + (v.at ? ' · ' + v.at : '');
+}
+function webVerHtml() { return `<div class="webver" data-webver title="點一下檢查是否有新版網頁">網頁版 <b>${esc(webVerText(true))}</b></div>`; }
+/** 檢查伺服器上的網頁版本是否比目前執行的新（瀏覽器沿用舊檔時提示重新整理） */
+async function webVerCheck(silent) {
+  try { const j = await (await fetch('/web/version.json?t=' + Date.now(), { cache: 'no-store' })).json();
+    const cur = WEB_VER || {}; const newer = j && j.sha && j.sha !== cur.sha;
+    if (newer) { if ((await dialog('有新版網頁', `目前：${esc(webVerText())}<br>最新：${esc((j.v || '最新原始碼') + '（' + j.sha + '）' + (j.at ? ' · ' + j.at : ''))}<br><br>重新整理即可套用。`, [['', '稍後'], ['ok', '重新整理', 'primary']])) === 'ok') location.reload(); }
+    else if (!silent) toast('已是最新網頁版：' + webVerText(true));
+    return j;
+  } catch (e) { if (!silent) toast(WEB_VER ? '目前網頁版：' + webVerText(true) : '開發版（沒有版本資訊）'); return null; }
+}
+document.addEventListener('click', (e) => { if (e.target.closest('[data-webver]')) webVerCheck(false); });
+function rtStatusText() {
+  const tw = twOpen() ? '台股盤中：' + fgStats() : '台股非交易時間（每分鐘更新收盤資料）' + (fgWanted() ? '；盤中自動連線富果串流' : '');
+  const us = '美股：Yahoo Finance，' + (S.pref.usRefresh ? '每 ' + (S.pref.usRefresh >= 60 ? S.pref.usRefresh / 60 + ' 分鐘' : S.pref.usRefresh + ' 秒') : '與台股同步更新');
+  return tw + '\n' + us + (S.lastTick ? '\n最近更新：' + hm(S.lastTick) + (document.hidden && S.pref.bgRefresh !== '1' ? '（背景暫停中）' : '') : '');
+}
 // ───────── 版面 ─────────
 const NAV = [['', '總覽', '🏠'], ['watch', '行情', '📈'], ['hold', '持股', '💼'], ['trades', '交易', '🧾'], ['div', '股息', '💰'], ['analysis', '分析', '📊'], ['compare', '比較', '⚖️'], ['calendar', '行事曆', '📅'], ['sim', '模擬交易', '🎮'], ['tools', '工具', '🧮'],
   ['alerts', '提醒', '🔔'], ['market', '市場', '🌐'], ['news', '新聞', '📰'], ['cash', '現金與帳戶', '🏦'], ['member', '會員', '👤'], ['settings', '設定', '⚙️']];
@@ -751,7 +870,7 @@ function shell() {
     <aside class="side"><div class="brand"><div class="logo">台</div>台美股資產</div>
       <div class="search gsearch"><input id="gs" placeholder="搜尋個股（按 / ）" autocomplete="off"><div class="res hide"></div></div>
       <nav class="nav">${navHtml}</nav>
-      <div class="foot">${dlAppHtml()}${lineJoinHtml()}<div id="mb"></div><div class="small syncst" style="margin-top:6px"></div></div></aside>
+      <div class="foot">${dlAppHtml()}${lineJoinHtml()}<div id="mb"></div><div class="small syncst" style="margin-top:6px"></div>${webVerHtml()}</div></aside>
     <main class="main" id="view"></main>
     <nav class="bottom">${botHtml}</nav></div>`;
   bindSearch($('#gs'), (sym) => { location.hash = '#/s/' + sym; });
@@ -2618,34 +2737,85 @@ const NEWS_SRC = [
   ['news', 'Yahoo 最新', 'https://tw.stock.yahoo.com/rss?category=news'], ['tw-market', '台股動態', 'https://tw.stock.yahoo.com/rss?category=tw-market'],
   ['intl-markets', '國際財經', 'https://tw.stock.yahoo.com/rss?category=intl-markets'], ['research', '研究報導', 'https://tw.stock.yahoo.com/rss?category=research'],
   ['column', '專家專欄', 'https://tw.stock.yahoo.com/rss?category=column'], ['funds-news', '基金動態', 'https://tw.stock.yahoo.com/rss?category=funds-news'],
-  ['google', 'Google 新聞', 'https://news.google.com/rss/search?q=' + encodeURIComponent('台股 財經') + '&hl=zh-TW&gl=TW&ceid=TW:zh-Hant'],
+  ['cnyes', '鉅亨台股', 'cnyes:tw_stock'], ['cnyes-us', '鉅亨美股', 'cnyes:wd_stock'], ['bing', '新聞搜尋', 'kw:台股 財經'],
   ['cna', '中央社財經', 'https://feeds.feedburner.com/rsscna/finance'], ['ltn', '自由財經', 'https://news.ltn.com.tw/rss/business.xml'],
   ['udn', '經濟日報', 'https://money.udn.com/rssfeed/news/1001/5590?ch=money'], ['us', 'Yahoo Finance 美股', 'https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC&region=US&lang=en-US'],
 ];
 async function rssItems(url, n = 30) {
   const xml = new DOMParser().parseFromString(await px(url, 600, 'text'), 'text/xml');
-  return $$('item', xml).slice(0, n).map((it) => {
+  const items = $$('item', xml); if (!items.length && !xml.querySelector('channel')) throw new Error('不是 RSS');
+  return items.slice(0, n).map((it) => {
     const g = (t) => ((it.querySelector(t) || {}).textContent || '').trim();
     const desc = g('description').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
-    return { t: g('title'), l: g('link'), d: g('pubDate'), s: g('source'), x: desc.slice(0, 140) };
+    let l = g('link'); const m = l.match(/[?&]url=([^&]+)/); if (/bing\.com\/news\/apiclick/.test(l) && m) l = decodeURIComponent(m[1]); // Bing 轉址改為原文網址
+    const src = g('source') || ((it.getElementsByTagName('News:Source')[0] || {}).textContent || '').trim();
+    return { t: g('title'), l, d: g('pubDate'), s: src, x: desc.slice(0, 140) };
   });
 }
+/** 鉅亨網新聞（JSON）：tw_stock 台股、wd_stock 美股／國際 */
+async function cnyesItems(cat, n = 30) {
+  const j = await px('https://api.cnyes.com/media/api/v1/newslist/category/' + cat + '?limit=' + n, 600);
+  const l = (((j || {}).items || {}).data) || []; if (!Array.isArray(l)) throw new Error('鉅亨格式不符');
+  return l.map((x) => ({ t: x.title || '', l: 'https://news.cnyes.com/news/id/' + x.newsId, d: x.publishAt ? new Date(x.publishAt * 1000).toUTCString() : '', s: '鉅亨網', x: String(x.summary || '').replace(/\s+/g, ' ').slice(0, 140) }));
+}
+/** 關鍵字新聞：Bing 新聞 RSS → Google 新聞（備援）；都讀不到時丟出錯誤 */
+async function kwNews(q, n = 30) {
+  const srcs = [['Bing', 'https://www.bing.com/news/search?q=' + encodeURIComponent(q) + '&format=rss&setlang=zh-hant&cc=TW&mkt=zh-TW'],
+    ['Google', 'https://news.google.com/rss/search?q=' + encodeURIComponent(q) + '&hl=zh-TW&gl=TW&ceid=TW:zh-Hant']];
+  let err = null;
+  for (const [nm, u] of srcs) { try { const l = await rssItems(u, n); if (l.length) return l.map((x) => ({ ...x, via: nm })); } catch (e) { err = e; } }
+  if (err) throw err; return [];
+}
+/** 新聞搜尋：輸入代號（如 00406A、2330、AAPL）或名稱、關鍵字；合併個股新聞、關鍵字新聞與鉅亨網，依時間排序 */
+async function searchNews(q) {
+  await loadDir().catch(() => {});
+  const up = q.trim().toUpperCase(); let sym = null;
+  if (/^\d{4,6}[A-Z]?$/.test(up) || (S.dir && S.dir[up]) || D.quotes().some((x) => x.s === up)) sym = up;
+  else if (/^[A-Z][A-Z.\-]{0,5}$/.test(up)) sym = up; // 美股代號
+  else { // 名稱 → 代號（自選或股票目錄）
+    const hit = D.quotes().find((x) => x.n === q.trim()) || null; if (hit) sym = hit.s;
+    else if (S.dir) { const e = Object.entries(S.dir).find(([, v]) => v && v[0] === q.trim()); if (e) sym = e[0]; }
+  }
+  const name = sym ? D.name(sym) : ''; const us = sym && isUs(sym);
+  const jobs = [];
+  if (sym) jobs.push(rssItems(us ? 'https://feeds.finance.yahoo.com/rss/2.0/headline?s=' + encodeURIComponent(sym) + '&region=US&lang=en-US' : 'https://tw.stock.yahoo.com/rss?s=' + encodeURIComponent(sym), 20).then((l) => l.map((x) => ({ ...x, s: x.s || 'Yahoo 股市' }))));
+  const kw = sym ? (name && name !== sym ? (us ? sym + ' stock' : name + ' ' + sym) : sym + (us ? ' stock' : ' ETF 股')) : q.trim();
+  jobs.push(kwNews(kw, 25));
+  if (!us) jobs.push(cnyesItems('tw_stock', 80).then((l) => l.filter((x) => [q.trim(), sym, name].filter((t) => t && t.length >= 2).some((t) => x.t.includes(t) || x.x.includes(t)))));
+  const res = await Promise.allSettled(jobs); const ok = res.filter((r) => r.status === 'fulfilled');
+  if (!ok.length) throw new Error('新聞來源暫時讀不到');
+  const seen = new Set();
+  const items = ok.flatMap((r) => r.value).filter((x) => x.t && !seen.has(x.t) && seen.add(x.t)).sort((a, b) => (Date.parse(b.d) || 0) - (Date.parse(a.d) || 0)).slice(0, 60);
+  return { sym, name, items, failed: res.length - ok.length };
+}
+/** 依來源代碼讀新聞（RSS、鉅亨 JSON、關鍵字搜尋） */
+function newsBy(src, n = 40) { return src.startsWith('cnyes:') ? cnyesItems(src.slice(6), n) : src.startsWith('kw:') ? kwNews(src.slice(3), n) : rssItems(src, n); }
 function ago(d) { const t = Date.parse(d); if (!t) return ''; const m = Math.round((Date.now() - t) / 60000); return m < 60 ? Math.max(1, m) + ' 分鐘前' : m < 1440 ? Math.round(m / 60) + ' 小時前' : Math.round(m / 1440) + ' 天前'; }
 VIEWS.news = {
   title: '新聞',
   render() {
+    if (S.pref.newsSrc === 'google') S.pref.newsSrc = 'bing'; // 舊設定：Google 新聞改為新聞搜尋（Bing 優先、Google 備援）
     const k = S.pref.newsSrc || 'news';
     return head('財經新聞', `<button class="btn" id="nwR">重新整理</button>`) + `<div class="chips" style="margin-bottom:12px;flex-wrap:wrap">${NEWS_SRC.map(([id, n]) => `<button class="chip ${k === id ? 'on' : ''}" data-ns="${id}">${n}</button>`).join('')}<button class="chip ${k === 'mine' ? 'on' : ''}" data-ns="mine">我的持股</button></div>
-      <div class="search" style="margin-bottom:12px"><input id="nwQ" placeholder="篩選標題關鍵字" autocomplete="off"></div><div id="dyn"><div class="card empty">讀取中…</div></div>`;
+      <div class="row" style="gap:8px;margin-bottom:12px"><div class="search sp" style="margin:0"><input id="nwQ" placeholder="搜尋新聞：代號（00406A、2330、AAPL）、公司名稱或關鍵字，按 Enter" autocomplete="off" value="${esc(this._q || '')}"></div><button class="btn primary" id="nwS">搜尋</button>${this._q ? '<button class="btn" id="nwX">清除搜尋</button>' : ''}</div>
+      <div id="dyn"><div class="card empty">讀取中…</div></div>`;
   },
   bind() {
     $$('[data-ns]').forEach((b) => b.onclick = () => { S.pref.newsSrc = b.dataset.ns; savePref(); route(); });
     $('#nwR').onclick = () => { this._c = {}; this.fill(); };
-    $('#nwQ').oninput = () => this.draw();
+    $('#nwQ').oninput = () => { if (!this._q) this.draw(); };
+    const go = () => { const v = $('#nwQ').value.trim(); this._q = v || null; route(); };
+    $('#nwQ').onkeydown = (e) => { if (e.key === 'Enter') go(); };
+    $('#nwS').onclick = go;
+    if ($('#nwX')) $('#nwX').onclick = () => { this._q = null; route(); };
   },
   async fill() {
     if (!can('NEWS')) { $('#dyn').innerHTML = lockCard('NEWS'); return; }
-    const k = S.pref.newsSrc || 'news'; this._c = this._c || {};
+    this._c = this._c || {};
+    if (this._q) { const k = 'q:' + this._q;
+      if (!this._c[k] || Date.now() - this._c[k].at > 600000) { $('#dyn').innerHTML = '<div class="card empty">搜尋「' + esc(this._q) + '」相關新聞…</div>'; let r = null; try { r = await searchNews(this._q); } catch (e) {} this._c[k] = { at: Date.now(), items: r ? r.items : null, info: r }; }
+      if (S.route === 'news') this.draw(); return; }
+    const k = S.pref.newsSrc || 'news';
     if (!this._c[k] || Date.now() - this._c[k].at > 600000) {
       let items = [];
       try {
@@ -2653,15 +2823,22 @@ VIEWS.news = {
           const syms = holdings().slice().sort((a, b) => b.shares * b.avgCost - a.shares * a.avgCost).slice(0, 8).map((h) => h.symbol);
           const all = await Promise.all(syms.map((s) => rssItems(isUs(s) ? 'https://feeds.finance.yahoo.com/rss/2.0/headline?s=' + encodeURIComponent(s) + '&region=US&lang=en-US' : 'https://tw.stock.yahoo.com/rss?s=' + s, 8).then((l) => l.map((x) => ({ ...x, sym: s }))).catch(() => [])));
           const seen = new Set(); items = all.flat().filter((x) => !seen.has(x.t) && seen.add(x.t)).sort((a, b) => (Date.parse(b.d) || 0) - (Date.parse(a.d) || 0));
-        } else items = await rssItems(NEWS_SRC.find((x) => x[0] === k)[2], 40);
+        } else items = await newsBy((NEWS_SRC.find((x) => x[0] === k) || NEWS_SRC[0])[2], 40);
       } catch (e) { items = null; }
       this._c[k] = { at: Date.now(), items };
     }
     if (S.route !== 'news') return; this.draw();
   },
   draw() {
-    const k = S.pref.newsSrc || 'news'; const c = (this._c || {})[k]; if (!c || !$('#dyn')) return;
-    if (c.items == null) { $('#dyn').innerHTML = `<div class="card empty">這個來源暫時讀不到${['cna', 'ltn', 'udn'].includes(k) ? '（需管理員在 LINE › 自動回覆按「重新部署」後才能使用）' : ''}，請改選其他來源。</div>`; return; }
+    const k = this._q ? 'q:' + this._q : S.pref.newsSrc || 'news'; const c = (this._c || {})[k]; if (!c || !$('#dyn')) return;
+    if (this._q) { const inf = c.info || {}; const l = c.items || [];
+      $('#dyn').innerHTML = `<div class="card"><h2>搜尋：${esc(this._q)}${inf.sym && inf.name && inf.name !== inf.sym ? '（' + esc(inf.name) + '）' : ''}<span class="r small muted">${l.length} 則${inf.failed ? ' · 部分來源暫時讀不到' : ''}</span></h2>
+        ${c.items == null ? '<div class="empty">新聞來源暫時讀不到，請稍後再試（新來源需管理員重新部署轉送站）。</div>' : l.length ? `<div class="list">${l.map((n) => `<a class="it" href="${esc(n.l)}" target="_blank" rel="noopener" style="color:inherit;align-items:flex-start"><div class="l"><div class="t1" style="white-space:normal;line-height:1.5">${esc(n.t)}</div>
+          ${n.x && !n.x.startsWith(n.t.slice(0, 10)) ? `<div class="t2" style="white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(n.x)}</div>` : ''}<div class="t2">${esc(n.s || n.via || '')}${n.s || n.via ? ' · ' : ''}${ago(n.d)}</div></div></a>`).join('')}</div>`
+          : `<div class="empty">沒有找到「${esc(this._q)}」的相關新聞。${inf.sym ? ` <a href="#/s/${encodeURIComponent(inf.sym)}">查看 ${esc(inf.sym)} 個股頁 ›</a>` : ''}</div>`}
+        ${inf.sym ? `<div class="small muted" style="margin-top:6px">來源：Yahoo 股市個股新聞、新聞搜尋（Bing／Google）、鉅亨網；新上市 ETF 新聞量較少屬正常。</div>` : ''}</div>`;
+      return; }
+    if (c.items == null) { $('#dyn').innerHTML = `<div class="card empty">這個來源暫時讀不到${['cna', 'ltn', 'udn', 'cnyes', 'cnyes-us', 'bing'].includes(k) ? '（需管理員在 LINE › 自動回覆按「重新部署」更新轉送站後才能使用）' : ''}，請改選其他來源。</div>`; return; }
     const q = ($('#nwQ').value || '').trim(); const l = c.items.filter((x) => !q || x.t.includes(q) || x.x.includes(q));
     $('#dyn').innerHTML = `<div class="card">${l.length ? `<div class="list">${l.map((n) => `<a class="it" href="${esc(n.l)}" target="_blank" rel="noopener" style="color:inherit;align-items:flex-start"><div class="l"><div class="t1" style="white-space:normal;line-height:1.5">${n.sym ? `<span class="tag" style="color:var(--primary)">${esc(D.name(n.sym))}</span> ` : ''}${esc(n.t)}</div>
       ${n.x && !n.x.startsWith(n.t.slice(0, 10)) ? `<div class="t2" style="white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(n.x)}</div>` : ''}<div class="t2">${esc(n.s || '')}${n.s ? ' · ' : ''}${ago(n.d)}</div></div></a>`).join('')}</div>` : '<div class="empty">沒有符合的新聞</div>'}</div>`;
@@ -2910,20 +3087,36 @@ Object.assign(VIEWS.s, {
     const etf = D.isEtf(sym) || (!isUs(sym) && /^00/.test(sym)) || (S.q[sym] || {}).type === 'ETF';
     const b = await liveBars(sym, '2y'); if (this.sym !== sym || this.tab() !== 'ta') return;
     if (b.length < 60) { si.innerHTML = '<div class="card empty" style="grid-column:1/-1">歷史資料不足，無法分析</div>'; return; }
-    si.innerHTML = '<div class="card" id="kaC" style="grid-column:1/-1"></div><div class="card" id="ksC"></div><div class="card" id="voC"></div><div class="card" id="iaC" style="grid-column:1/-1"><h2>投資分析指數</h2><div class="small muted">計算中…</div></div>';
+    si.innerHTML = '<div class="card" id="kaC" style="grid-column:1/-1"></div><div class="card" id="voC" style="grid-column:1/-1"></div><div class="card" id="iaC" style="grid-column:1/-1"><h2>投資分析指數</h2><div class="small muted">計算中…</div></div>';
     const tickOf = (p) => (isUs(sym) ? 0.01 : twTick(p, etf));
     const sigs = kbarSignals(b, etf, tickOf);
     const drawKa = async (weekly) => {
       const cs = weekly ? weeklyBars(await liveBars(sym, '5y')) : b; if (this.sym !== sym || !$('#kaC')) return;
       const r = klineAnalyze(cs); const el = $('#kaC');
       if (!r) { el.innerHTML = '<h2>K 線形態分析</h2><div class="small muted">資料不足</div>'; return; }
-      if (!weekly) r.entry = refineEntry(r, sigs, etf);
-      el.innerHTML = kaCardHtml(r, weekly, sym);
-      $$('[data-tf]', el).forEach((x) => x.onclick = () => { this._kaW = x.dataset.tf === 'w'; drawKa(this._kaW); });
-      drawChart($('#kaChart'), cs.slice(-120), { key: 'ka' + sym + (weekly ? 'w' : 'd'), count: 60, pats: true, mas: [20, 60], H: 300 });
+      // 與 App 相同：K 棒策略訊號＋經典型態修正進場建議
+      r.etf = etf; r.sigs = weekly ? kbarSignals(cs, etf, tickOf) : sigs;
+      try { r.pats = chartPatterns(cs, tickOf); } catch (e) { r.pats = []; }
+      r.entry = withPatterns(r, refineEntry(r, r.sigs, etf), r.pats);
+      r.reasons = r.reasons.concat(r.pats.slice(0, 2).map((p) => '經典型態：' + p.name + '（' + CP_ST[p.state] + '，盈虧比 1:' + p.rr.toFixed(2) + '）'));
+      const held = holdings().some((h) => h.symbol === sym && h.shares > 0);
+      const render = () => {
+        if (!$('#kaC')) return;
+        const all = kaOverlays(r, tickOf); const ov = kaFocus(sym, r, all);
+        el.innerHTML = kaCardHtml(r, weekly, sym, { ov, all, held });
+        $$('[data-tf]', el).forEach((x) => x.onclick = () => { this._kaW = x.dataset.tf === 'w'; drawKa(this._kaW); });
+        const setF = (id) => { S.kaFocus = S.kaFocus || {}; if (id == null) delete S.kaFocus[sym]; else S.kaFocus[sym] = id; render(); };
+        $$('[data-ovpick]', el).forEach((x) => x.onclick = (e) => { if (e.target.closest('a,button,select')) return; setF(x.dataset.ovpick); });
+        $$('[data-ovoff]', el).forEach((x) => x.onclick = () => setF('off'));
+        $$('[data-ovon]', el).forEach((x) => x.onclick = () => setF(null));
+        const sel = $('[data-ovsel]', el); if (sel) sel.onchange = () => setF(sel.value);
+        const n = cs.length, N = Math.min(n, 160), sov = ovShift(ov, n - N);
+        const count = sov ? Math.min(N, Math.max(60, N - Math.max(0, sov.minIdx - 3))) : 60;
+        drawChart($('#kaChart'), cs.slice(-N), { key: 'ka' + sym + (weekly ? 'w' : 'd') + (ov ? ov.id : ''), count, pats: !ov, mas: [20, 60], H: ov ? 340 : 300, overlay: sov });
+      };
+      render();
     };
     drawKa(!!this._kaW);
-    $('#ksC').innerHTML = ksCardHtml(sigs, etf);
     const v = volaOf(b); const kr = klineAnalyze(b);
     if (v) { $('#voC').innerHTML = voCardHtml(v, kr && kr.plan); drawSeries($('#voChart'), v.series.map((x) => x[0]), [{ v: v.series.map((x) => x[1]), color: '#f59e0b', name: '年化波動', fill: true }], { h: 180, fmt: (x) => x.toFixed(0) + '%', key: 'vo' + sym }); }
     else $('#voC').innerHTML = '<h2>波動</h2><div class="small muted">資料不足</div>';
@@ -3076,12 +3269,13 @@ Object.assign(VIEWS.s, {
   // ── 新聞 ──
   async t_news() {
     const sym = this.sym; const si = $('#si');
-    si.innerHTML = '<div class="card" id="news"><h2>新聞</h2><div class="muted small">載入中…</div></div><div class="card" id="gnews"><h2>Google 新聞</h2><div class="muted small">載入中…</div></div>';
+    si.innerHTML = '<div class="card" id="news"><h2>新聞</h2><div class="muted small">載入中…</div></div><div class="card" id="gnews"><h2>相關新聞</h2><div class="muted small">載入中…</div></div>';
     this.news();
     if (!can('NEWS')) { $('#gnews').remove(); return; }
-    let items = []; try { items = await rssItems('https://news.google.com/rss/search?q=' + encodeURIComponent(sym + ' ' + D.name(sym) + (isUs(sym) ? ' stock' : ' 股')) + '&hl=zh-TW&gl=TW&ceid=TW:zh-Hant', 15); } catch (e) {}
+    let items = [], fail = false; try { items = await kwNews((isUs(sym) ? sym + ' ' : '') + D.name(sym) + (isUs(sym) ? ' stock' : ' ' + sym + ' 股'), 15); } catch (e) { fail = true; }
+    if (!items.length && !isUs(sym)) { try { items = (await cnyesItems('tw_stock', 60)).filter((x) => x.t.includes(D.name(sym)) || x.t.includes(sym)); fail = false; } catch (e) {} }
     if (this.sym !== sym || !$('#gnews')) return;
-    $('#gnews').innerHTML = `<h2>Google 新聞</h2>${items.length ? `<div class="list">${items.map((n) => `<a class="it" href="${esc(n.l)}" target="_blank" rel="noopener" style="color:inherit"><div class="l"><div class="t1" style="white-space:normal">${esc(n.t)}</div><div class="t2">${esc(n.s || '')}${n.s ? ' · ' : ''}${ago(n.d)}</div></div></a>`).join('')}</div>` : '<div class="muted small">沒有找到相關新聞</div>'}`;
+    $('#gnews').innerHTML = `<h2>相關新聞<span class="r small muted">${items[0] && items[0].via ? esc(items[0].via) + ' 新聞' : items.length ? '鉅亨網' : ''}</span></h2>${items.length ? `<div class="list">${items.map((n) => `<a class="it" href="${esc(n.l)}" target="_blank" rel="noopener" style="color:inherit"><div class="l"><div class="t1" style="white-space:normal">${esc(n.t)}</div><div class="t2">${esc(n.s || '')}${n.s ? ' · ' : ''}${ago(n.d)}</div></div></a>`).join('')}</div>` : (fail ? '<div class="muted small">新聞搜尋來源暫時讀不到（需管理員重新部署轉送站），請先看上方的個股新聞。</div>' : '<div class="muted small">沒有找到相關新聞</div>')}`;
   },
   // ── 公司 ──
   async t_co() {
@@ -3118,7 +3312,7 @@ Object.assign(VIEWS.s, {
 // ───────── 各頁版面自訂：卡片顯示／隱藏、順序、寬度、欄數（存在這個瀏覽器） ─────────
 const LAY_SKIP = new Set(['', 'more', 'diag']);
 const LAY_ID_NAMES = { adv: '綜合進場建議', book: '最佳五檔', sig: 'K 線體檢', kst: '關鍵數據與報酬', aib: 'AI 個股體檢', pro: '進階分析（三關價、光譜、分價量、月份）', peers: '相似股票',
-  dvs: '配息統計', dvtax: '配息稅務', dvup: '即將除權息', dvlist: '配息紀錄', dvsplit: '股票分割', news: '新聞', gnews: 'Google 新聞', dd: '加權指數回撤', season: '月份漲跌', el: 'ETF 清單' };
+  dvs: '配息統計', dvtax: '配息稅務', dvup: '即將除權息', dvlist: '配息紀錄', dvsplit: '股票分割', news: '新聞', gnews: '相關新聞', dd: '加權指數回撤', season: '月份漲跌', el: 'ETF 清單' };
 const LAY_PAGE_NAMES = { watch: '行情', hold: '持股', trades: '交易', div: '股息', analysis: '分析', compare: '比較', calendar: '行事曆', sim: '模擬交易', tools: '工具', alerts: '提醒',
   market: '市場', cash: '現金與帳戶', member: '會員', settings: '設定', s: '個股', us: '美股市場', etf: 'ETF 市場', index: '指數與匯率', rank: '排行', limits: '漲跌停', report: '盤後報告', news: '新聞', crash: '歷次大跌' };
 function layKey() {
@@ -3529,11 +3723,13 @@ VIEWS.member = {
         ${S.code ? `<div class="small muted" style="margin-top:8px">授權編號 ${S.code.idText}${S.code.rel ? '　（網頁以簽發日起算；實際以手機啟用日為準）' : ''}</div>` : ''}
         ${p.notice ? `<div class="notice" style="margin-top:10px">📢 ${esc(p.notice)}</div>` : ''}
         <div class="row wrap" style="margin-top:12px"><button class="btn primary" id="apBtn">${m.status === 'MEMBER' ? '升級／變更方案' : m.status === 'EXPIRED' || m.status === 'GRACE' ? '申請續約' : '申請開通會員'}</button><span class="small muted">也可以在手機 App「會員與授權」申請；開通後網頁自動套用。</span></div>
+        ${lineOaId() ? `<div class="tile" style="margin-top:12px"><div class="row" style="gap:12px;align-items:center"><img class="line-qr" src="https://qr-official.line.me/sid/L/${encodeURIComponent(lineOaId().slice(1))}.png" alt="LINE QR Code" data-linejoin style="cursor:pointer" onerror="this.remove()">
+          <div class="sp"><b>LINE 官方帳號</b><div class="small text2" style="margin-top:2px">開通、續約或方案問題可直接在 LINE 詢問管理員，也能接收每日盤後報告。</div><div style="margin-top:6px">${lineJoinHtml()}</div></div></div></div>` : ''}
         ${(me.requests || []).length ? `<div class="list" style="margin-top:10px">${me.requests.slice().reverse().map((r) => `<div class="it" style="cursor:default"><div class="l"><div class="t1">${esc({ new: '開通', renew: '續約', change: '變更方案' }[r.kind] || r.kind)} <span class="tag ${r.state === '待處理' ? '' : 'up'}">${esc(r.state === '已匯入' ? '管理員處理中' : r.state)}</span></div><div class="t2">${esc(r.at)}　${esc(String(r.message || '').replace(/^［網頁］\S*\s?/, ''))}</div></div></div>`).join('')}</div>` : ''}</div>
       <div class="card"><h2>會員帳號</h2><div class="row"><div class="logo" style="width:42px;height:42px;font-size:20px;border-radius:50%">${esc((me.name || me.email || '?').slice(0, 1).toUpperCase())}</div>
         <div class="sp"><div><b>${esc(me.name || '會員')}</b>${me.no ? ' <span class="muted">（' + esc(me.no) + '）</span>' : ''}</div><div class="small muted">${esc(me.email || '')}</div></div>
         <button class="btn" id="pfE">編輯</button><button class="btn" id="lo">登出</button></div>
-        <div class="grid g2" style="margin-top:10px;gap:8px">${[['會員代號', me.no], ['聯絡方式', me.contact || '未填寫'], ['註冊時間', me.registeredAt ? String(me.registeredAt).slice(0, 16) : ''], ['伺服器版本', me.serverVersion ? '第 ' + me.serverVersion + ' 版' : '第 4 版以前']].filter(([, v0]) => v0).map(([k, v0]) => `<div><div class="small muted">${k}</div><div class="small">${esc(String(v0))}</div></div>`).join('')}</div>
+        <div class="grid g2" style="margin-top:10px;gap:8px">${[['會員代號', me.no], ['聯絡方式', me.contact || '未填寫'], ['註冊時間', me.registeredAt ? String(me.registeredAt).slice(0, 16) : ''], ['伺服器版本', me.serverVersion ? '第 ' + me.serverVersion + ' 版' : '第 4 版以前'], ['網頁版本', webVerText(true)]].filter(([, v0]) => v0).map(([k, v0]) => `<div><div class="small muted">${k}</div><div class="small">${esc(String(v0))}</div></div>`).join('')}</div>
         <div class="tile" style="margin-top:12px"><div class="row"><div class="sp"><b>手機⇄網頁資料同步</b><div class="small muted"><span class="syncst"></span></div></div>
           <button class="btn sm" id="syn">立即同步</button><button class="btn sm" id="dl">從雲端重新下載</button></div>
           <div class="row" style="gap:8px;margin-top:8px"><span class="tag" style="${phoneMaster() ? 'color:var(--primary);border-color:var(--primary)' : ''}">📱 手機 → 網頁</span><span class="tag" style="${S.cloudDir === 'w2p' ? 'color:var(--primary);border-color:var(--primary)' : ''}">💻 網頁 → 手機</span></div>
@@ -3910,9 +4106,20 @@ VIEWS.settings = {
         ${Object.keys(p.lay || {}).length ? `<div class="list">${Object.keys(p.lay).map((k) => `<div class="it" style="cursor:default;padding:6px 2px"><div class="l"><div class="t1">${esc((LAY_PAGE_NAMES[k.split(':')[0]] || k) + (k.includes(':') ? ' › ' + k.split(':')[1] : ''))}</div><div class="t2">${(p.lay[k].cols || 2)} 欄 · 隱藏 ${(p.lay[k].hide || []).length} 張</div></div><button class="btn sm" data-layrs="${esc(k)}">恢復預設</button></div>`).join('')}</div>
           <button class="btn sm" id="layAll" style="margin-top:8px">全部恢復預設</button>` : '<div class="small muted">目前沒有自訂的頁面。</div>'}</div>
       ${aiSettingsHtml()}
-      <div class="card"><h2>行情更新</h2>
-        <div class="field"><label>台股盤中更新頻率</label><div class="seg">${opt('refresh', 5, '5 秒')}${opt('refresh', 10, '10 秒', 10)}${opt('refresh', 30, '30 秒')}${opt('refresh', 60, '1 分鐘')}</div></div>
-        <div class="small muted" style="margin-top:8px">非交易時間每分鐘更新一次；分頁在背景時暫停更新。</div></div>
+      <div class="card" id="rtCard"><h2>即時行情</h2>
+        <div class="field"><label>台股盤中來源</label><div class="seg">${opt('twSrc', 'twse', '證交所即時', 'twse')}${opt('twSrc', 'fugle', '富果串流')}</div></div>
+        <div class="small text2">${p.twSrc === 'fugle' ? '盤中以富果 WebSocket 串流同步（正在看的個股 → 持股 → 其他自選）；超出方案訂閱上限、未填金鑰或斷線時，自動改用證交所即時。盤後一律用證交所／櫃買收盤資料。' : '盤中使用證交所 MIS 即時行情（上市＋上櫃，依下方頻率更新），免金鑰。要更即時可改用富果串流（需金鑰）。'}</div>
+        <div class="field" style="margin-top:10px"><label>富果 Fugle API 金鑰（選填）</label>
+          ${aiHas('fugle') ? `<div class="row wrap" style="gap:6px"><span class="tag up">已儲存</span><button class="btn sm" id="fgT">測試連線</button><button class="btn sm" id="fgD">清除</button></div>`
+            : `<div class="row" style="gap:6px"><input id="fgK" type="password" autocomplete="off" placeholder="貼上富果 API Key"><button class="btn sm primary" id="fgS">儲存</button><button class="btn sm" id="fgT">測試</button></div>`}
+          <div class="small muted" style="margin-top:4px">金鑰以瀏覽器加密保存在這台電腦，不上傳、不同步到手機（手機 App 請另外在「設置 › 行情資料來源」填寫）。<a href="https://developer.fugle.tw/" target="_blank" rel="noopener">還沒有金鑰？到富果開發者平台免費申請 ›</a></div>
+          <div class="small" id="fgR" style="margin-top:4px"></div></div>
+        <div class="field"><label>台股盤中更新頻率（證交所）</label><div class="seg">${opt('refresh', 5, '5 秒')}${opt('refresh', 10, '10 秒', 10)}${opt('refresh', 30, '30 秒')}${opt('refresh', 60, '1 分鐘')}</div></div>
+        <div class="field"><label>美股盤中更新頻率（Yahoo Finance）</label><div class="seg">${opt('usRefresh', 0, '與台股相同', 0)}${opt('usRefresh', 30, '30 秒')}${opt('usRefresh', 60, '1 分鐘')}${opt('usRefresh', 300, '5 分鐘')}</div></div>
+        <div class="field"><label>分頁在背景時</label><div class="seg">${opt('bgRefresh', '', '暫停更新（省流量）', '')}${opt('bgRefresh', '1', '持續更新（提醒不漏）')}</div></div>
+        <div class="tile small" style="margin-top:6px"><div><b>目前狀態</b></div><div class="text2" id="rtSt" style="white-space:pre-line">${esc(rtStatusText())}</div></div>
+        <div class="row wrap" style="margin-top:8px;gap:6px"><button class="btn sm" id="rtNow">立即更新行情</button><a class="btn sm" href="#/diag">資料來源診斷</a></div>
+        <div class="small muted" style="margin-top:8px">非交易時間每分鐘更新一次。美股與指數使用 Yahoo Finance（免金鑰）；台指期等期貨資料請使用手機 App。</div></div>
       <div class="card"><h2>資料</h2>
         <div class="row wrap"><button class="btn" id="ex1">匯出交易紀錄 CSV</button><button class="btn" id="ex2">匯出持股 CSV</button><button class="btn" id="rsAll">重設網頁版面設定</button><a class="btn" href="#/diag">資料來源診斷</a></div>
         <div class="small muted" style="margin-top:8px">CSV 可用 Excel 開啟；交易 CSV 也能在手機 App「交易紀錄 › 匯入」使用。版面設定只存在這個瀏覽器。</div></div>
@@ -3923,7 +4130,7 @@ VIEWS.settings = {
   },
   bind() {
     const re = () => { savePref(); applyLook(); route(); };
-    $$('[data-k]').forEach((b) => b.onclick = () => { const k = b.dataset.k; const v = b.dataset.v; S.pref[k] = k === 'refresh' ? +v : v; re(); });
+    $$('[data-k]').forEach((b) => b.onclick = () => { const k = b.dataset.k; const v = b.dataset.v; S.pref[k] = k === 'refresh' || k === 'usRefresh' ? +v : v; re(); if (k === 'twSrc' || k === 'bgRefresh') { FG.authFail = ''; tick(); } });
     $('#ovTk').onchange = (e) => { S.pref.ovTicker = e.target.checked; savePref(); };
     const hidden = () => new Set(S.pref.ovHidden || OV_DEFAULT_HIDDEN);
     $$('[data-ovon]').forEach((c) => c.onchange = () => { const h = hidden(); if (c.checked) h.delete(c.dataset.ovon); else h.add(c.dataset.ovon); S.pref.ovHidden = Array.from(h); re(); });
@@ -3934,6 +4141,11 @@ VIEWS.settings = {
     $$('[data-wc]').forEach((c) => c.onchange = () => { const h = new Set(S.pref.wallHide || []); if (c.checked) h.delete(c.dataset.wc); else h.add(c.dataset.wc); S.pref.wallHide = Array.from(h); savePref(); });
     $('#rsAll').onclick = async () => { if ((await dialog('重設版面設定', '恢復網頁版預設的外觀與版面？（不影響資料）', [['', '取消'], ['ok', '重設', 'primary']])) !== 'ok') return; S.pref = { layout: 'wall', group: 'all', holdSort: 'mv', sub: 'KD', range: '6M' }; re(); };
     aiSettingsBind();
+    const fgOut = (ok, msg) => { const el = $('#fgR'); if (el) { el.textContent = msg; el.className = 'small ' + (ok ? 'up' : 'down'); } };
+    if ($('#fgS')) $('#fgS').onclick = async () => { const v = $('#fgK').value.trim(); if (!v) return toast('請先貼上金鑰'); await aiKeySet('fugle', v); FG.authFail = ''; fgStop(''); toast('已儲存富果金鑰'); route(); tick(); };
+    if ($('#fgD')) $('#fgD').onclick = async () => { await aiKeySet('fugle', ''); fgStop(''); toast('已清除富果金鑰'); route(); };
+    if ($('#fgT')) $('#fgT').onclick = async () => { const k = $('#fgK') ? $('#fgK').value.trim() : await aiKeyGet('fugle'); if (!k) return toast('請先貼上金鑰'); fgOut(true, '測試中…'); const [ok, msg] = await fgTest(k); fgOut(ok, msg); if (ok) { FG.authFail = ''; } };
+    $('#rtNow').onclick = async () => { S.usAt = {}; await tick(); toast('已更新行情'); };
     if ($('#instBtn')) $('#instBtn').onclick = () => installApp();
     $$('[data-layrs]').forEach((b) => b.onclick = () => { const l = { ...(S.pref.lay || {}) }; delete l[b.dataset.layrs]; S.pref.lay = l; savePref(); route(); });
     if ($('#layAll')) $('#layAll').onclick = () => { delete S.pref.lay; savePref(); route(); };
@@ -4311,28 +4523,403 @@ async function liveBars(sym, range = '2y') {
   if (q.price && !isUs(sym) && twOpen()) { const last = b[b.length - 1]; const cur = { d: today, o: q.open || q.price, h: Math.max(q.high || q.price, q.price), l: Math.min(q.low || q.price, q.price), c: q.price, v: q.volLots || 0 }; if (last.d === today) b[b.length - 1] = cur; else b.push(cur); }
   return b;
 }
+// ───────── 經典型態（與 App ChartPatterns 相同規則）：頭肩頂底、M 頭 W 底、三角、楔形、旗形、支撐壓力轉換、訂單塊 ─────────
+const CP_T = {
+  DOUBLE_BOTTOM: ['W 底（雙重底）', true, '進場：收盤站上頸線｜停損：右底下方｜目標：型態高度'],
+  DOUBLE_TOP: ['M 頭（雙重頂）', false, '警示：收盤跌破頸線｜防守：最後反彈高點上方｜下看：型態高度'],
+  HS_BOTTOM: ['頭肩底', true, '進場：收盤站上頸線｜停損：右肩下方｜目標：頭部到頸線的高度'],
+  HS_TOP: ['頭肩頂', false, '警示：收盤跌破頸線｜防守：右肩上方｜下看：頭部到頸線的高度'],
+  ASC_TRIANGLE: ['上升三角', true, '進場：收盤突破水平壓力｜停損：最後一個較高低點下方｜目標：三角形高度'],
+  DESC_TRIANGLE: ['下降三角', false, '警示：收盤跌破水平支撐｜防守：最後一個較低高點上方｜下看：三角形高度'],
+  SYM_TRIANGLE: ['對稱三角', null, '進場：收盤突破上緣（跌破下緣則轉弱）｜停損：最後一個較高低點下方｜目標：三角形高度'],
+  FALLING_WEDGE: ['下降楔形', true, '進場：收盤突破楔形上緣｜停損：最後低點下方｜目標：楔形起點高點'],
+  RISING_WEDGE: ['上升楔形', false, '警示：收盤跌破楔形下緣｜防守：最後高點上方｜下看：楔形起點低點'],
+  BULL_FLAG: ['多頭旗形', true, '進場：收盤突破旗形上緣｜停損：旗形最後低點下方｜目標：旗桿高度'],
+  BEAR_FLAG: ['空頭旗形', false, '警示：收盤跌破旗形下緣｜防守：旗形最後高點上方｜下看：旗桿高度'],
+  RESIST_FLIP: ['壓力轉支撐', true, '進場：突破後回測舊壓力守住｜停損：回測低點下方｜目標：前波高點'],
+  SUPPORT_FLIP: ['支撐轉壓力', false, '警示：跌破後反彈到舊支撐被壓回｜防守：反彈高點上方｜下看：前波低點'],
+  ORDER_BLOCK: ['多方訂單塊回測', true, '進場：拉回訂單塊內｜停損：訂單塊下方｜目標：前波高點'],
+};
+/** 回測參考（台股 30 檔＋美股 7 檔、近 2 年日 K）：突破後 40 根內先到目標的比例與次數 */
+const CP_HIST = { DOUBLE_BOTTOM: [75, 116], DOUBLE_TOP: [33, 102], HS_BOTTOM: [47, 32], HS_TOP: [38, 38], ASC_TRIANGLE: [86, 24], DESC_TRIANGLE: [29, 16], SYM_TRIANGLE: [36, 129],
+  FALLING_WEDGE: [47, 113], RISING_WEDGE: [23, 148], BULL_FLAG: [43, 208], BEAR_FLAG: [50, 9], RESIST_FLIP: [50, 267], SUPPORT_FLIP: [56, 123], ORDER_BLOCK: [0, 8] };
+const CP_BASE = { DOUBLE_BOTTOM: 62, ASC_TRIANGLE: 56, FALLING_WEDGE: 58, HS_BOTTOM: 58, RESIST_FLIP: 58, BULL_FLAG: 56, SYM_TRIANGLE: 52, SUPPORT_FLIP: 52,
+  HS_TOP: 54, DOUBLE_TOP: 44, RISING_WEDGE: 40, DESC_TRIANGLE: 46, BEAR_FLAG: 46, ORDER_BLOCK: 44 };
+const CP_ST = { F: '成形中・待突破', B: '已突破', R: '突破後回測' };
+function cpHistText(t) { const h = CP_HIST[t]; if (!h) return ''; const [w, n] = h; return '回測參考：台美股 37 檔近 2 年出現 ' + n + ' 次，突破後 40 根內先到' + (CP_T[t][1] === false ? '下看' : '') + '目標 ' + w + '%' + (n < 20 ? '（樣本少，僅供參考）' : ''); }
+function cpName(p) { return p.type === 'SYM_TRIANGLE' ? CP_T[p.type][0] + (p.bull ? '（向上）' : '（向下）') : CP_T[p.type][0]; }
+function cpAction(p, f = fmtPx) {
+  if (p.bull) return p.state === 'F' ? `等收盤站上 ${f(p.entry)} 再進場；跌破 ${f(p.stop)} 型態失效。目標 ${f(p.target)}。`
+    : p.state === 'B' ? `已收盤突破，可在 ${f(p.entry)} 附近進場，收盤跌破 ${f(p.stop)} 停損，目標 ${f(p.target)}。`
+    : `突破後回測守住，可在 ${f(p.entry)} 附近分批，收盤跌破 ${f(p.stop)} 停損，目標 ${f(p.target)}。`;
+  return p.state === 'F' ? `接近 ${f(p.entry)}，若收盤跌破，持股者減碼、空手者避開；站上 ${f(p.stop)} 型態失效。`
+    : p.state === 'B' ? `已收盤跌破 ${f(p.entry)}，持股者減碼、空手者避開，下看 ${f(p.target)}；站回 ${f(p.stop)} 以上才解除警示。`
+    : `反彈到 ${f(p.entry)} 被壓回，持股者趁反彈減碼，下看 ${f(p.target)}；站回 ${f(p.stop)} 以上才解除警示。`;
+}
+function cpAtr(cs, n = 14) {
+  const e = cs.length - 1; if (e < 1) return cs.length ? cs[0].h - cs[0].l : 0;
+  const from = Math.max(1, e - n + 1); let s = 0; for (let i = from; i <= e; i++) { const p = cs[i - 1].c; s += Math.max(cs[i].h - cs[i].l, Math.abs(cs[i].h - p), Math.abs(cs[i].l - p)); } return s / (e - from + 1);
+}
+/** 波段高低點：左右各 k 根內的極值，再以 minMove 過濾成高低交替 */
+function cpPivots(cs, from, k, minMove) {
+  const raw = [];
+  for (let i = Math.max(from, k); i < cs.length - k; i++) {
+    const h = cs[i].h, l = cs[i].l; let isH = true, isL = true;
+    for (let j = i - k; j <= i + k; j++) { if (j === i) continue;
+      if (j < i) { if (cs[j].h >= h) isH = false; if (cs[j].l <= l) isL = false; } else { if (cs[j].h > h) isH = false; if (cs[j].l < l) isL = false; } }
+    if (isH) raw.push({ i, v: h, high: true }); if (isL) raw.push({ i, v: l, high: false });
+  }
+  const out = [];
+  for (const p of raw) { const last = out[out.length - 1];
+    if (!last) out.push(p);
+    else if (p.high === last.high) { if ((p.high && p.v > last.v) || (!p.high && p.v < last.v)) out[out.length - 1] = p; }
+    else if (Math.abs(p.v - last.v) >= minMove && p.i !== last.i) out.push(p); }
+  return out;
+}
+const cpAvg = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0);
+const cpRange = (a, b) => { const r = []; for (let k = a; k < b; k++) r.push(k); return r; };
+function cpCtx(cs, atr, tick) {
+  const n = cs.length, last = cs[n - 1]; const cl = cs.map((x) => x.c);
+  const ma = cpAvg(cl.slice(-60)), ma0 = cpAvg(cl.slice(0, -10).slice(-60));
+  const up = last.c > ma && ma > ma0, down = last.c < ma && ma < ma0;
+  return { cs, n, last, atr, tick, up, down,
+    snap(v) { const t = tick(v); return t > 0 ? Math.round(v / t) * t : v; },
+    aligned(b) { return b ? up : down; },
+    avgVol(j, len = 20) { const f = Math.max(0, j - len); if (j <= f) return 0; let s = 0; for (let k = f; k < j; k++) s += cs[k].v || 0; return s / (j - f); } };
+}
+function cpClamp(x, bull, entry, stop) { const d = Math.min(3 * x.atr, Math.max(1 * x.atr, Math.abs(entry - stop))); return x.snap(bull ? entry - d : entry + d); }
+/** 突破後的共通判斷：狀態、失效、達標、量能、盈虧比與信心分數 */
+function cpFinish(x, type, bull, start, lastPivot, level, stop0, target0, segs, marks = [], o = {}) {
+  const extra = o.extra || 0; let note = o.note || '';
+  if (o.needTrend && !x.aligned(bull)) return null;
+  const cs = x.cs, n = x.n; let j = null;
+  for (let k = lastPivot + 1; k < n; k++) { const c = cs[k].c; if (bull ? c > level(k) : c < level(k)) { j = k; break; } }
+  let state, at;
+  if (j == null) {
+    const lv = level(n - 1), c = x.last.c;
+    const near = bull ? c <= lv && lv - c <= 1.2 * x.atr : c >= lv && c - lv <= 1.2 * x.atr;
+    if (!near || lastPivot < n - 40) return null; state = 'F'; at = n - 1;
+  } else {
+    if (n - 1 - j > 10) return null; at = j; const lvj = level(j);
+    let away = null; for (let k = j + 1; k < n; k++) if (bull ? cs[k].h >= lvj + x.atr : cs[k].l <= lvj - x.atr) { away = k; break; }
+    let back = false; if (away != null) for (let k = away + 1; k < n; k++) if (bull ? cs[k].l <= lvj + 0.5 * x.atr : cs[k].h >= lvj - 0.5 * x.atr) { back = true; break; }
+    state = back && j < n - 1 ? 'R' : 'B';
+  }
+  const entry = x.snap(state === 'F' ? level(n - 1) + (bull ? 1 : -1) * x.tick(level(n - 1)) : level(at));
+  const stop = cpClamp(x, bull, entry, stop0); const target = x.snap(target0(entry));
+  if (bull ? stop >= entry || target <= entry : stop <= entry || target >= entry) return null;
+  for (let k = lastPivot + 1; k < n; k++) { const c = cs[k];
+    if (bull ? c.c < stop0 : c.c > stop0) return null;
+    if (k >= at && state !== 'F') { if (bull ? c.c < stop : c.c > stop) return null; if (bull ? c.h >= target : c.l <= target) return null; } }
+  const rr = Math.abs(target - entry) / Math.abs(entry - stop); if (rr < 0.8) return null;
+  let conf = (CP_BASE[type] || 52) + extra + (state === 'F' ? 0 : state === 'B' ? 8 : 10); let volOk = false;
+  if (state !== 'F') { const av = x.avgVol(at); if (av > 0 && (cs[at].v || 0) >= av * 1.3) { conf += 10; volOk = true; } if (o.needVol && !volOk) return null; }
+  if (x.aligned(bull)) conf += 6;
+  if (rr >= 2) conf += 3; else if (rr < 1.2) conf -= 6;
+  if (state !== 'F' && Math.abs(x.last.c - entry) > 1.5 * x.atr) { conf -= 10; note = (note ? note + '；' : '') + '現價已遠離進場點，不追價，等拉回'; }
+  return { type, bull, state, start, at, entry, stop, target, rr, conf: Math.max(30, Math.min(92, conf)), segs, marks, box: null, note, volOk };
+}
+const cpEq = (p) => ({ ...p, segs: p.segs.concat([{ i1: p.at, v1: p.entry, i2: p.at, v2: p.target, kind: 'H', label: '等高' }]) });
+function cpDoubles(x, pv) {
+  const res = [], cs = x.cs, n = x.n, a = x.atr;
+  for (let t = pv.length - 3; t >= Math.max(0, pv.length - 6); t--) {
+    const p1 = pv[t], mid = pv[t + 1], p2 = pv[t + 2];
+    if (p1.high !== p2.high || mid.high === p1.high) continue;
+    if (p2.i < n - 40 || p2.i - p1.i < 6 || p2.i - p1.i > 80) continue;
+    if (Math.abs(p1.v - p2.v) > Math.max(0.7 * a, 0.012 * mid.v)) continue;
+    const bull = !p1.high; const ext = bull ? Math.min(p1.v, p2.v) : Math.max(p1.v, p2.v); const depth = Math.abs(mid.v - ext);
+    if (depth < 2 * a) continue;
+    const pre = cpRange(Math.max(0, p1.i - 25), p1.i).map((k) => cs[k].c); if (!pre.length) continue;
+    if (bull && Math.max(...pre) < p1.v + depth * 0.7) continue;
+    if (!bull && Math.min(...pre) > p1.v - depth * 0.7) continue;
+    const neck = mid.v; let stop;
+    if (bull) stop = p2.v - 0.2 * a;
+    else { let lh = null; for (let k = p2.i + 1; k < n; k++) { if (cs[k].c < neck) break; lh = lh == null ? cs[k].h : Math.max(lh, cs[k].h); } stop = (lh != null && lh < p2.v ? lh : p2.v) + 0.2 * a; }
+    const type = bull ? 'DOUBLE_BOTTOM' : 'DOUBLE_TOP';
+    const segs = [{ i1: p1.i, v1: p1.v, i2: mid.i, v2: mid.v, kind: 'O' }, { i1: mid.i, v1: mid.v, i2: p2.i, v2: p2.v, kind: 'O' },
+      { i1: Math.max(0, p1.i - 3), v1: neck, i2: n - 1, v2: neck, kind: 'L', label: '頸線' }, { i1: p1.i, v1: ext, i2: p1.i, v2: neck, kind: 'H', label: '高度' }];
+    const marks = bull ? [{ i: p1.i, v: p1.v, text: '底 1', above: false }, { i: p2.i, v: p2.v, text: '底 2', above: false }] : [{ i: p1.i, v: p1.v, text: '頂 1', above: true }, { i: p2.i, v: p2.v, text: '頂 2', above: true }];
+    const sym = 1 - Math.abs(p1.v - p2.v) / Math.max(0.7 * a, 1e-9);
+    const p = cpFinish(x, type, bull, p1.i, p2.i, () => neck, stop, (e) => (bull ? e + depth : e - depth), segs, marks, { extra: Math.trunc(sym * 6) });
+    if (p) res.push(cpEq(p));
+  }
+  return res;
+}
+function cpHS(x, pv) {
+  const res = [], cs = x.cs, n = x.n, a = x.atr;
+  for (let t = pv.length - 5; t >= Math.max(0, pv.length - 8); t--) {
+    if (t < 0) break;
+    const s1 = pv[t], n1 = pv[t + 1], hd = pv[t + 2], n2 = pv[t + 3], s2 = pv[t + 4];
+    if (s1.high !== hd.high || hd.high !== s2.high || n1.high === s1.high || n2.high === s1.high) continue;
+    if (s2.i < n - 40 || s2.i - s1.i > 100) continue;
+    const top = s1.high; const sh = top ? Math.max(s1.v, s2.v) : Math.min(s1.v, s2.v);
+    if (top && hd.v < sh + 0.5 * a) continue; if (!top && hd.v > sh - 0.5 * a) continue;
+    const slope = (n2.v - n1.v) / (n2.i - n1.i); const neck = (k) => n1.v + slope * (k - n1.i);
+    const hgt = Math.abs(hd.v - neck(hd.i)); if (hgt < 2 * a) continue;
+    if (Math.abs(s1.v - s2.v) > Math.max(a, 0.35 * hgt)) continue;
+    const sGap = top ? Math.min(s1.v, s2.v) - Math.max(n1.v, n2.v) : Math.min(n1.v, n2.v) - Math.max(s1.v, s2.v); if (sGap < 0.8 * a) continue;
+    if (Math.abs(n2.v - n1.v) > 0.6 * hgt) continue;
+    const pre = cpRange(Math.max(0, s1.i - 25), s1.i).map((k) => cs[k].c); if (!pre.length) continue;
+    if (top && Math.min(...pre) > n1.v) continue; if (!top && Math.max(...pre) < n1.v) continue;
+    const bull = !top; const type = bull ? 'HS_BOTTOM' : 'HS_TOP'; const stop = bull ? s2.v - 0.2 * a : s2.v + 0.2 * a;
+    const l0 = Math.max(0, s1.i - 2);
+    const segs = [{ i1: s1.i, v1: s1.v, i2: n1.i, v2: n1.v, kind: 'O' }, { i1: n1.i, v1: n1.v, i2: hd.i, v2: hd.v, kind: 'O' }, { i1: hd.i, v1: hd.v, i2: n2.i, v2: n2.v, kind: 'O' }, { i1: n2.i, v1: n2.v, i2: s2.i, v2: s2.v, kind: 'O' },
+      { i1: l0, v1: neck(l0), i2: n - 1, v2: neck(n - 1), kind: 'L', label: '頸線' }, { i1: hd.i, v1: hd.v, i2: hd.i, v2: neck(hd.i), kind: 'H', label: '高度' }];
+    const marks = [{ i: s1.i, v: s1.v, text: '左肩', above: top }, { i: hd.i, v: hd.v, text: '頭', above: top }, { i: s2.i, v: s2.v, text: '右肩', above: top }];
+    const p = cpFinish(x, type, bull, s1.i, s2.i, neck, stop, (e) => (bull ? e + hgt : e - hgt), segs, marks); if (p) res.push(cpEq(p));
+  }
+  return res;
+}
+function cpTriangle(x, pv) {
+  const cs = x.cs, n = x.n, a = x.atr;
+  for (let m = 6; m >= 4; m--) {
+    if (pv.length < m) continue;
+    const ps = pv.slice(-m); const hs = ps.filter((p) => p.high), ls = ps.filter((p) => !p.high);
+    if (hs.length < 2 || ls.length < 2) continue;
+    const start = ps[0].i, endP = ps[ps.length - 1].i, span = endP - start;
+    if (span < 12 || span > 80 || endP < n - 25) continue;
+    const h1 = hs[0], h2 = hs[hs.length - 1], l1 = ls[0], l2 = ls[ls.length - 1];
+    const su = (h2.v - h1.v) / (h2.i - h1.i), sl = (l2.v - l1.v) / (l2.i - l1.i);
+    const up = (k) => h1.v + su * (k - h1.i), lo = (k) => l1.v + sl * (k - l1.i);
+    if (hs.some((p) => p.v > up(p.i) + 0.5 * a) || ls.some((p) => p.v < lo(p.i) - 0.5 * a)) continue;
+    const w0 = up(start) - lo(start), w1 = up(endP) - lo(endP);
+    if (w0 < 2 * a || w1 <= 0 || w1 > w0 * 0.75) continue;
+    const flatU = Math.abs(su) * span <= 0.8 * a, flatL = Math.abs(sl) * span <= 0.8 * a;
+    const type = flatU && sl > 0 ? 'ASC_TRIANGLE' : flatL && su < 0 ? 'DESC_TRIANGLE' : su < 0 && sl > 0 ? 'SYM_TRIANGLE' : su > 0 && sl > 0 && sl > su ? 'RISING_WEDGE' : su < 0 && sl < 0 && su < sl ? 'FALLING_WEDGE' : null;
+    if (!type) continue;
+    const trendUp = cs[start].c >= cs[Math.max(0, start - 30)].c;
+    let bull;
+    if (type === 'SYM_TRIANGLE') {
+      let ju = null, jd = null; for (let k = endP + 1; k < n; k++) { if (ju == null && cs[k].c > up(k)) ju = k; if (jd == null && cs[k].c < lo(k)) jd = k; }
+      bull = ju != null && (jd == null || ju < jd) ? true : jd != null ? false : trendUp;
+    } else bull = CP_T[type][1];
+    let brk = false; for (let k = endP + 1; k < n; k++) if (bull ? cs[k].c > up(k) : cs[k].c < lo(k)) { brk = true; break; }
+    if (!brk && up(n - 1) <= lo(n - 1)) continue;
+    const stop = bull ? l2.v - 0.2 * a : h2.v + 0.2 * a;
+    const target = type === 'FALLING_WEDGE' ? () => h1.v : type === 'RISING_WEDGE' ? () => l1.v : (e) => (bull ? e + w0 : e - w0);
+    const e = n - 1;
+    const segs = [{ i1: h1.i, v1: h1.v, i2: e, v2: up(e), kind: 'L', label: type === 'ASC_TRIANGLE' ? '壓力' : '上緣' }, { i1: l1.i, v1: l1.v, i2: e, v2: lo(e), kind: 'L', label: type === 'DESC_TRIANGLE' ? '支撐' : '下緣' },
+      { i1: start, v1: lo(start), i2: start, v2: up(start), kind: 'H', label: '高度' }];
+    const p = cpFinish(x, type, bull, start, endP, (k) => (bull ? up(k) : lo(k)), stop, target, segs, [], { needTrend: type === 'SYM_TRIANGLE' || type === 'DESC_TRIANGLE', needVol: type === 'ASC_TRIANGLE' });
+    if (!p) continue;
+    return type === 'FALLING_WEDGE' || type === 'RISING_WEDGE' ? p : cpEq(p);
+  }
+  return null;
+}
+function cpFlag(x, bull) {
+  const cs = x.cs, n = x.n, a = x.atr; let best = null;
+  for (let p = n - 20; p <= n - 4; p++) { if (p < 12) continue;
+    for (let s = p - 10; s <= p - 3; s++) { if (s < 0) continue;
+      const mv = bull ? cs[p].h - cs[s].l : cs[s].h - cs[p].l;
+      let ext = true; for (let k = s; k <= p; k++) if (bull ? cs[k].h > cs[p].h : cs[k].l < cs[p].l) { ext = false; break; }
+      if (!ext || mv < 4 * a) continue; if (!best || mv > best[2]) best = [s, p, mv]; } }
+  if (!best) return null; const [s, p, pole] = best;
+  const fit = (idx, v) => { const mx = cpAvg(idx), my = cpAvg(idx.map(v)); let sxx = 0, sxy = 0; idx.forEach((k) => { sxx += (k - mx) ** 2; sxy += (k - mx) * (v(k) - my); }); const b = sxx > 0 ? sxy / sxx : 0; return (k) => my + b * (k - mx); };
+  let j = null, fitU = () => 0, fitL = () => 0, bodyEnd = n - 1;
+  for (let k = p + 4; k < n; k++) {
+    const idx = cpRange(p + 1, k); const u = fit(idx, (q) => cs[q].h), l = fit(idx, (q) => cs[q].l);
+    const upM = Math.max(...idx.map((q) => cs[q].h)), dn = Math.min(...idx.map((q) => cs[q].l));
+    const brk = bull ? cs[k].c > Math.max(u(k), 0) && cs[k].c > u(k) : cs[k].c < l(k);
+    if (brk) { j = k; fitU = (q) => Math.min(u(q), upM); fitL = (q) => Math.max(l(q), dn); bodyEnd = k - 1; break; }
+  }
+  const idx = cpRange(p + 1, bodyEnd + 1); if (idx.length < 3 || idx.length > 15) return null;
+  if (j == null) { fitU = fit(idx, (q) => cs[q].h); fitL = fit(idx, (q) => cs[q].l); }
+  const fh = Math.max(...idx.map((q) => cs[q].h)), fl = Math.min(...idx.map((q) => cs[q].l));
+  const retr = bull ? cs[p].h - fl : fh - cs[p].l; if (retr > pole * 0.5 || fh - fl > pole * 0.55) return null;
+  const slopeU = fitU(bodyEnd) - fitU(p + 1), slopeL = fitL(bodyEnd) - fitL(p + 1);
+  if (bull && slopeU > 0.8 * a) return null; if (!bull && slopeL < -0.8 * a) return null;
+  const pennant = fitU(p + 1) - fitL(p + 1) > 1.5 * (fitU(bodyEnd) - fitL(bodyEnd));
+  const tail = idx.slice(-3); const stop = bull ? Math.min(...tail.map((q) => cs[q].l)) - 0.2 * a : Math.max(...tail.map((q) => cs[q].h)) + 0.2 * a;
+  const type = bull ? 'BULL_FLAG' : 'BEAR_FLAG'; const e = n - 1, e2 = Math.min(e, bodyEnd + 2);
+  const segs = [{ i1: s, v1: bull ? cs[s].l : cs[s].h, i2: s, v2: bull ? cs[p].h : cs[p].l, kind: 'H', label: '旗桿' },
+    { i1: p + 1, v1: fitU(p + 1), i2: e2, v2: fitU(e2), kind: 'L', label: pennant ? '三角旗' : '旗形' }, { i1: p + 1, v1: fitL(p + 1), i2: e2, v2: fitL(e2), kind: 'L' }];
+  const fu = fitU, fl2 = fitL; const lv = j != null ? () => (bull ? fu(j) : fl2(j)) : (k) => (bull ? fu(k) : fl2(k));
+  const pt = cpFinish(x, type, bull, s, bodyEnd, lv, stop, (en) => (bull ? en + pole : en - pole), segs, [], { note: pennant ? '三角旗（收斂整理）' : '', needTrend: true, needVol: !bull });
+  return pt ? cpEq(pt) : null;
+}
+function cpFlip(x, pv, bull) {
+  const cs = x.cs, n = x.n, a = x.atr;
+  const touches = pv.filter((p) => p.high === bull && p.i >= n - 90 && p.i < n - 8); let best = null;
+  for (const t of touches) { const grp = touches.filter((p) => Math.abs(p.v - t.v) <= 0.5 * a);
+    if (grp.length >= 2 && (!best || grp[grp.length - 1].i > best[1][best[1].length - 1].i)) best = [cpAvg(grp.map((p) => p.v)), grp]; }
+  if (!best) return null; const [lv, grp] = best; const lastTouch = Math.max(...grp.map((p) => p.i));
+  let b = null; for (let k = lastTouch + 1; k < n - 2; k++) if (bull ? cs[k].c > lv + 0.3 * a : cs[k].c < lv - 0.3 * a) { b = k; break; }
+  if (b == null || b < n - 40) return null;
+  const after = cpRange(b + 1, n); if (after.length < 3) return null;
+  let r = null; for (const k of after) if (bull ? cs[k].l <= lv + 0.4 * a : cs[k].h >= lv - 0.4 * a) r = k;
+  if (r == null || r < n - 4 || r <= b + 1) return null;
+  if (after.some((k) => (bull ? cs[k].c < lv - 0.3 * a : cs[k].c > lv + 0.3 * a))) return null;
+  if (bull ? x.last.c < lv : x.last.c > lv) return null;
+  const rg = cpRange(b, r + 1); const swing = bull ? Math.max(...rg.map((k) => cs[k].h)) : Math.min(...rg.map((k) => cs[k].l));
+  const tl = cpRange(r - 2, n).filter((k) => k > b); const stop = bull ? Math.min(...tl.map((k) => cs[k].l)) - 0.2 * a : Math.max(...tl.map((k) => cs[k].h)) + 0.2 * a;
+  const entry = x.snap(lv), target = x.snap(swing), st = cpClamp(x, bull, entry, stop);
+  if (bull ? target - entry < a || st >= entry : entry - target < a || st <= entry) return null;
+  const rr = Math.abs(target - entry) / Math.abs(entry - st); if (rr < 1) return null;
+  const type = bull ? 'RESIST_FLIP' : 'SUPPORT_FLIP'; if (!bull && !x.aligned(false)) return null;
+  let conf = (CP_BASE[type] || 55) + 10 + (grp.length >= 3 ? 4 : 0) + (x.aligned(bull) ? 6 : 0);
+  const av = x.avgVol(b); const volOk = av > 0 && (cs[b].v || 0) >= av * 1.3; if (volOk) conf += 8; if (rr >= 2) conf += 3;
+  const g0 = Math.min(...grp.map((p) => p.i));
+  return { type, bull, state: 'R', start: g0, at: r, entry, stop: st, target, rr, conf: Math.max(30, Math.min(90, conf)),
+    segs: [{ i1: g0, v1: lv, i2: n - 1, v2: lv, kind: 'L', label: bull ? '舊壓力→支撐' : '舊支撐→壓力' }],
+    marks: [{ i: b, v: bull ? cs[b].h : cs[b].l, text: bull ? '突破' : '跌破', above: bull }, { i: r, v: bull ? cs[r].l : cs[r].h, text: '回測', above: !bull }], box: null, note: '', volOk };
+}
+function cpOrderBlock(x) {
+  const cs = x.cs, n = x.n, a = x.atr;
+  for (let k = n - 5; k >= n - 30; k--) {
+    if (k < 22) break; const ob = cs[k]; if (ob.c >= ob.o) continue;
+    let imp = null; for (let q = k + 1; q <= Math.min(n - 1, k + 3); q++) if (cs[q].c >= ob.h + 2 * a) { imp = q; break; } if (imp == null) continue;
+    const prevHigh = Math.max(...cpRange(k - 20, k).map((q) => cs[q].h)); if (Math.max(...cpRange(k + 1, imp + 1).map((q) => cs[q].c)) <= prevHigh) continue;
+    const rest = cpRange(imp + 1, n); if (rest.length < 2) continue; if (rest.some((q) => cs[q].c < ob.l)) continue;
+    let r = null; for (const q of rest) if (cs[q].l <= ob.h) r = q; if (r == null || r < n - 3) continue;
+    const ih = Math.max(...cpRange(k + 1, r).map((q) => cs[q].h));
+    const entry = x.snap(ob.h), stop = cpClamp(x, true, entry, ob.l - 0.2 * a), target = x.snap(ih);
+    if (target - entry < 1.5 * a) continue; const rr = (target - entry) / (entry - stop); if (rr < 1) continue;
+    const sweep = Math.min(...cpRange(k - 3, k + 1).map((q) => cs[q].l)) < Math.min(...cpRange(k - 20, k - 3).map((q) => cs[q].l)); if (!sweep) continue;
+    let conf = (CP_BASE.ORDER_BLOCK || 54) + 10 + (rr >= 2 ? 3 : 0) + (x.aligned(true) ? 6 : 0);
+    const av = x.avgVol(imp); const volOk = av > 0 && (cs[imp].v || 0) >= av * 1.5; if (volOk) conf += 6;
+    return { type: 'ORDER_BLOCK', bull: true, state: 'R', start: k, at: r, entry, stop, target, rr, conf: Math.max(30, Math.min(90, conf)),
+      segs: [{ i1: k, v1: ih, i2: r, v2: ih, kind: 'L', label: '前高' }], marks: [{ i: r, v: cs[r].l, text: '回測', above: false }],
+      box: { i1: k, i2: n - 1, lo: ob.l, hi: ob.h, label: '訂單塊' }, note: '訂單塊前先掃過前低（流動性掃蕩＋訂單塊）', volOk };
+  }
+  return null;
+}
+/** 經典型態偵測（近 120 根，最多 4 個；成形中的排後面） */
+function chartPatterns(cs, tick = () => 0.01) {
+  if (!cs || cs.length < 40) return [];
+  const atr = cpAtr(cs); if (!(atr > 0)) return [];
+  const x = cpCtx(cs, atr, tick); const pv = cpPivots(cs, Math.max(0, cs.length - 120), 3, atr);
+  let out = []; const add = (p) => { if (p) out.push(p); }; const run = (f) => { try { f(); } catch (e) { console.warn('chartPatterns', e); } };
+  run(() => cpDoubles(x, pv).forEach(add)); run(() => cpHS(x, pv).forEach(add)); run(() => add(cpTriangle(x, pv)));
+  run(() => { add(cpFlag(x, true)); add(cpFlag(x, false)); }); run(() => { add(cpFlip(x, pv, true)); add(cpFlip(x, pv, false)); }); run(() => add(cpOrderBlock(x)));
+  const REV = ['HS_TOP', 'HS_BOTTOM', 'DOUBLE_TOP', 'DOUBLE_BOTTOM'], TRI = ['ASC_TRIANGLE', 'DESC_TRIANGLE', 'SYM_TRIANGLE', 'RISING_WEDGE', 'FALLING_WEDGE'];
+  const rev = out.filter((p) => REV.includes(p.type)); out = out.filter((p) => !(TRI.includes(p.type) && rev.some((q) => Math.abs(q.at - p.at) <= 3)));
+  const by = {}; out.forEach((p) => { const o = by[p.type]; if (!o || p.conf * 1000 + p.at > o.conf * 1000 + o.at) by[p.type] = p; });
+  return Object.values(by).sort((a, b) => ((b.state !== 'F') - (a.state !== 'F')) || b.conf - a.conf || b.at - a.at).slice(0, 4)
+    .map((p) => ({ ...p, id: 'cp:' + p.type, name: cpName(p) }));
+}
+/** 經典型態修正進場建議（與 App withPatterns 相同） */
+function withPatterns(r, e, pats) {
+  const n = r.cs.length; const f = fmtPx; const fresh = (p) => p.state !== 'F' && n - 1 - p.at <= 3 && p.conf >= 68;
+  const best = (l) => l.reduce((a, p) => (!a || p.conf > a.conf ? p : a), null);
+  const bull = best(pats.filter((p) => p.bull && fresh(p))), bear = best(pats.filter((p) => !p.bull && fresh(p)));
+  const tag = (p) => '【' + p.name + '｜' + CP_ST[p.state] + '】' + cpAction(p);
+  if (bear && (!bull || bear.conf >= bull.conf)) { if (e.level <= 0) return { ...e, reason: tag(bear) + ' ' + e.reason }; return { label: '觀望', level: 0, reason: tag(bear) + ' ' + e.reason, tip: '減碼，站回 ' + f(bear.stop) + ' 前不加碼' }; }
+  if (bull && e.level >= -1 && e.level <= 1 && r.dir !== -2) { let lv = Math.min(2, Math.max(e.level + 1, 1)); if (bull.rr < 1.2) lv = Math.min(lv, 1); return { label: lv >= 2 ? '建議進場' : '可分批進場', level: lv, reason: tag(bull) + ' ' + e.reason, tip: '續抱，跌破 ' + f(bull.stop) + ' 減碼' }; }
+  return e;
+}
+/** 支撐壓力計畫：近 20 根低點為支撐、高點為壓力（空頭走勢改為持股防守） */
+function cpSimplePlan(cs, tick = () => 0.01) {
+  if (!cs || cs.length < 15) return null; const a = cpAtr(cs); if (!(a > 0)) return null;
+  const x = cpCtx(cs, a, tick); const n = cs.length; const win = cs.slice(-20); const sup = Math.min(...win.map((b) => b.l)), res = Math.max(...win.map((b) => b.h)); const c = cs[n - 1].c;
+  const ma = cpAvg(cs.slice(-20).map((b) => b.c)), ma0 = cpAvg(cs.slice(0, -5).slice(-20).map((b) => b.c)); const bear = c < ma && ma < ma0; const from = n - win.length;
+  const segs = [{ i1: from, v1: sup, i2: n - 1, v2: sup, kind: 'L', label: '支撐' }, { i1: from, v1: res, i2: n - 1, v2: res, kind: 'L', label: '壓力' }];
+  const entry = x.snap(c);
+  if (!bear) { const stop = cpClamp(x, true, entry, sup - 0.3 * a); const target = x.snap(res - entry >= a ? res : entry + 2 * (entry - stop)); return cpOv('sr', '支撐壓力計畫・偏多', true, n - 1, entry, stop, target, segs); }
+  const stop = cpClamp(x, false, entry, Math.min(res, c + 3 * a) + 0.3 * a); const target = x.snap(entry - sup >= a ? sup : entry - 2 * (stop - entry));
+  return cpOv('sr', '支撐壓力計畫・空頭防守', false, n - 1, entry, stop, target, segs);
+}
+function cpOv(id, title, bull, start, entry, stop, target, segs = [], marks = [], box = null) {
+  return { id, title, bull, start, entry, stop, target, segs, marks, box, rr: Math.abs(entry - stop) > 0 ? Math.abs(target - entry) / Math.abs(entry - stop) : 0,
+    minIdx: Math.min(start, ...segs.map((s) => Math.min(s.i1, s.i2)), ...marks.map((m) => m.i), ...(box ? [box.i1] : [])),
+    prices: [entry, stop, target].concat(segs.flatMap((s) => [s.v1, s.v2]), marks.map((m) => m.v), box ? [box.lo, box.hi] : []) };
+}
+const KS_SIGID = (s) => 'ks:' + s.st + (s.bull ? '+' : '-');
+/** 可畫在圖上的交易計畫：經典型態＋K 棒策略訊號＋K 線操作計畫＋支撐壓力 */
+function kaOverlays(r, tick) {
+  const n = r.cs.length; const out = (r.pats || []).map((p) => cpOv(p.id, p.name + '・' + CP_ST[p.state], p.bull, p.at, p.entry, p.stop, p.target, p.segs, p.marks, p.box));
+  (r.sigs || []).forEach((s) => out.push(cpOv(KS_SIGID(s), KS_ST[s.st] + '・' + KS_STA[s.status], s.bull, Math.max(0, Math.min(n - 1, n - 1 - s.age)), s.entry, s.sl, s.tp1)));
+  const p = r.plan; if (p) { const e = (p.e0 + p.e1) / 2; const ok = p.bull ? p.stop < e && p.tp1 > e : p.stop > e && p.tp1 < e;
+    if (ok) out.push(cpOv('plan', 'K 線操作計畫・' + p.title, p.bull, n - 1, e, p.stop, p.tp1, [{ i1: Math.max(0, n - 20), v1: r.x.support, i2: n - 1, v2: r.x.support, kind: 'L', label: '支撐' }, { i1: Math.max(0, n - 20), v1: r.x.resistance, i2: n - 1, v2: r.x.resistance, kind: 'L', label: '壓力' }])); }
+  const sp = cpSimplePlan(r.cs, tick); if (sp) out.push(sp);
+  return out;
+}
+/** 目前要畫的計畫：使用者點選的優先，否則取已突破的型態 → 策略訊號 → 成形中的型態 → 操作計畫 */
+function kaFocus(sym, r, all) {
+  const id = (S.kaFocus || {})[sym];
+  if (id === 'off') return null;
+  if (id) { const o = all.find((x) => x.id === id); if (o) return o; }
+  const pats = r.pats || []; const pick = (pid) => all.find((x) => x.id === pid);
+  const pb = pats.find((p) => p.state !== 'F'); if (pb) return pick(pb.id);
+  if ((r.sigs || []).length) return pick(KS_SIGID(r.sigs[0]));
+  if (pats.length) return pick(pats[0].id);
+  return pick('plan') || all[0] || null;
+}
+/** 圖上交易計畫：獲利區（綠）、風險區（紅）、進場／停損／目標線、型態線段與標記；回傳右側標籤 */
+const PLAN_C = { profit: '#2EBD85', risk: '#E5484D', target: '#3B82F6' };
+function drawOverlayZones(g, ov, x, y, cw, right) {
+  const x0 = Math.max(0, x(ov.start) - cw / 2);
+  if (right > x0) { const ye = y(ov.entry), yt = y(ov.target), ys = y(ov.stop);
+    g.fillStyle = PLAN_C.profit + '29'; g.fillRect(x0, Math.min(ye, yt), right - x0, Math.abs(yt - ye));
+    g.fillStyle = PLAN_C.risk + '29'; g.fillRect(x0, Math.min(ye, ys), right - x0, Math.abs(ys - ye)); }
+  if (ov.box) { const b = ov.box; const bx = x(b.i1) - cw / 2; const bw = Math.max(cw, right - bx); const col = ov.bull ? PLAN_C.profit : PLAN_C.risk;
+    g.fillStyle = col + '24'; g.fillRect(bx, y(b.hi), bw, y(b.lo) - y(b.hi)); g.strokeStyle = col; g.lineWidth = 1.5; g.strokeRect(bx, y(b.hi), bw, y(b.lo) - y(b.hi)); g.lineWidth = 1; }
+}
+function drawOverlayLines(g, ov, x, y, cw, right, TXT, MUT) {
+  const x0 = Math.max(0, x(ov.start) - cw / 2);
+  if (right > x0) { const ln = (v, col, w) => { g.strokeStyle = col; g.lineWidth = w; g.beginPath(); g.moveTo(x0, y(v)); g.lineTo(right, y(v)); g.stroke(); };
+    ln(ov.target, PLAN_C.target, 2); ln(ov.stop, PLAN_C.risk, 2); ln(ov.entry, TXT, 1.5); g.lineWidth = 1; }
+  g.font = 'bold 10px sans-serif'; g.textBaseline = 'alphabetic';
+  ov.segs.forEach((s) => { const x1 = x(s.i1), y1 = y(s.v1), x2 = x(s.i2), y2 = y(s.v2);
+    if (s.kind === 'L') { g.strokeStyle = TXT; g.globalAlpha = 0.85; g.lineWidth = 2; g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke(); g.globalAlpha = 1; }
+    else if (s.kind === 'O') { g.strokeStyle = MUT; g.lineWidth = 1.5; g.setLineDash([5, 4]); g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke(); g.setLineDash([]); }
+    else { g.strokeStyle = g.fillStyle = PLAN_C.target; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke(); const up = y2 < y1, ah = 5;
+      g.beginPath(); g.moveTo(x2, y2); g.lineTo(x2 - ah * 0.7, y2 + (up ? ah : -ah)); g.lineTo(x2 + ah * 0.7, y2 + (up ? ah : -ah)); g.closePath(); g.fill(); }
+    g.lineWidth = 1;
+    if (s.label) { g.fillStyle = s.kind === 'H' ? PLAN_C.target : TXT; g.textAlign = 'left'; g.fillText(s.label, s.kind === 'H' ? x1 + 3 : Math.max(2, x1), s.kind === 'H' ? (y1 + y2) / 2 : y1 - 3); } });
+  if (ov.box) { g.fillStyle = ov.bull ? PLAN_C.profit : PLAN_C.risk; g.textAlign = 'left'; g.fillText(ov.box.label, x(ov.box.i1), y(ov.box.lo) + 12); }
+  ov.marks.forEach((m) => { g.fillStyle = TXT; g.textAlign = 'center'; g.fillText(m.text, x(m.i), m.above ? y(m.v) - 5 : y(m.v) + 14); });
+  g.textAlign = 'start'; g.textBaseline = 'middle'; g.font = '11px sans-serif';
+}
+/** 把整段 K 棒的索引平移成圖上（切片後）的索引 */
+function ovShift(ov, d) {
+  if (!ov || !d) return ov; const s = (i) => i - d;
+  return { ...ov, start: s(ov.start), minIdx: s(ov.minIdx), segs: ov.segs.map((g) => ({ ...g, i1: s(g.i1), i2: s(g.i2) })), marks: ov.marks.map((m) => ({ ...m, i: s(m.i) })), box: ov.box ? { ...ov.box, i1: s(ov.box.i1), i2: s(ov.box.i2) } : null };
+}
 const LVC = { 2: 'up', 1: 'up', 0: '', '-1': 'down', '-2': 'down' };
-function kaCardHtml(r, weekly, sym) {
-  const f = fmtPx; const x = r.x; const dc = r.dir > 0 ? 'up' : r.dir < 0 ? 'down' : ''; const n = r.cs.length;
+function kaCardHtml(r, weekly, sym, o = {}) {
+  const f = fmtPx; const x = r.x; const dc = r.dir > 0 ? 'up' : r.dir < 0 ? 'down' : ''; const n = r.cs.length; const ov = o.ov; const all = o.all || [];
   const hit = (h) => { const st = r.stats[h.k]; const d = KP[h.k][2]; return `<div class="tile" style="margin-top:6px"><div class="row"><b class="${d > 0 ? 'up' : d < 0 ? 'down' : ''}" style="flex:1">${KP[h.k][0]}</b><span class="tag">${KP[h.k][1]}</span><span class="tag ${d > 0 ? 'up' : d < 0 ? 'down' : ''}">${DIRL[d]}</span></div>
     <div class="row small muted"><span style="flex:1">${esc(r.cs[h.i].d)}</span><span>可信度 ${Math.round(h.conf * 100)}%</span></div><div class="small text2">${esc(h.note)}</div>
     ${st && st.count >= 2 ? `<div class="small ${st.win >= 0.55 ? 'up' : st.win < 0.45 ? 'down' : 'muted'}">此股歷史出現 ${st.count} 次，${r.forward} 根後符合方向 ${(st.win * 100).toFixed(0)}%，平均 ${(st.avg >= 0 ? '+' : '') + st.avg.toFixed(2)}%</div>` : ''}</div>`; };
   const older = r.recent.filter((h) => h.i < n - 3).sort((a, b) => b.i - a.i);
-  const p = r.plan; const e = r.entry;
+  const p = r.plan; const e = r.entry; const ec = LVC[e.level] || '';
+  const pill = (t, bull) => `<span class="cp-pill ${bull ? 'up' : 'down'}">${t}</span>`;
+  const selSt = (id) => (ov && ov.id === id ? 'border-color:' + PLAN_C.target + ';box-shadow:0 0 0 1px ' + PLAN_C.target : '');
+  const sigHtml = !r.sigs ? '' : `<div class="tile" style="margin-top:10px"><div class="row"><b style="flex:1">K 棒策略訊號</b><span class="tag" style="color:var(--primary);border-color:var(--primary)">${r.etf ? 'ETF 引擎' : '普通股引擎'}</span></div>
+    <div class="small muted">${r.etf ? '偵測：母子線壓縮突破、上升三法中繼、恐慌大跌末端止跌、竭盡缺口回補' : '偵測：流動性掃蕩（SFP）、突破＋缺口回踩、箱型爆量突破、關鍵均線吞噬'}</div>
+    ${r.sigs.length ? r.sigs.map((s) => { const id = KS_SIGID(s); const on = ov && ov.id === id; return `<div class="card cp-it" data-ovpick="${id}" style="${selSt(id)}">
+      <div class="row">${pill(s.bull ? '做多' : '偏空', s.bull)}<b style="flex:1;margin-left:6px">${KS_ST[s.st]}</b><span class="small" style="color:${s.status === 'WAITING' ? '#F2B544' : 'var(--text2)'}">${KS_STA[s.status]}${s.age ? '（' + s.age + ' 根前）' : ''}</span><b class="small ${s.bull ? 'up' : 'down'}" style="margin-left:8px">信心 ${s.conf}</b></div>
+      <div class="small text2" style="margin-top:4px"><span class="tag" style="color:var(--primary);border-color:var(--primary)">${KS_TM[s.tm][0]}</span> 進場 ${f(s.entry)} · 停損 ${f(s.sl)} · 目標 ${f(s.tp1)}${s.tp2 ? '／' + f(s.tp2) : ''} · 風報比 1:${s.rr.toFixed(1)}</div>
+      <div class="small" style="margin-top:4px">${esc(s.desc)}</div>
+      ${on ? `<div class="small text2" style="margin-top:4px">型態：${esc(s.pattern)}</div><div class="small muted">時機說明：${KS_TM[s.tm][1]}</div>${s.trailing ? `<div class="small muted">${esc(s.trailing)}</div>` : ''}` : '<div class="small muted" style="margin-top:2px">點一下看型態說明，並在圖上顯示交易計畫</div>'}</div>`; }).join('') : '<div class="small muted" style="margin-top:4px">近期沒有符合條件的策略訊號。</div>'}</div>`;
+  const pats = r.pats;
+  const patHtml = !pats ? '' : `<div class="tile" style="margin-top:10px"><div class="row"><b style="flex:1">經典型態</b><span class="small muted">近 120 根</span></div>
+    <div class="small muted">偵測：頭肩頂／頭肩底、M 頭／W 底、三角、楔形、旗形、支撐壓力轉換、訂單塊。點選可在圖上顯示進場、停損與目標。</div>
+    ${pats.length ? pats.map((q) => { const on = ov && ov.id === q.id; return `<div class="card cp-it" data-ovpick="${q.id}" style="${selSt(q.id)}">
+      <div class="row">${pill(q.bull ? '偏多' : '警示', q.bull)}<b style="flex:1;margin-left:6px">${esc(q.name)}</b><span class="small" style="color:${q.state === 'F' ? '#F2B544' : 'var(--text2)'}">${CP_ST[q.state]}</span><b class="small ${q.bull ? 'up' : 'down'}" style="margin-left:8px">信心 ${q.conf}</b></div>
+      <div class="small text2" style="margin-top:4px">${q.bull ? '進場' : '關鍵'} ${f(q.entry)} · ${q.bull ? '停損' : '防守'} ${f(q.stop)} · ${q.bull ? '目標' : '下看'} ${f(q.target)} · 盈虧比 1:${q.rr.toFixed(1)}</div>
+      <div class="small" style="margin-top:4px">${esc(cpAction(q))}</div>
+      ${on ? `<div class="small muted" style="margin-top:2px">${esc(CP_T[q.type][2])}</div><div class="small muted">${esc(cpHistText(q.type))}</div><div class="small muted">${q.volOk ? '突破帶量' : q.state === 'F' ? '尚未突破' : '突破量能普通'}</div>${q.note ? `<div class="small muted">${esc(q.note)}</div>` : ''}` : ''}</div>`; }).join('') : '<div class="small muted" style="margin-top:4px">近期沒有成形或剛突破的經典型態。</div>'}
+    ${pats.some((q) => !q.bull) ? '<div class="small muted" style="margin-top:6px">台股以持股減碼／避開為主，不建議放空。</div>' : ''}</div>`;
+  const legend = ov ? `<div class="row small" style="margin-top:4px;gap:6px;flex-wrap:wrap"><span style="color:${PLAN_C.profit}">■</span> 獲利區 <span style="color:${PLAN_C.risk}">■</span> 風險區 <span class="muted" style="flex:1">· ${esc(ov.title)} · 盈虧比 1:${ov.rr.toFixed(1)}</span>
+      ${all.length > 1 ? `<select data-ovsel style="width:auto;padding:2px 6px;font-size:12px">${all.map((a) => `<option value="${esc(a.id)}" ${a.id === ov.id ? 'selected' : ''}>${esc(a.title)}</option>`).join('')}</select>` : ''}<a href="javascript:void 0" data-ovoff style="color:var(--primary)">隱藏</a></div>`
+    : `<div class="row small muted" style="margin-top:4px"><span style="flex:1">▲ 偏多　▼ 偏空（K 線形態）</span>${all.length ? '<a href="javascript:void 0" data-ovon style="color:var(--primary)">顯示交易計畫</a>' : ''}</div>`;
   return `<h2>K 線形態分析<span class="r"><span class="seg" id="kaTf"><button data-tf="d" class="${weekly ? '' : 'on'}">日 K</button><button data-tf="w" class="${weekly ? 'on' : ''}">週 K</button></span></span></h2>
-    <div class="row wrap" style="gap:10px;align-items:center"><span class="badge ${dc}" style="font-size:15px;padding:4px 10px">${DIRL[r.dir]}</span><span class="small muted">強度 ${r.strength}</span>
-      <span class="tag">${x.trend === 1 ? '多頭趨勢' : x.trend === -1 ? '空頭趨勢' : '盤整'}</span><span class="tag">${KVOL[x.vol]}</span><span class="tag">${KLOC[x.loc]}</span></div>
-    <div class="bar" style="margin-top:8px"><div style="width:${r.strength}%;background:${css(r.dir >= 0 ? '--up' : '--down')}"></div></div>
-    <div class="tile" style="margin-top:10px;border-left:3px solid ${css(LVC[e.level] === 'up' ? '--up' : LVC[e.level] === 'down' ? '--down' : '--muted')}"><div class="row"><b class="${LVC[e.level]}" style="font-size:16px;flex:1">${esc(e.label)}</b><span class="small muted">持股者：${esc(e.tip)}</span></div><div class="small text2" style="margin-top:4px">${esc(e.reason)}</div></div>
+    <div class="row wrap" style="gap:10px;align-items:center"><span class="small muted">${weekly ? '週 K' : '日 K'}綜合訊號</span><span class="badge ${dc}" style="font-size:15px;padding:4px 10px">${DIRL[r.dir]}</span><span class="small muted">多空強度 ${r.strength}</span></div>
+    <div class="tile" style="margin-top:10px;background:${css(ec === 'up' ? '--up' : ec === 'down' ? '--down' : '--muted')}1a"><div class="row" style="align-items:flex-start;gap:10px"><div class="sp"><div class="small muted">K 線觀點（綜合建議見「分析」分頁）</div><div class="small text2" style="margin-top:2px">${esc(e.reason)}</div>${o.held ? `<div class="small" style="margin-top:2px"><b>已持有：${esc(e.tip)}</b></div>` : `<div class="small muted" style="margin-top:2px">持股者：${esc(e.tip)}</div>`}</div><span class="badge ${ec}" style="font-size:15px;padding:5px 12px;white-space:nowrap">${esc(e.label)}</span></div></div>
+    ${sigHtml}${patHtml}
+    <div class="bar" style="margin-top:10px"><div style="width:${r.strength}%;background:${css(r.dir >= 0 ? '--up' : '--down')}"></div></div>
+    <div class="row small muted"><span style="flex:1">偏空</span><span style="flex:1;text-align:center">中性</span><span style="flex:1;text-align:right">偏多</span></div>
+    <div class="row wrap" style="gap:6px;margin-top:6px"><span class="tag ${x.trend === 1 ? 'up' : x.trend === -1 ? 'down' : ''}">${x.trend === 1 ? '多頭趨勢' : x.trend === -1 ? '空頭趨勢' : '盤整'}</span><span class="tag">${KVOL[x.vol]}</span><span class="tag">${KLOC[x.loc]}</span></div>
     <div class="grid g4" style="margin-top:10px;gap:8px">${[['支撐', f(x.support), 'up'], ['壓力', f(x.resistance), 'down'], ['MA20', f(x.ma20), ''], ['ATR(14)', f(x.atr), '']].map(([k, v, c]) => `<div><div class="small muted">${k}</div><div class="num ${c}">${v}</div></div>`).join('')}</div>
-    <div class="chart-wrap" id="kaChart" style="margin-top:10px"><canvas></canvas><div class="chart-tip"></div></div>
+    <div class="chart-wrap" id="kaChart" style="margin-top:10px"><canvas></canvas><div class="chart-tip"></div></div>${legend}
     <div style="margin-top:10px"><b>最新形態（近 3 根）</b>${r.latest.length ? Array.from(new Map(r.latest.map((h) => [h.k + h.i, h])).values()).map(hit).join('') : '<div class="small muted">近 3 根沒有明顯的 K 線形態，以趨勢與量價為主。</div>'}</div>
     <div class="tile" style="margin-top:10px"><b>判斷依據</b>${r.reasons.map((t) => `<div class="small text2">・${esc(t)}</div>`).join('')}</div>
     ${p ? `<div class="tile" style="margin-top:10px;background:${css(p.bull ? '--up' : '--down')}14"><div class="row"><b class="${p.bull ? 'up' : 'down'}" style="flex:1">${esc(p.title)}</b><span class="small muted">盈虧比</span> <b class="num ${p.rr >= 2 ? 'up' : p.rr < 1.2 ? 'down' : ''}">1 : ${p.rr.toFixed(2)}</b></div>
       <div class="small text2" style="margin-top:4px">${esc(p.trigger)}</div>${kvRows([[p.bull ? '布局區間' : '減碼區間', f(p.e0) + ' ～ ' + f(p.e1)], ['停損／防守', f(p.stop)], ['目標一', f(p.tp1)], ['目標二', f(p.tp2)]])}<div class="small muted">${esc(p.note)}</div></div>`
       : '<div class="small muted" style="margin-top:8px">訊號中性：建議觀望，等待帶量突破壓力或跌破支撐再決定方向。</div>'}
     ${older.length ? `<details style="margin-top:8px"><summary class="small" style="cursor:pointer;color:var(--primary)">近 40 根其他形態（${older.length}）</summary>${older.map(hit).join('')}</details>` : ''}
-    <div class="small muted" style="margin-top:6px">形態辨識依據 K 棒實體、影線、前趨勢、量能與前 20 根高低點；勝率為此股過去 ${weekly ? '5 年週 K' : '2 年日 K'} 同形態出現後 ${r.forward} 根的結果。僅供參考，不構成投資建議。</div>`;
+    <div class="small muted" style="margin-top:6px">形態辨識依據 K 棒實體、影線、前趨勢、量能與前 20 根高低點；勝率為此股過去 ${weekly ? '5 年週 K' : '2 年日 K'} 同形態出現後 ${r.forward} 根的結果。經典型態回測為台美股 37 檔近 2 年統計。僅供參考，不構成投資建議。</div>`;
 }
 function ksCardHtml(sigs, etf) {
   const f = fmtPx;
@@ -4379,7 +4966,7 @@ function loginView(msg, mode) {
     <div id="gbtn" class="gbtn" style="margin-top:14px">${p.gClient || MOCK ? '' : '<div class="notice">管理員尚未開放網頁登入（Google 登入未設定）。</div>'}</div>
     <div id="lerr" class="small up" style="margin-top:10px"></div>
     ${lineOaId() ? `<div style="margin-top:14px">${lineJoinHtml()}</div>` : ''}
-    <div class="small muted" style="margin-top:18px">${mode === 'reg' ? '已經在手機 App 用 Google 登入過？直接按「登入」即可，不需重新註冊。' : '還沒有帳號？按上方「註冊新帳號」。'}同一帳號網頁同時只能在一個瀏覽器使用。</div></div></div>`;
+    <div class="small muted" style="margin-top:18px">${mode === 'reg' ? '已經在手機 App 用 Google 登入過？直接按「登入」即可，不需重新註冊。' : '還沒有帳號？按上方「註冊新帳號」。'}同一帳號網頁同時只能在一個瀏覽器使用。</div>${webVerHtml()}</div></div>`;
   $$('[data-lm]').forEach((b) => b.onclick = () => { store.set('lmode', b.dataset.lm); loginView('', b.dataset.lm); });
   const ready = () => mode !== 'reg' || ($('#agree') && $('#agree').checked);
   const cb = (resp) => onCredential(resp, mode === 'reg');
@@ -4447,15 +5034,21 @@ window.addEventListener('hashchange', () => { route(); window.scrollTo(0, 0); })
 
 // ───────── 啟動 ─────────
 async function tick() {
-  if (!S.session || document.hidden || !cur) return;
+  if (!S.session || (document.hidden && S.pref.bgRefresh !== '1') || !cur) return;
   S.lastTick = Date.now();
   const syms = new Set(cur.syms()); holdings().forEach((h) => syms.add(h.symbol));
   kjson('alertsV2', []).forEach((a) => { if (a.s && a.on !== false) syms.add(a.s); });
+  fgSync(Array.from(syms)).catch(() => {});
   await Promise.all([refreshQuotes(Array.from(syms)), refreshIndexes(), refreshLimits()]);
   try { checkAlerts(); } catch (e) {}
+  softFill();
+}
+/** 重畫目前頁面的動態內容（打字中、對話框開啟或拖曳時略過） */
+function softFill() {
   const ae = document.activeElement;
   const typing = ae && /INPUT|SELECT|TEXTAREA/.test(ae.tagName) && $('#dyn') && $('#dyn').contains(ae);
-  if (cur && !$('.modal-bg') && !typing && !S.dragging) cur.fill();
+  if (cur && !$('.modal-bg') && !typing && !S.dragging) { try { cur.fill(); } catch (e) {} }
+  if ($('#rtSt')) $('#rtSt').textContent = rtStatusText();
 }
 async function start(meResp) {
   const me = meResp || await api('me', { session: S.session, web: true });
