@@ -814,7 +814,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"5c1f0ae","at":"2026-11-21 23:23"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"2937e4f","at":"2026-11-21 23:41"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -1376,17 +1376,36 @@ async function importTrades(text) {
       id: ++id, o: /期初/.test(String(r[ci.t] || '')) ? 'opening' : '', note: ci.note >= 0 ? r[ci.note] || '' : '', acc: 0, att: [], tags: [] });
   });
   if (!out.length) return toast('沒有可匯入的資料', 3500);
-  // 跳過與既有紀錄完全相同的交易
-  const key = (t) => [t.t, t.s, t.d, t.n, t.p].join('|'); const have = new Set(D.trades().map(key));
-  const fresh = out.filter((t) => !have.has(key(t)));
-  const list = D.trades().concat(fresh); const lg = ledger(list);
-  const ok = await dialog('匯入交易', `<div>可匯入 <b>${fresh.length}</b> 筆${out.length - fresh.length ? `（${out.length - fresh.length} 筆與既有紀錄相同已略過）` : ''}${bad.length ? `，${bad.length} 列格式不符（第 ${bad.slice(0, 8).join('、')}${bad.length > 8 ? '…' : ''} 列）` : ''}。</div>
-    ${lg.err ? `<div class="notice err" style="margin-top:10px">${esc(lg.err)}</div>` : ''}<div class="small muted" style="margin-top:8px">${fresh.slice(0, 5).map((t) => esc(t.d + ' ' + TYPE_N[t.t] + ' ' + t.s + ' ' + t.n + ' 股 @ ' + t.p)).join('<br>')}${fresh.length > 5 ? '<br>…' : ''}</div>`,
-    lg.err || !fresh.length ? [['', '關閉']] : [['', '取消'], ['go', '匯入', 'primary']]);
-  if (ok !== 'go') return;
-  ksetJson('trades', list); recalc();
-  const qs = D.quotes(); fresh.forEach((t) => { if (!qs.some((q) => q.s === t.s)) qs.push({ s: t.s, n: D.name(t.s), m: isUs(t.s) ? 'US' : 'TW', etf: /^00/.test(t.s) }); }); ksetJson('quotes', qs);
-  changed(); toast('已匯入 ' + fresh.length + ' 筆交易'); route();
+  // 匯入方式（與 App 相同）：覆蓋（預設，以檔案為準：檔案期間內同代號、同類別的既有交易先刪除）、只補新的、全部取代
+  const MODES = [['ow', '覆蓋（建議）', '以匯入檔為準：檔案涵蓋的期間內，同代號、同類別的既有交易先刪除，再匯入檔案內容；期間外與其他代號不受影響'],
+    ['add', '只補新的', '保留現有交易，只新增檔案裡沒有的'], ['all', '全部取代', '刪除全部交易紀錄（含期初），改成檔案內容']];
+  const from = out.reduce((m, t) => (t.d < m ? t.d : m), out[0].d), to = out.reduce((m, t) => (t.d > m ? t.d : m), out[0].d);
+  const types = {}; out.forEach((t) => { (types[t.s] = types[t.s] || new Set()).add(t.t); });
+  const r4 = (v) => Math.round(Number(v) * 10000) / 10000;
+  const key = (t) => [t.t, t.s, String(t.d).replace(/-/g, '/'), r4(t.n), r4(t.p), t.acc || 0].join('|');
+  const planOf = (m) => {
+    const cur = D.trades();
+    if (m === 'all') return { keep: cur.filter((t) => t.o === 'legacy'), add: out };
+    if (m === 'add') { const have = {}; cur.filter((t) => t.o !== 'legacy').forEach((t) => { const k = key(t); have[k] = (have[k] || 0) + 1; });
+      return { keep: cur, add: out.filter((t) => { const k = key(t); if (have[k] > 0) { have[k]--; return false; } return true; }) }; }
+    const rm = (t) => !t.o && String(t.d).replace(/-/g, '/') >= from && String(t.d).replace(/-/g, '/') <= to && types[t.s] && types[t.s].has(t.t);
+    return { keep: cur.filter((t) => !rm(t)), add: out };
+  };
+  let mode = 'ow';
+  const sum = () => { const pl = planOf(mode); const rmN = D.trades().length - pl.keep.length; const lg = ledger(pl.keep.concat(pl.add));
+    return `<div class="small ${mode === 'all' ? 'up' : 'text2'}" style="margin-top:6px">${rmN ? `將刪除現有 ${rmN} 筆、` : ''}匯入 ${pl.add.length} 筆${mode === 'add' && pl.add.length < out.length ? `（${out.length - pl.add.length} 筆已存在，略過）` : ''}</div>${lg.err ? `<div class="notice err" style="margin-top:8px">${esc(lg.err)}</div>` : ''}`; };
+  const ok = await dialog('匯入交易', `<div>讀到 <b>${out.length}</b> 筆（${esc(from)}～${esc(to)}）${bad.length ? `，${bad.length} 列格式不符（第 ${bad.slice(0, 8).join('、')}${bad.length > 8 ? '…' : ''} 列）` : ''}。</div>
+    <div class="small muted" style="margin-top:6px">${out.slice(0, 5).map((t) => esc(t.d + ' ' + TYPE_N[t.t] + ' ' + t.s + ' ' + t.n + ' 股 @ ' + t.p)).join('<br>')}${out.length > 5 ? '<br>…' : ''}</div>
+    <div class="small text2" style="margin-top:10px"><b>匯入方式</b></div>
+    ${MODES.map(([k, n, dsc]) => `<label class="row small" style="gap:6px;margin-top:6px;cursor:pointer;align-items:flex-start"><input type="radio" name="imm" value="${k}" style="width:auto;margin-top:3px" ${k === mode ? 'checked' : ''}><span><b>${n}</b><br><span class="muted">${dsc}</span></span></label>`).join('')}
+    <div id="imsum">${sum()}</div>`, [['', '取消'], ['ok', '匯入', 'primary']],
+    (box) => { $$('[name="imm"]', box).forEach((el) => el.onchange = () => { mode = el.value; $('#imsum', box).innerHTML = sum(); });
+      return () => { const pl = planOf(mode); const lg = ledger(pl.keep.concat(pl.add)); return lg.err ? lg.err : !pl.add.length && pl.keep.length === D.trades().length ? '這些交易都已經存在，沒有需要匯入的' : null; }; });
+  if (ok !== 'ok') return;
+  const pl = planOf(mode); const rmN = D.trades().length - pl.keep.length;
+  ksetJson('trades', pl.keep.concat(pl.add)); recalc();
+  const qs = D.quotes(); pl.add.forEach((t) => { if (!qs.some((q) => q.s === t.s)) qs.push({ s: t.s, n: D.name(t.s), m: isUs(t.s) ? 'US' : 'TW', etf: /^00/.test(t.s) }); }); ksetJson('quotes', qs);
+  changed(); toast('已匯入 ' + pl.add.length + ' 筆交易' + (rmN ? '（覆蓋 ' + rmN + ' 筆）' : ''), 4000); route();
 }
 
 // ───────── 對話框 ─────────
