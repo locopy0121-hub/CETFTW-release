@@ -268,3 +268,6 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--primary); o
 @media (max-width: 900px) { .top .btn, .top select { padding: 6px 10px; font-size: 13px; } }
 .drop-hint { outline: 2px dashed var(--primary); outline-offset: 2px; }
 [draggable="true"] { -webkit-user-drag: element; }
+/* 十字線疊層 */
+.chart-wrap canvas.xh { position: absolute; left: 0; top: 0; pointer-events: none; }
+#stab #stabE { opacity: .7; }

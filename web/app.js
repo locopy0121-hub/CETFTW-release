@@ -314,9 +314,17 @@ async function pull(force = false) {
   const r = await api('dataGet', force ? { session: S.session } : { session: S.session, since: S.rev });
   if (r.kicked) return kicked();
   if (r.same) { S.lastSync = Date.now(); S.syncMsg = '已是最新'; renderSync(); return; }
-  if (!r.rev || !r.data) { S.rev = 0; store.set('rev', 0); if (Object.keys(S.keys).length && S.dirty) push(); return 'empty'; }
+  if (!r.rev || !r.data) {
+    // 雲端沒有資料（只用網頁、尚未綁定手機）：網頁為主，本機有資料就上傳
+    S.rev = 0; store.set('rev', 0);
+    if (S.cloudDir !== 'w2p') { S.cloudDir = 'w2p'; store.set('cdir', 'w2p'); }
+    if (Object.keys(S.keys).length) { S.dirty = true; store.set('dirty', true); push(); }
+    return 'empty';
+  }
   const o = JSON.parse(r.data);
-  if (o.dir !== S.cloudDir) { S.cloudDir = o.dir || ''; store.set('cdir', S.cloudDir); }
+  // 沒有方向（舊資料）且尚未綁定手機：視為網頁為主
+  const dir = o.dir || (S.me && S.me.phone === false ? 'w2p' : '');
+  if (dir !== S.cloudDir) { S.cloudDir = dir; store.set('cdir', S.cloudDir); }
   if (S.dirty && !force && !phoneMaster()) return conflict(r);
   S.keys = o.keys || {}; S.rev = r.rev; S.dirty = false; store.set('keys', S.keys); store.set('rev', S.rev); store.set('dirty', false);
   S.syncMsg = '已下載（' + (r.src || '手機') + ' ' + (r.at || '') + '）'; S.lastSync = Date.now(); S.syncAt = r.at || '';
@@ -498,6 +506,25 @@ function chartZoom(cv, wrap, n, def, geo, redraw) {
   };
   cv.ontouchend = () => { t0 = null; };
 }
+/** 十字線：疊一層透明畫布，移動時只重畫這一層（不重繪主圖）；S.pref.xh＝false 關閉 */
+function xhair(wrap, cv, H) {
+  let o = wrap.querySelector('canvas.xh');
+  if (!o) { o = document.createElement('canvas'); o.className = 'xh'; cv.after(o); }
+  const dpr = window.devicePixelRatio || 1; const W = wrap.clientWidth;
+  o.width = W * dpr; o.height = H * dpr; o.style.height = H + 'px';
+  const g = o.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const clear = () => g.clearRect(0, 0, W, H);
+  return { clear, draw(px, py, yLabel, xLabel, padR, bottom) {
+    clear(); if (S.pref.xh === false) return;
+    const fg = css('--card') || '#fff', bg = css('--text') || '#333';
+    g.strokeStyle = css('--muted'); g.lineWidth = 1; g.setLineDash([4, 3]);
+    g.beginPath(); g.moveTo(Math.round(px) + 0.5, 0); g.lineTo(Math.round(px) + 0.5, bottom); g.stroke();
+    if (yLabel != null && py >= 0 && py <= bottom) { g.beginPath(); g.moveTo(0, Math.round(py) + 0.5); g.lineTo(W - padR, Math.round(py) + 0.5); g.stroke(); }
+    g.setLineDash([]); g.font = '11px sans-serif'; g.textBaseline = 'middle';
+    if (yLabel != null && py >= 0 && py <= bottom) { g.fillStyle = bg; g.fillRect(W - padR + 1, py - 8, padR - 2, 16); g.fillStyle = fg; g.fillText(String(yLabel), W - padR + 3, py); }
+    if (xLabel) { const tw = g.measureText(xLabel).width + 10; const lx = Math.max(0, Math.min(W - padR - tw, px - tw / 2)); g.fillStyle = bg; g.fillRect(lx, H - 15, tw, 15); g.fillStyle = fg; g.fillText(xLabel, lx + 5, H - 7.5); }
+  } };
+}
 function zoomState(wrap, key, def, n) {
   if (wrap._key !== key || !wrap._z) { wrap._key = key; wrap._z = { count: def, off: 0 }; }
   const z = wrap._z; z.count = Math.max(Math.min(n, 10), Math.min(n, z.count)); z.off = Math.max(0, Math.min(n - z.count, z.off)); return z;
@@ -588,8 +615,15 @@ function drawChart(wrap, bars, opt) {
     return s;
   };
   tip.innerHTML = info(vis.length - 1);
-  cv.onmousemove = (e) => { const r = cv.getBoundingClientRect(); const i = Math.min(vis.length - 1, Math.max(0, Math.floor((e.clientX - r.left - padL) / cw))); tip.innerHTML = info(i); };
-  cv.onmouseleave = () => { tip.innerHTML = info(vis.length - 1); };
+  const xh = xhair(wrap, cv, H);
+  const move = (e) => { const r = cv.getBoundingClientRect(); const my = e.clientY - r.top; const i = Math.min(vis.length - 1, Math.max(0, Math.floor((e.clientX - r.left - padL) / cw))); tip.innerHTML = info(i);
+    let yl = null;
+    if (my >= top && my <= top + mainH) yl = fmtPx(hi - (my - top) / mainH * (hi - lo));
+    else if (my >= volTop && my <= volTop + volH) yl = fmtVol(vmax * (volTop + volH - my) / volH);
+    else if (sub && my >= subTop && my <= subTop + subH) yl = (sub.max - (my - subTop) / subH * (sub.max - sub.min)).toFixed(2);
+    xh.draw(x(i), my, yl, vis[i].d, padR, H - 16); };
+  cv.onmousemove = move; cv.onclick = move;
+  cv.onmouseleave = () => { tip.innerHTML = info(vis.length - 1); xh.clear(); };
   chartZoom(cv, wrap, n, def, { padL, w: W - padL - padR }, () => drawChart(wrap, bars, opt));
   const zi = wrap.parentElement && wrap.parentElement.querySelector('.zinfo'); if (zi) zi.textContent = z.count !== def || z.off ? `顯示 ${vis.length} 根（${vis[0].d} ～ ${vis[vis.length - 1].d}）` : '';
 }
@@ -618,8 +652,12 @@ function drawLine(wrap, pts, prev, us) {
   [0, 0.25, 0.5, 0.75, 1].forEach((f) => { const t = t0 + span * f; g.fillText(hm(t), Math.min(W - padR - 30, padL + f * (W - padL - padR) - 14), H - 8); });
   const info = (p) => `${hm(p[0])}　<b class="${cls(prev ? p[1] - prev : 0)}">${fmt(p[1], 2)} ${prev ? fmtPct((p[1] / prev - 1) * 100) : ''}</b>　量 ${fmtVol(us ? p[2] : (p[2] || 0) / 1000)}${us ? '' : ' 張'}${prev ? '　昨收 ' + fmt(prev, 2) : ''}`;
   tip.innerHTML = info(pts[pts.length - 1]);
-  cv.onmousemove = (e) => { const r = cv.getBoundingClientRect(); const t = t0 + (e.clientX - r.left - padL) / (W - padL - padR) * span; let best = pts[0]; for (const p of pts) if (Math.abs(p[0] - t) < Math.abs(best[0] - t)) best = p; tip.innerHTML = info(best); };
-  cv.onmouseleave = () => { tip.innerHTML = info(pts[pts.length - 1]); };
+  const xh = xhair(wrap, cv, H);
+  const move = (e) => { const r = cv.getBoundingClientRect(); const my = e.clientY - r.top; const t = t0 + (e.clientX - r.left - padL) / (W - padL - padR) * span; let best = pts[0]; for (const p of pts) if (Math.abs(p[0] - t) < Math.abs(best[0] - t)) best = p; tip.innerHTML = info(best);
+    const yl = my >= top && my <= top + mainH ? fmtPx(hi - (my - top) / mainH * (hi - lo)) + (prev ? '' : '') : null;
+    xh.draw(x(best[0]), my, yl, hm(best[0]), padR, H - 16); };
+  cv.onmousemove = move; cv.onclick = move;
+  cv.onmouseleave = () => { tip.innerHTML = info(pts[pts.length - 1]); xh.clear(); };
 }
 /** 通用折線圖：labels 為日期字串；series = [{ v: [], color, name, fill }] */
 function drawSeries(wrap, labels, series, opt = {}) {
@@ -642,8 +680,11 @@ function drawSeries(wrap, labels, series, opt = {}) {
   g.fillStyle = css('--muted'); const step = Math.max(1, Math.floor(n / 6)); for (let i = 0; i < n; i += step) g.fillText(String(labels[i]).slice(2), Math.max(0, x(i) - 22), H - 8);
   const info = (i) => esc(labels[i]) + '　' + series.map((s) => `<span style="color:${s.color}">${esc(s.name || '')} ${s.v[i] == null ? '—' : f(s.v[i])}</span>`).join('　') + (opt.extra ? opt.extra(i) : '');
   tip.innerHTML = info(n - 1);
-  cv.onmousemove = (e) => { const r = cv.getBoundingClientRect(); const i = Math.round((e.clientX - r.left - padL) / (W - padL - padR) * (n - 1)); tip.innerHTML = info(Math.max(0, Math.min(n - 1, i))); };
-  cv.onmouseleave = () => { tip.innerHTML = info(n - 1); };
+  const xh = xhair(wrap, cv, H);
+  const move = (e) => { const r = cv.getBoundingClientRect(); const my = e.clientY - r.top; const i = Math.max(0, Math.min(n - 1, Math.round((e.clientX - r.left - padL) / (W - padL - padR) * (n - 1)))); tip.innerHTML = info(i);
+    xh.draw(x(i), my, my >= top && my <= top + mh ? f(hi - (my - top) / mh * (hi - lo)) : null, String(labels[i]), padR, H - 16); };
+  cv.onmousemove = move; cv.onclick = move;
+  cv.onmouseleave = () => { tip.innerHTML = info(n - 1); xh.clear(); };
   const [L0, S0] = opt._orig || [labels, series]; const N0 = opt._N || n;
   if (N0 >= 10) chartZoom(cv, wrap, N0, N0, { padL, w: W - padL - padR }, () => drawSeries(wrap, L0, S0, { ...opt, _full: false, _N: 0, _orig: null }));
 }
@@ -1218,7 +1259,7 @@ const barCache = {};
 VIEWS.s = {
   title: '個股',
   render(sym) {
-    this.sym = sym; const us = isUs(sym);
+    if (this.sym !== sym) this._tab = null; this.sym = sym; const us = isUs(sym);
     const inW = D.quotes().some((q) => q.s === sym);
     return `<div class="top"><a class="btn sm" href="javascript:history.back()">‹ 返回</a><h1>${esc(D.name(sym))} <span class="muted num" style="font-size:16px">${sym}</span> <span class="mkt ${us ? 'us' : ''}">${us ? 'US' : D.otc(sym) ? '上櫃' : 'TW'}</span></h1>
       <button class="btn" id="wbtn">${inW ? '✓ 已在自選' : '＋ 加入自選'}</button><button class="btn" id="star" title="最愛">${D.starred().includes(sym) ? '★' : '☆'}</button>
@@ -1226,11 +1267,12 @@ VIEWS.s = {
       <button class="btn" id="sell">賣出</button><button class="btn primary" id="buy">買進</button></div>
       <div id="stags" class="row wrap" style="gap:6px;margin:-4px 0 10px"></div>
       <div id="sq"></div>
+      ${(S.pref.stabL || {}).pos === 'top' ? stabBar(this) : ''}
       <div class="card" style="margin-top:12px"><div class="row wrap" style="margin-bottom:8px"><div class="seg" id="rg">${Object.keys(RANGES).map((k) => `<button data-r="${k}" class="${S.pref.range === k ? 'on' : ''}">${k === '1D' ? '當日' : k.replace('M', ' 個月').replace('Y', ' 年')}</button>`).join('')}</div>
-        <span class="sp"></span><button class="btn sm ${S.pref.boll ? 'primary' : ''}" id="boll">布林通道</button><a class="btn sm" href="#/compare/${sym}">比較</a><span class="seg" id="kopt"><button id="kpat" class="${S.pref.kpat !== false ? 'on' : ''}" title="在 K 線上標示型態">型態</button><button id="kavg" class="${S.pref.kavg !== false ? 'on' : ''}" title="顯示我的持股均價線">均價</button><button id="kma" title="設定均線週期">均線</button><button id="kfs" title="全螢幕">⛶</button><button id="kpng" title="下載圖表圖片">⤓</button></span><span class="seg" id="zm" title="滑鼠滾輪縮放、拖曳平移、雙擊還原"><button data-z="0.7">＋</button><button data-z="1.4">－</button><button data-z="0">還原</button></span>
+        <span class="sp"></span><button class="btn sm ${S.pref.boll ? 'primary' : ''}" id="boll">布林通道</button><a class="btn sm" href="#/compare/${sym}">比較</a><span class="seg" id="kopt"><button id="kpat" class="${S.pref.kpat !== false ? 'on' : ''}" title="在 K 線上標示型態">型態</button><button id="kavg" class="${S.pref.kavg !== false ? 'on' : ''}" title="顯示我的持股均價線">均價</button><button id="kxh" class="${S.pref.xh !== false ? 'on' : ''}" title="顯示十字線（價格與日期）">十字</button><button id="kma" title="設定均線週期">均線</button><button id="kfs" title="全螢幕">⛶</button><button id="kpng" title="下載圖表圖片">⤓</button></span><span class="seg" id="zm" title="滑鼠滾輪縮放、拖曳平移、雙擊還原"><button data-z="0.7">＋</button><button data-z="1.4">－</button><button data-z="0">還原</button></span>
         <div class="seg" id="sb">${['KD', 'RSI', 'MACD'].map((k) => `<button data-s="${k}" class="${S.pref.sub === k ? 'on' : ''}">${k}</button>`).join('')}</div></div>
         <div class="chart-wrap"><canvas></canvas><div class="chart-tip"></div></div><div class="row between small muted" style="margin-top:4px"><span id="cmsg"></span><span class="zinfo"></span><span class="d-only">滾輪縮放 · 拖曳平移 · 雙擊還原</span></div></div>
-      <div class="seg" id="stab" style="margin-top:12px;flex-wrap:wrap">${stockTabs(sym).map(([k, n]) => `<button data-st="${k}" class="${this.tab() === k ? 'on' : ''}">${n}</button>`).join('')}</div>
+      ${(S.pref.stabL || {}).pos === 'top' ? '' : stabBar(this)}
       <div id="si" class="grid g2 stack" style="margin-top:12px"></div>`;
   },
   bind() {
@@ -1245,6 +1287,7 @@ VIEWS.s = {
     $('#boll').onclick = () => { if (!can('CHART')) return toast('布林通道為會員功能（進階圖表）'); S.pref.boll = !S.pref.boll; savePref(); $('#boll').classList.toggle('primary', S.pref.boll); this.chart(); };
     $$('[data-z]', $('#zm')).forEach((b) => b.onclick = () => { const w = $('.chart-wrap'); if (w._zoom) w._zoom(+b.dataset.z); });
     $('#kpat').onclick = () => { S.pref.kpat = S.pref.kpat === false; savePref(); $('#kpat').classList.toggle('on', S.pref.kpat !== false); this.chart(); };
+    $('#kxh').onclick = () => { S.pref.xh = S.pref.xh === false; savePref(); $('#kxh').classList.toggle('on', S.pref.xh !== false); toast(S.pref.xh !== false ? '已開啟十字線（所有圖表）' : '已關閉十字線'); };
     $('#kavg').onclick = () => { S.pref.kavg = S.pref.kavg === false; savePref(); $('#kavg').classList.toggle('on', S.pref.kavg !== false); this.chart(); };
     $('#kma').onclick = async () => { const cur = (S.pref.mas || [5, 20, 60]).join(', '); let mb = null;
       const v = await dialog('均線設定', `<div class="field"><label>均線週期（最多 4 條，用逗號分隔）</label><input id="maIn" value="${cur}"></div><div class="row wrap" style="gap:6px">${[['5, 20, 60', '短中長（預設）'], ['5, 10, 20, 60', '台股常用'], ['20, 60, 120, 240', '月季半年年線'], ['10, 50, 200', '美股常用']].map(([x, n]) => `<button class="btn sm" data-maq="${x}">${n}</button>`).join('')}</div>`, [['', '取消'], ['ok', '套用', 'primary']], (box) => { mb = box; $$('[data-maq]', box).forEach((b) => b.onclick = () => { $('#maIn', box).value = b.dataset.maq; }); });
@@ -1254,7 +1297,8 @@ VIEWS.s = {
     $('#kpng').onclick = () => { const cv = $('.chart-wrap canvas'); const c2 = document.createElement('canvas'); c2.width = cv.width; c2.height = cv.height; const g = c2.getContext('2d'); g.fillStyle = css('--card') || '#fff'; g.fillRect(0, 0, c2.width, c2.height); g.drawImage(cv, 0, 0);
       const a = document.createElement('a'); a.href = c2.toDataURL('image/png'); a.download = sym + '-' + ymd().replace(/\//g, '') + '.png'; a.click(); };
     this._fs = () => setTimeout(() => this.chart(), 60); document.addEventListener('fullscreenchange', this._fs);
-    $$('[data-st]').forEach((b) => b.onclick = () => { S.pref.stab = b.dataset.st; savePref(); $$('[data-st]').forEach((x) => x.classList.toggle('on', x === b)); this.info(); });
+    $$('[data-st]').forEach((b) => b.onclick = () => { this._tab = b.dataset.st; S.pref.stab = b.dataset.st; savePref(); $$('[data-st]').forEach((x) => x.classList.toggle('on', x === b)); this.info(); });
+    $('#stabE').onclick = () => stabEditor();
     this.chart(); this.info(); this.tags();
     this._rs = () => this.chart(); window.addEventListener('resize', this._rs);
   },
@@ -2414,9 +2458,41 @@ function sapiErr(e) { return e && e.message === 'NEEDDEPLOY' ? NEED_DEPLOY : `<d
 const yf = (o, k) => { const v = o && o[k]; if (v == null) return null; if (typeof v === 'object') return v.fmt || (v.raw != null ? String(v.raw) : null); return String(v); };
 const yr = (o, k) => { const v = o && o[k]; if (v == null) return null; const x = typeof v === 'object' ? v.raw : v; return x == null || isNaN(x) ? null : +x; };
 const kvRows = (items) => `<div class="grid g3" style="gap:10px">${items.filter(([, v]) => v != null && v !== '').map(([k, v]) => `<div><div class="small muted">${esc(k)}</div><div class="num">${esc(String(v))}</div></div>`).join('')}</div>`;
-function stockTabs(sym) {
+const STABS = [['ov', '概覽'], ['chip', '籌碼'], ['fin', '財務'], ['hold', '成分'], ['div', '股息'], ['news', '新聞'], ['co', '公司']];
+/** 個股分頁列：依「分頁列排版」設定排序與隱藏（S.pref.stabL＝{o:順序, h:隱藏, def:預設分頁, pos:'top'|'bottom'}） */
+function stockTabs(sym, all) {
   const q = S.q[sym] || {}; const etf = (!isUs(sym) && /^00/.test(sym)) || D.isEtf(sym) || q.type === 'ETF';
-  return [['ov', '概覽'], ['chip', '籌碼'], ['fin', '財務'], ...(etf ? [['hold', '成分']] : []), ['div', '股息'], ['news', '新聞'], ['co', '公司']];
+  const base = STABS.filter(([k]) => k !== 'hold' || etf);
+  const L = S.pref.stabL || {}; const ord = L.o || [];
+  const sorted = base.map((t, i) => [t, ord.indexOf(t[0]) >= 0 ? ord.indexOf(t[0]) : 100 + i]).sort((a, b) => a[1] - b[1]).map(([t]) => t);
+  if (all) return sorted;
+  const vis = sorted.filter(([k]) => !(L.h || []).includes(k));
+  return vis.length ? vis : sorted;
+}
+function stabBar(view) {
+  return `<div class="seg" id="stab" style="margin-top:12px;flex-wrap:wrap">${stockTabs(view.sym).map(([k, n]) => `<button data-st="${k}" class="${view.tab() === k ? 'on' : ''}">${n}</button>`).join('')}<button id="stabE" title="分頁列排版：順序、顯示、預設分頁、位置">⚙</button></div>`;
+}
+/** 分頁列排版設定 */
+function stabEditor() {
+  const L0 = S.pref.stabL || {};
+  let L = { o: L0.o || [], h: L0.h || [], def: L0.def || 'last', pos: L0.pos || 'bottom' };
+  const draw = (box) => {
+    const list = STABS.map((t, i) => [t, L.o.indexOf(t[0]) >= 0 ? L.o.indexOf(t[0]) : 100 + i]).sort((a, b) => a[1] - b[1]).map(([t]) => t);
+    box.innerHTML = `<div class="small muted" style="margin-bottom:8px">個股頁的分頁列：勾選要顯示的分頁、用 ↑↓ 調整順序（「成分」只在 ETF 顯示）。設定存在這個瀏覽器。</div>
+      <div class="row wrap" style="margin-bottom:8px"><span class="small">分頁列位置</span><div class="seg">${[['top', '圖表上方'], ['bottom', '圖表下方']].map(([v, n]) => `<button data-sp="${v}" class="${L.pos === v ? 'on' : ''}">${n}</button>`).join('')}</div></div>
+      <div class="row wrap" style="margin-bottom:10px"><span class="small">開啟個股時顯示</span><select id="sdef" style="width:auto"><option value="last" ${L.def === 'last' ? 'selected' : ''}>上次看的分頁</option>${list.map(([k, n]) => `<option value="${k}" ${L.def === k ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+      <div class="list">${list.map(([k, n], i) => `<div class="it" style="cursor:default;padding:6px 2px;gap:6px"><input type="checkbox" data-sh="${k}" ${L.h.includes(k) ? '' : 'checked'} style="width:auto"><div class="l"><div class="t1">${n}</div></div>
+        <button class="btn sm" data-sm="${i}:-1" ${i ? '' : 'disabled'}>↑</button><button class="btn sm" data-sm="${i}:1" ${i < list.length - 1 ? '' : 'disabled'}>↓</button></div>`).join('')}</div>`;
+    const save = () => { S.pref.stabL = { ...L }; savePref(); draw(box); };
+    $$('[data-sp]', box).forEach((b) => b.onclick = () => { L.pos = b.dataset.sp; save(); });
+    $('#sdef', box).onchange = (e) => { L.def = e.target.value; save(); };
+    $$('[data-sh]', box).forEach((x) => x.onchange = () => { const h = new Set(L.h); if (x.checked) h.delete(x.dataset.sh); else h.add(x.dataset.sh); if (h.size >= STABS.length) { toast('至少要顯示一個分頁'); x.checked = true; return; } L.h = Array.from(h); save(); });
+    $$('[data-sm]', box).forEach((b) => b.onclick = () => { const o = list.map(([k]) => k); const [i, d] = b.dataset.sm.split(':').map(Number); [o[i], o[i + d]] = [o[i + d], o[i]]; L.o = o; save(); });
+  };
+  dialog('個股分頁列排版', '<div id="stEd"></div>', [['reset', '恢復預設'], ['', '完成', 'primary']], (box) => draw($('#stEd', box))).then((v) => {
+    if (v === 'reset') { delete S.pref.stabL; savePref(); }
+    if (S.route === 's') route();
+  });
 }
 // 稅務類別（與 App TaxKind 相同代碼，存於同步鍵 taxKinds／taxRatios）
 const TAX_KINDS = { TW_STOCK: ['台股一般股票', 1, '現金股利為股利所得：計入綜所稅（可選 8.5% 抵減或 28% 分開計稅）；單次 ≥ 2 萬元扣二代健保 2.11%。'],
@@ -2437,7 +2513,11 @@ function taxKindOf(sym) { const o = kjson('taxKinds', {}); return o[sym] && TAX_
 function taxRatioOf(sym) { const o = kjson('taxRatios', {}); return o[sym] != null ? +o[sym] : TAX_KINDS[taxKindOf(sym)][1]; }
 
 Object.assign(VIEWS.s, {
-  tab() { const t = S.pref.stab || 'ov'; return stockTabs(this.sym).some(([k]) => k === t) ? t : 'ov'; },
+  tab() {
+    const tabs = stockTabs(this.sym); const L = S.pref.stabL || {};
+    const t = this._tab || (L.def && L.def !== 'last' ? L.def : S.pref.stab) || tabs[0][0];
+    return tabs.some(([k]) => k === t) ? t : tabs[0][0];
+  },
   /** 標題下方：ETF 標籤、配息方式、即將除息 */
   async tags() {
     const sym = this.sym; const el = $('#stags'); if (!el) return;
@@ -2787,8 +2867,10 @@ function layEditor() {
     $$('[data-lw]', box).forEach((x) => x.onchange = () => save((c2) => { c2.w[x.dataset.lw] = x.value === 'f' ? 'f' : +x.value; }));
     $$('[data-lm]', box).forEach((b) => b.onclick = () => save((c2) => { const [i, d] = b.dataset.lm.split(':').map(Number); [c2.order[i], c2.order[i + d]] = [c2.order[i + d], c2.order[i]]; }));
   };
-  dialog('版面設定', '<div id="layEd"></div>', [['reset', '恢復預設'], ['', '完成', 'primary']], (box) => { draw($('#layEd', box)); }).then((v) => {
+  const btns = S.route === 's' ? [['stab', '分頁列排版…'], ['reset', '恢復預設'], ['', '完成', 'primary']] : [['reset', '恢復預設'], ['', '完成', 'primary']];
+  dialog('版面設定', '<div id="layEd"></div>', btns, (box) => { draw($('#layEd', box)); }).then((v) => {
     if (v === 'reset') { const l = { ...(S.pref.lay || {}) }; delete l[k]; S.pref.lay = l; savePref(); route(); }
+    if (v === 'stab') stabEditor();
   });
 }
 // 畫面內容變動後自動套用（每次重新整理行情、切換分頁都會重排）
@@ -3016,7 +3098,7 @@ async function advCard(el, sym) {
 const CMDS = () => NAV.map(([r, n, ic]) => [ic + ' ' + n, () => { location.hash = '#/' + r; }, n + ' ' + r])
   .concat([['🌍 美股市場', '#/us'], ['📊 ETF 市場', '#/etf'], ['📉 歷次大跌', '#/crash'], ['🧾 盤後報告', '#/report'], ['🔍 資料來源診斷', '#/diag']].map(([n, h]) => [n, () => { location.hash = h; }, n]))
   .concat([['＋ 新增交易', () => tradeModal(), '新增 交易 買進'], ['🌓 切換深色／淺色', () => { S.pref.theme = (document.documentElement.dataset.theme === 'dark') ? 'light' : 'dark'; savePref(); applyLook(); }, '主題 深色 淺色'],
-    ['🖨 列印資產報表', () => printReport(), '列印 報表'], ['⚙ 這一頁的版面', () => { if ($('#layBtn')) layEditor(); else toast('這一頁沒有可調整的版面'); }, '版面 排版'],
+    ['🖨 列印資產報表', () => printReport(), '列印 報表'], ['⚙ 這一頁的版面', () => { if ($('#layBtn')) layEditor(); else toast('這一頁沒有可調整的版面'); }, '版面 排版'], ['🗂 個股分頁列排版', () => stabEditor(), '個股 分頁 導航 排版'], ['✛ 切換圖表十字線', () => { S.pref.xh = S.pref.xh === false; savePref(); toast(S.pref.xh !== false ? '已開啟十字線' : '已關閉十字線'); if ($('#kxh')) $('#kxh').classList.toggle('on', S.pref.xh !== false); }, '十字線 crosshair'],
     ['🔄 立即同步', () => { pull(true).then(() => toast('已同步')).catch((e) => toast(e.message)); }, '同步 下載']]);
 function cmdPalette() {
   if ($('#cmdp')) return;
@@ -3074,6 +3156,13 @@ async function applyModal() {
     if (r.kicked) return kicked(); S.me = { ...S.me, requests: r.requests }; toast('已送出申請，管理員處理後會開通'); if (S.route === 'member') route(); }
   catch (e) { toast(/未知動作|驗證失敗/.test(e.message) ? '管理員的會員伺服器需要更新到第 5 版才能線上申請，請改在手機 App 申請' : e.message, 6000); }
 }
+/** 手機 App 綁定狀態（伺服器第 7 版起回報） */
+function bindHtml(me) {
+  if (me.phone === undefined) return '';
+  if (me.phone) return `<div class="small" style="margin-top:8px">📱 已綁定手機 App${me.phoneAt ? '（最後登入 ' + esc(String(me.phoneAt).slice(0, 16)) + '）' : ''}</div>`;
+  const dl = location.origin + '/';
+  return `<div class="notice" style="margin-top:8px">📱 尚未綁定手機 App。想在手機使用：<a href="${dl}" target="_blank" rel="noopener">下載 App</a> 後在「設置 › 會員與授權 › 帳號與同步」用同一個 Google 帳號登入，第一次登入時可選擇保留網頁版或手機的資料。</div>`;
+}
 VIEWS.member = {
   title: '會員',
   render() { return head('會員中心') + '<div id="dyn"></div>'; },
@@ -3099,8 +3188,9 @@ VIEWS.member = {
         <div class="tile" style="margin-top:12px"><div class="row"><div class="sp"><b>手機⇄網頁資料同步</b><div class="small muted"><span class="syncst"></span></div></div>
           <button class="btn sm" id="syn">立即同步</button><button class="btn sm" id="dl">從雲端重新下載</button></div>
           <div class="row" style="gap:8px;margin-top:8px"><span class="tag" style="${phoneMaster() ? 'color:var(--primary);border-color:var(--primary)' : ''}">📱 手機 → 網頁</span><span class="tag" style="${S.cloudDir === 'w2p' ? 'color:var(--primary);border-color:var(--primary)' : ''}">💻 網頁 → 手機</span></div>
+          ${bindHtml(me)}
           <div class="small text2" style="margin-top:6px">${phoneMaster() ? '目前以手機為主：手機的變更會自動出現在這裡；網頁上的修改不會上傳。要在網頁記帳或編輯，請在手機「會員與授權 › 帳號與同步」把同步方向改為「網頁 → 手機」。'
-            : S.cloudDir === 'w2p' ? '目前以網頁為主：在這裡的修改會上傳，手機開啟 App 時自動下載；手機上的修改不會上傳。' : '尚未設定同步方向（舊版雙向同步）；請更新手機 App 後在「會員與授權 › 帳號與同步」選擇方向。'}</div>
+            : S.cloudDir === 'w2p' ? (me.phone === false ? '目前只在網頁使用：資料存放在雲端，換電腦或瀏覽器登入同一帳號即可帶回。' : '目前以網頁為主：在這裡的修改會上傳，手機開啟 App 時自動下載；手機上的修改不會上傳。') : '尚未設定同步方向（舊版雙向同步）；請更新手機 App 後在「會員與授權 › 帳號與同步」選擇方向。'}</div>
           <div class="small muted" style="margin-top:6px">自選、群組、交易、持股、帳戶與提醒；資料存放在管理員的會員伺服器。同一帳號網頁同時只能在一個瀏覽器登入。手機需用同一個 Google 帳號登入才會同步。</div></div></div></div>
       <div class="card" style="margin-top:12px"><h2>會員等級方案</h2><div class="scroll-x"><table class="tbl cmp"><thead><tr><th>功能</th>${cols.map(([n, s, c, , cur]) => `<th style="${cur ? 'background:' + argb(c) + '22' : ''}"><span class="badge" style="color:${argb(c)};border-color:${argb(c)}">${esc(n)}</span><div class="small muted">${esc(s)}${cur ? '・目前' : ''}</div></th>`).join('')}</tr></thead>
         <tbody>${FEATURES.map(([k, t]) => `<tr><td>${esc(t)}</td>${cols.map(([, , c, mask]) => `<td style="color:${mask & F[k] ? argb(c) : 'var(--border)'};font-weight:700">${mask & F[k] ? '✓' : '—'}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
@@ -3535,10 +3625,10 @@ function loginView(msg, mode) {
   $('#app').innerHTML = `<div class="login"><div class="box"><div class="logo" style="margin:0 auto">台</div><h1>台美股資產 網頁版</h1>
     <div class="seg" style="margin:12px auto 0;display:inline-flex"><button data-lm="login" class="${mode === 'login' ? 'on' : ''}">登入</button><button data-lm="reg" class="${mode === 'reg' ? 'on' : ''}">註冊新帳號</button></div>
     ${msg ? `<div class="notice err" style="margin-top:14px">${esc(msg)}</div>` : ''}
-    ${mode === 'reg' ? `<div class="text2" style="margin-top:12px">${tr}，用 Google 帳號一鍵建立會員</div>
-      <div class="steps" style="text-align:left;margin:14px auto 0;max-width:330px">${[['1', '同意使用條款', '勾選下方同意事項'], ['2', 'Google 帳號驗證', '不需另設密碼，帳號即會員身分'], ['3', '填寫暱稱與聯絡方式', '方便管理員開通與聯繫'], ['4', '開始使用', '網頁與手機 App 同一帳號、資料同步']].map(([n, t, d]) => `<div class="row" style="gap:10px;margin-bottom:8px;align-items:flex-start"><span class="badge" style="min-width:22px;text-align:center">${n}</span><div><b>${t}</b><div class="small muted">${d}</div></div></div>`).join('')}</div>
+    ${mode === 'reg' ? `<div class="text2" style="margin-top:12px">${tr}，用 Google 帳號一鍵建立會員（不需手機 App）</div>
+      <div class="steps" style="text-align:left;margin:14px auto 0;max-width:330px">${[['1', '同意使用條款', '勾選下方同意事項'], ['2', 'Google 帳號驗證', '不需另設密碼，帳號即會員身分'], ['3', '填寫暱稱與聯絡方式', '方便管理員開通與聯繫'], ['4', '開始使用', '不需要手機也能使用；之後下載 App 用同一帳號登入即可綁定同步']].map(([n, t, d]) => `<div class="row" style="gap:10px;margin-bottom:8px;align-items:flex-start"><span class="badge" style="min-width:22px;text-align:center">${n}</span><div><b>${t}</b><div class="small muted">${d}</div></div></div>`).join('')}</div>
       <label class="row small" style="justify-content:center;margin-top:10px;cursor:pointer"><input type="checkbox" id="agree" style="width:auto" ${store.get('agree', false) ? 'checked' : ''}> 我同意以 Google 帳號識別會員身分，並了解本服務內容僅供參考、不構成投資建議</label>`
-    : `<div class="text2" style="margin-top:12px">用與手機 App 相同的 Google 帳號登入</div>
+    : `<div class="text2" style="margin-top:12px">用註冊時的 Google 帳號登入（與手機 App 相同帳號）</div>
       <div class="feat"><div>📈 自選行情牆、指數、今日漲跌停</div><div>💼 持股損益、資產配置、交易記帳</div><div>📊 個股 K 線、進場建議、籌碼與財務</div><div>🔄 與手機 App 自動同步</div></div>`}
     <div id="gbtn" class="gbtn" style="margin-top:14px">${p.gClient || MOCK ? '' : '<div class="notice">管理員尚未開放網頁登入（Google 登入未設定）。</div>'}</div>
     <div id="lerr" class="small up" style="margin-top:10px"></div>
@@ -3625,9 +3715,10 @@ async function start(meResp) {
   if (me.kicked) return logout('你的帳號已在其他瀏覽器登入，這裡已自動登出');
   if (!me.registered) return logout('登入已失效，請重新登入');
   S.me = me; S.code = me.code ? await verifyCode(me.code) : null;
+  if (me.phone === false && !S.cloudDir) { S.cloudDir = 'w2p'; store.set('cdir', 'w2p'); }
   shell();
   S.keys = store.get('keys', {}); S.dirty = store.get('dirty', false);
-  try { const pr = await pull(); if (pr === 'empty' && !D.trades().length && !D.quotes().length) { S.syncMsg = '雲端還沒有手機資料'; setTimeout(() => toast('雲端還沒有資料：請在手機 App「會員與授權」用同一個 Google 帳號登入，並開啟「與電腦網頁版同步」。', 10000), 1500); } }
+  try { const pr = await pull(); if (pr === 'empty') { S.syncMsg = me.phone ? '雲端還沒有手機資料' : '網頁為主（尚未綁定手機）'; if (me.phone) setTimeout(() => toast('雲端還沒有資料：請在手機 App「會員與授權 › 帳號與同步」開啟「與電腦網頁版同步」。', 10000), 1500); } }
   catch (e) { S.syncMsg = '同步失敗：' + e.message; }
   loadDir().then(() => cur && cur.fill());
   await route();
