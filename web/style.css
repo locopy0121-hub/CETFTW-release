@@ -279,5 +279,3 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--primary); o
 .dlapp.big { margin: 0; border: none; background: none; padding: 2px; }
 .dlapp.big b { font-size: 16px; }
 #stab.full button[data-st] { flex: 1 1 0; text-align: center; }
-.dlapp.line .lineic { flex: none; border-radius: 10px; background: #06C755; color: #fff; font-weight: 800; font-size: 11px; display: flex; align-items: center; justify-content: center; letter-spacing: .5px; }
-.dlapp.line.big .lineic { font-size: 14px; }
