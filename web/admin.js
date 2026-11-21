@@ -68,7 +68,7 @@ async function logout(msg) {
 
 // ───────── 主畫面 ─────────
 /** 網頁版本（發布時由 .github/public/sync.sh 填入） */
-const WEB_VER = /*WEBVER*/{"v":"v1.1.348","sha":"fe6a27a","at":"2026-11-21 23:23"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"5c1f0ae","at":"2026-11-21 23:23"};
 const verText = () => (WEB_VER ? (WEB_VER.v ? (/^v/i.test(WEB_VER.v) ? WEB_VER.v : 'v' + WEB_VER.v) + ' · ' : '') + WEB_VER.sha + (WEB_VER.at ? ' · ' + WEB_VER.at : '') : '開發版');
 const TABS = [['home', '總覽'], ['req', '申請'], ['mem', '會員'], ['pol', '政策'], ['tier', '會員等級'], ['rel', '發布'], ['line', 'LINE'], ['job', '工作紀錄']];
 /** 功能位元（與 App License.Feature 順序相同，不可調整） */
@@ -600,6 +600,9 @@ const lineDist = {
       <div class="card"><h2>使用說明書</h2><div class="small muted">${D.pdf ? '已上架（正式版發布時說明書會隨 APK 一起更新；需要時可再按一次）' : '尚未上架'}</div><button class="btn" id="dman" style="margin-top:8px">${D.pdf ? '更新說明書' : '上架說明書'}</button></div>
       ${D.ready ? `<div class="card"><h2>每日盤後報告</h2><div class="small muted">由管理員 App 產生報表圖與摘要後上架；定時群發時自動執行。${D.reportDate ? '<br>目前上架：' + esc(D.reportDate) : ''}</div>
         ${sw('data-dimg', D.reportImage, '群發附報表圖')}<button class="btn" id="drep" style="margin-top:8px">產生並上架今日報告</button></div>` : ''}
+      <div class="card"><h2>對外短網址</h2><div class="small muted">LINE 訊息、圖文選單、群發、自動回覆與使用者 App 顯示的連結改用短網址（Firebase Hosting 轉址到發佈站），打開後自動轉到發佈站。空白＝直接顯示發佈站網址。</div>
+        <div class="row" style="gap:8px;margin-top:8px"><input id="dal" value="${esc(S.dal != null ? S.dal : D.alias || '')}" placeholder="https://cetftw.web.app/"><button class="btn primary" id="dals">套用</button></div>
+        <div class="small muted" style="margin-top:6px">目前：${esc(D.alias || '（未使用）')}　發佈站：${esc(D.base || '—')}<br>套用會一併：自動回覆規則重新寫入、圖文選單重新部署、會員政策帶入短網址並回傳。</div></div>
       <div class="card"><h2>對外連結</h2>${(D.links || []).map(([n, u]) => `<div class="row" style="margin-top:6px;align-items:flex-start"><div class="sp"><div class="small">${esc(n)}</div><div class="small muted" style="word-break:break-all">${esc(u)}</div></div><a class="btn sm" href="${esc(u)}" target="_blank" rel="noopener">開啟</a><button class="btn sm" data-cp="${esc(u)}">複製</button></div>`).join('') || '<div class="small muted">尚未上架</div>'}
         <div class="small muted" style="margin-top:8px">LINE 目前使用：${esc((L.links || {}).download || '')}<br>上架後，圖文選單、自動回覆、群發範本的「下載」「說明書」會改用上面的連結。</div></div></div>`;
   },
@@ -613,6 +616,9 @@ const lineDist = {
     const im = $('[data-dimg]', v); if (im) im.onchange = (e) => lineJob('distImg', { on: e.target.checked });
     if ($('#drep', v)) $('#drep', v).onclick = () => lineJob('distReport');
     $$('[data-cp]', v).forEach((b) => b.onclick = () => copyTxt(b.dataset.cp, '已複製連結'));
+    $('#dal', v).oninput = (e) => { S.dal = e.target.value; };
+    $('#dals', v).onclick = async () => { const u = ($('#dal', v).value || '').trim(); if (u && !/^(https:\/\/)?[a-z0-9.-]+\.[a-z]{2,}\/?$/i.test(u)) return toast('網址格式不符，例 https://cetftw.web.app/');
+      if (await lineJob('alias', { url: u }, { label: '已送出套用短網址' })) S.dal = null; };
   },
 };
 

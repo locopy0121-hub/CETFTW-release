@@ -814,7 +814,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"v1.1.348","sha":"fe6a27a","at":"2026-11-21 23:23"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"5c1f0ae","at":"2026-11-21 23:23"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -3726,7 +3726,7 @@ async function applyModal() {
 function bindHtml(me) {
   if (me.phone === undefined) return '';
   if (me.phone) return `<div class="small" style="margin-top:8px">📱 已綁定手機 App${me.phoneAt ? '（最後登入 ' + esc(String(me.phoneAt).slice(0, 16)) + '）' : ''}</div>`;
-  const dl = location.origin + '/';
+  const dl = (S.policy && S.policy.pub) ? S.policy.pub.replace(/\/?$/, '/') + 'app' : location.origin + '/';
   return `<div class="notice" style="margin-top:8px">📱 尚未綁定手機 App（只用網頁也能使用全部會員功能，不受裝置碼限制）。想在手機使用：<a href="${dl}" target="_blank" rel="noopener">下載 App</a> 後在「設置 › 會員與授權 › 帳號與同步」用同一個 Google 帳號登入，第一次登入時可選擇保留網頁版或手機的資料。</div>`;
 }
 VIEWS.member = {
@@ -3752,7 +3752,7 @@ VIEWS.member = {
       <div class="card"><h2>會員帳號</h2><div class="row"><div class="logo" style="width:42px;height:42px;font-size:20px;border-radius:50%">${esc((me.name || me.email || '?').slice(0, 1).toUpperCase())}</div>
         <div class="sp"><div><b>${esc(me.name || '會員')}</b>${me.no ? ' <span class="muted">（' + esc(me.no) + '）</span>' : ''}</div><div class="small muted">${esc(me.email || '')}</div></div>
         <button class="btn" id="pfE">編輯</button><button class="btn" id="lo">登出</button></div>
-        <div class="grid g2" style="margin-top:10px;gap:8px">${[['會員代號', me.no], ['聯絡方式', me.contact || '未填寫'], ['註冊時間', me.registeredAt ? String(me.registeredAt).slice(0, 16) : ''], ['伺服器版本', me.serverVersion ? '第 ' + me.serverVersion + ' 版' : '第 4 版以前'], ['網頁版本', webVerText(true)]].filter(([, v0]) => v0).map(([k, v0]) => `<div><div class="small muted">${k}</div><div class="small">${esc(String(v0))}</div></div>`).join('')}</div>
+        <div class="grid g2" style="margin-top:10px;gap:8px">${[['會員代號', me.no], ['聯絡方式', me.contact || '未填寫'], ['註冊時間', me.registeredAt ? String(me.registeredAt).slice(0, 16) : ''], ['伺服器版本', me.serverVersion ? '第 ' + me.serverVersion + ' 版' : '第 4 版以前'], ['網頁版本', webVerText(true)], ['網頁版網址', String((S.policy && S.policy.pub) || location.origin + '/').replace(/^https:\/\//, '').replace(/\/$/, '')]].filter(([, v0]) => v0).map(([k, v0]) => `<div><div class="small muted">${k}</div><div class="small">${esc(String(v0))}</div></div>`).join('')}</div>
         <div class="tile" style="margin-top:12px"><div class="row"><div class="sp"><b>手機⇄網頁資料同步</b><div class="small muted"><span class="syncst"></span></div></div>
           <button class="btn sm" id="syn">立即同步</button><button class="btn sm" id="dl">從雲端重新下載</button></div>
           <div class="row" style="gap:8px;margin-top:8px"><span class="tag" style="${phoneMaster() ? 'color:var(--primary);border-color:var(--primary)' : ''}">📱 手機 → 網頁</span><span class="tag" style="${S.cloudDir === 'w2p' ? 'color:var(--primary);border-color:var(--primary)' : ''}">💻 網頁 → 手機</span></div>
