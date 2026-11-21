@@ -814,7 +814,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"v1.1.337","sha":"afd6f3a","at":"2026-11-21 18:39"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"2c7a95a","at":"2026-11-21 18:41"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -870,7 +870,7 @@ function shell() {
     <aside class="side"><div class="brand"><div class="logo">台</div>台美股資產</div>
       <div class="search gsearch"><input id="gs" placeholder="搜尋個股（按 / ）" autocomplete="off"><div class="res hide"></div></div>
       <nav class="nav">${navHtml}</nav>
-      <div class="foot">${dlAppHtml()}${lineJoinHtml()}<div id="mb"></div><div class="small syncst" style="margin-top:6px"></div>${webVerHtml()}</div></aside>
+      <div class="foot">${dlAppHtml()}<div id="mb"></div><div class="small syncst" style="margin-top:6px"></div>${webVerHtml()}</div></aside>
     <main class="main" id="view"></main>
     <nav class="bottom">${botHtml}</nav></div>`;
   bindSearch($('#gs'), (sym) => { location.hash = '#/s/' + sym; });
@@ -4055,7 +4055,7 @@ VIEWS.more = {
   title: '更多',
   render() {
     return head('更多') + `<div class="search" style="margin-bottom:12px"><input id="ms2" placeholder="搜尋個股：代號或名稱" autocomplete="off"><div class="res hide"></div></div>
-      <div class="card" style="margin-bottom:12px;padding:10px">${dlAppHtml(true)}${lineJoinHtml(true) ? '<div style="border-top:1px solid var(--border);margin:6px 0"></div>' + lineJoinHtml(true) : ''}</div>
+      <div class="card" style="margin-bottom:12px;padding:10px">${dlAppHtml(true)}</div>
       <div class="card list">${NAV.filter(([r]) => !BOTTOM.includes(r)).map(([r, n, ic]) => `<a class="it" href="#/${r}" style="color:inherit"><span style="font-size:20px">${ic}</span><div class="l"><div class="t1">${n}</div></div><span class="muted">›</span></a>`).join('')}</div>`;
   },
   bind() { bindSearch($('#ms2'), (sym) => { location.hash = '#/s/' + sym; }); dlAppVer(); },
