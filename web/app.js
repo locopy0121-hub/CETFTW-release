@@ -709,6 +709,14 @@ const NAV = [['', '總覽', '🏠'], ['watch', '行情', '📈'], ['hold', '持�
   ['alerts', '提醒', '🔔'], ['market', '市場', '🌐'], ['news', '新聞', '📰'], ['cash', '現金與帳戶', '🏦'], ['member', '會員', '👤'], ['settings', '設定', '⚙️']];
 const BOTTOM = ['', 'watch', 'hold', 'market', 'more'];
 const PARENT = { crash: 'market', s: 'none', limits: 'market', rank: 'market', index: 'market', us: 'market', etf: 'market', report: 'market', diag: 'settings', more: 'more' };
+/** 下載手機 App（Android）：連到發佈站下載頁，顯示 App 圖示與最新版本 */
+function dlAppHtml(big) {
+  return `<a class="dlapp${big ? ' big' : ''}" href="/" target="_blank" rel="noopener" title="下載 Android App（與網頁同一帳號同步）"><img src="/web/app-icon.png" alt="台美股資產 App" width="${big ? 52 : 38}" height="${big ? 52 : 38}">
+    <div class="l"><b>下載手機 App</b><div class="small muted dlv">Android · 與網頁同步</div></div><span class="muted">›</span></a>`;
+}
+async function dlAppVer() {
+  try { const j = await (await fetch('/api/latest', { cache: 'no-store' })).json(); if (j && j.tag) $$('.dlv').forEach((el) => { el.textContent = 'Android ' + j.tag + (j.size ? ' · ' + (j.size / 1048576).toFixed(0) + ' MB' : ''); }); } catch (e) {}
+}
 function shell() {
   const navHtml = NAV.map(([r, n, ic]) => `<a href="#/${r}" data-r="${r}"><span class="ic">${ic}</span><span>${n}</span></a>`).join('');
   const botHtml = BOTTOM.map((r) => { const it = NAV.find((x) => x[0] === r) || ['more', '更多', '☰']; return `<a href="#/${r}" data-r="${r}"><span class="ic">${it[2]}</span><span>${it[1]}</span></a>`; }).join('');
@@ -716,7 +724,7 @@ function shell() {
     <aside class="side"><div class="brand"><div class="logo">台</div>台美股資產</div>
       <div class="search gsearch"><input id="gs" placeholder="搜尋個股（按 / ）" autocomplete="off"><div class="res hide"></div></div>
       <nav class="nav">${navHtml}</nav>
-      <div class="foot"><div id="mb"></div><div class="small syncst" style="margin-top:6px"></div></div></aside>
+      <div class="foot">${dlAppHtml()}<div id="mb"></div><div class="small syncst" style="margin-top:6px"></div></div></aside>
     <main class="main" id="view"></main>
     <nav class="bottom">${botHtml}</nav></div>`;
   bindSearch($('#gs'), (sym) => { location.hash = '#/s/' + sym; });
@@ -2461,7 +2469,7 @@ function sapiErr(e) { return e && e.message === 'NEEDDEPLOY' ? NEED_DEPLOY : `<d
 const yf = (o, k) => { const v = o && o[k]; if (v == null) return null; if (typeof v === 'object') return v.fmt || (v.raw != null ? String(v.raw) : null); return String(v); };
 const yr = (o, k) => { const v = o && o[k]; if (v == null) return null; const x = typeof v === 'object' ? v.raw : v; return x == null || isNaN(x) ? null : +x; };
 const kvRows = (items) => `<div class="grid g3" style="gap:10px">${items.filter(([, v]) => v != null && v !== '').map(([k, v]) => `<div><div class="small muted">${esc(k)}</div><div class="num">${esc(String(v))}</div></div>`).join('')}</div>`;
-const STABS = [['ov', '概覽'], ['chip', '籌碼'], ['fin', '財務'], ['hold', '成分'], ['div', '股息'], ['news', '新聞'], ['co', '公司']];
+const STABS = [['ov', '概覽'], ['ta', '技術分析'], ['chip', '籌碼'], ['fin', '財務'], ['hold', '成分'], ['div', '股息'], ['news', '新聞'], ['co', '公司']];
 /** 個股分頁列：依「分頁列排版」設定排序與隱藏（S.pref.stabL＝{o:順序, h:隱藏, def:預設分頁, pos:'top'|'bottom'}） */
 function stockTabs(sym, all) {
   const q = S.q[sym] || {}; const etf = (!isUs(sym) && /^00/.test(sym)) || D.isEtf(sym) || q.type === 'ETF';
@@ -2589,6 +2597,33 @@ Object.assign(VIEWS.s, {
       <div class="small muted" style="margin-top:6px">依 Yahoo Finance 使用者瀏覽關聯推薦，非同業分類。</div></div>`;
   },
   // ── 籌碼 ──
+  /** 技術分析：K 線形態（日／週）、K 棒策略訊號、波動、投資分析指數（與 App 同規則） */
+  async t_ta() {
+    const sym = this.sym; const si = $('#si'); si.innerHTML = '<div class="card empty" style="grid-column:1/-1">分析中…</div>';
+    if (!can('KLINE')) { si.innerHTML = lockCard('KLINE'); return; }
+    const etf = D.isEtf(sym) || (!isUs(sym) && /^00/.test(sym)) || (S.q[sym] || {}).type === 'ETF';
+    const b = await liveBars(sym, '2y'); if (this.sym !== sym || this.tab() !== 'ta') return;
+    if (b.length < 60) { si.innerHTML = '<div class="card empty" style="grid-column:1/-1">歷史資料不足，無法分析</div>'; return; }
+    si.innerHTML = '<div class="card" id="kaC" style="grid-column:1/-1"></div><div class="card" id="ksC"></div><div class="card" id="voC"></div><div class="card" id="iaC" style="grid-column:1/-1"><h2>投資分析指數</h2><div class="small muted">計算中…</div></div>';
+    const tickOf = (p) => (isUs(sym) ? 0.01 : twTick(p, etf));
+    const sigs = kbarSignals(b, etf, tickOf);
+    const drawKa = async (weekly) => {
+      const cs = weekly ? weeklyBars(await liveBars(sym, '5y')) : b; if (this.sym !== sym || !$('#kaC')) return;
+      const r = klineAnalyze(cs); const el = $('#kaC');
+      if (!r) { el.innerHTML = '<h2>K 線形態分析</h2><div class="small muted">資料不足</div>'; return; }
+      if (!weekly) r.entry = refineEntry(r, sigs, etf);
+      el.innerHTML = kaCardHtml(r, weekly, sym);
+      $$('[data-tf]', el).forEach((x) => x.onclick = () => { this._kaW = x.dataset.tf === 'w'; drawKa(this._kaW); });
+      drawChart($('#kaChart'), cs.slice(-120), { key: 'ka' + sym + (weekly ? 'w' : 'd'), count: 60, pats: true, mas: [20, 60], H: 300 });
+    };
+    drawKa(!!this._kaW);
+    $('#ksC').innerHTML = ksCardHtml(sigs, etf);
+    const v = volaOf(b); const kr = klineAnalyze(b);
+    if (v) { $('#voC').innerHTML = voCardHtml(v, kr && kr.plan); drawSeries($('#voChart'), v.series.map((x) => x[0]), [{ v: v.series.map((x) => x[1]), color: '#f59e0b', name: '年化波動', fill: true }], { h: 180, fmt: (x) => x.toFixed(0) + '%', key: 'vo' + sym }); }
+    else $('#voC').innerHTML = '<h2>波動</h2><div class="small muted">資料不足</div>';
+    try { const a = await investAnalysis(sym, b); if (this.sym !== sym || this.tab() !== 'ta') return; $('#iaC').innerHTML = a ? iaCardHtml(a) : '<h2>投資分析指數</h2><div class="small muted">資料不足</div>'; }
+    catch (e) { if ($('#iaC')) $('#iaC').innerHTML = '<h2>投資分析指數</h2>' + sapiErr(e); }
+  },
   async t_chip() {
     const sym = this.sym; const us = isUs(sym); const si = $('#si'); si.innerHTML = '<div class="card empty" style="grid-column:1/-1">讀取中…</div>';
     if (!can('STOCKPRO')) { si.innerHTML = lockCard('STOCKPRO', '籌碼（個股進階資料）'); return; }
@@ -3513,9 +3548,10 @@ VIEWS.more = {
   title: '更多',
   render() {
     return head('更多') + `<div class="search" style="margin-bottom:12px"><input id="ms2" placeholder="搜尋個股：代號或名稱" autocomplete="off"><div class="res hide"></div></div>
+      <div class="card" style="margin-bottom:12px;padding:10px">${dlAppHtml(true)}</div>
       <div class="card list">${NAV.filter(([r]) => !BOTTOM.includes(r)).map(([r, n, ic]) => `<a class="it" href="#/${r}" style="color:inherit"><span style="font-size:20px">${ic}</span><div class="l"><div class="t1">${n}</div></div><span class="muted">›</span></a>`).join('')}</div>`;
   },
-  bind() { bindSearch($('#ms2'), (sym) => { location.hash = '#/s/' + sym; }); },
+  bind() { bindSearch($('#ms2'), (sym) => { location.hash = '#/s/' + sym; }); dlAppVer(); },
   fill() {}, syms() { return []; },
 };
 function applyColor() { applyLook(); }
@@ -3623,6 +3659,400 @@ function exportCsv(kind) {
   toast('已下載 CSV');
 }
 
+
+// ───────── 技術分析（與 App KlineAnalysis／KBarSignalEngine／InvestAnalysis／EntryAdvisor.volatility 同規則） ─────────
+const KP = {
+  MB: ['大陽線（長紅 K）', '延續', 2], MS: ['大陰線（長黑 K）', '延續', -2], HAM: ['鎚子線', '反轉', 1], IHAM: ['倒鎚線', '反轉', 1], SS: ['流星線', '反轉', -1], HM: ['吊人線', '反轉', -1],
+  DOJI: ['十字線', '反轉', 0], DD: ['蜻蜓十字（T 字）', '反轉', 1], DG: ['墓碑十字（倒 T）', '反轉', -1], EGB: ['多頭吞噬（陽包陰）', '反轉', 2], EGS: ['空頭吞噬（陰包陽）', '反轉', -2],
+  PIER: ['貫穿線（曙光初現）', '反轉', 1], DCC: ['烏雲罩頂', '反轉', -1], HRB: ['多頭母子（陰孕陽）', '反轉', 1], HRS: ['空頭母子（陽孕陰）', '反轉', -1], TB: ['平底（雙腳打底）', '反轉', 1], TT: ['平頂（雙頂受阻）', '反轉', -1],
+  MST: ['晨星', '反轉', 2], EST: ['暮星（夜星）', '反轉', -2], S3: ['紅三兵', '延續', 2], C3: ['黑三鴉', '延續', -2], GU: ['向上跳空缺口', '缺口/突破', 2], GD: ['向下跳空缺口', '缺口/突破', -2],
+  BO: ['帶量突破前高', '缺口/突破', 2], BD: ['帶量跌破前低', '缺口/突破', -2], BT: ['假突破（多頭陷阱）', '缺口/突破', -2], RT: ['假跌破（空頭陷阱）', '缺口/突破', 2],
+};
+const DIRL = { 2: '強烈偏多', 1: '偏多', 0: '中性', '-1': '偏空', '-2': '強烈偏空' };
+const kb = { body: (x) => Math.abs(x.c - x.o), range: (x) => x.h - x.l, up: (x) => x.h - Math.max(x.o, x.c), lo: (x) => Math.min(x.o, x.c) - x.l, mid: (x) => (x.o + x.c) / 2 };
+function smaAt(v, i, n) { if (i < 0 || i + 1 < n) return null; let s = 0; for (let k = i - n + 1; k <= i; k++) s += v[k]; return s / n; }
+function atrAt(cs, i, n = 14) { if (i < 1) return cs[i].h - cs[i].l; const from = Math.max(1, i - n + 1); let s = 0, c = 0; for (let k = from; k <= i; k++) { s += Math.max(cs[k].h - cs[k].l, Math.abs(cs[k].h - cs[k - 1].c), Math.abs(cs[k].l - cs[k - 1].c)); c++; } return s / c; }
+function kaTrendAt(cl, i) {
+  const j = i - 1; const ma = smaAt(cl, j, 20), mp = smaAt(cl, j - 5, 20); if (ma == null || mp == null) return 0; const c = cl[j];
+  if (c > ma && ma > mp) return 1; if (c < ma && ma < mp) return -1; if (c < cl[Math.max(0, j - 5)] * 0.97) return -1; if (c > cl[Math.max(0, j - 5)] * 1.03) return 1; return 0;
+}
+function kaDetect(cs, cl, i) {
+  if (i < 22) return [];
+  const out = []; const c = cs[i], p = cs[i - 1]; const f = fmtPx;
+  let ab = 0, ar = 0; for (let k = i - 10; k < i; k++) { ab += kb.body(cs[k]); ar += kb.range(cs[k]); } ab /= 10; ar /= 10; if (!(ab > 0) || !(ar > 0)) return out;
+  const tr = kaTrendAt(cl, i); let vm = 0; for (let k = i - 20; k < i; k++) vm += cs[k].v || 0; vm /= 20; const big = vm > 0 && (c.v || 0) >= vm * 1.5;
+  const adj = (b, want) => Math.max(0.3, Math.min(0.97, b + (tr === want ? 0.05 : tr === -want ? -0.25 : -0.1)));
+  const H = (k, conf, low, high, note) => out.push({ k, i, conf, low, high, note });
+  const body = kb.body(c), rg = kb.range(c), up = kb.up(c), lo = kb.lo(c), bull = c.c > c.o, bear = c.c < c.o;
+  const doji = rg > 0 && body / rg <= 0.1 && rg >= ar * 0.5;
+  if (rg > 0 && !doji) {
+    if (body >= ab * 1.8 && up <= body * 0.15 && lo <= body * 0.15) {
+      if (bull) H('MB', big ? 0.88 : 0.78, c.l, c.h, '實體長紅、幾乎無影線，買盤主導' + (big ? '，且帶量。' : '。'));
+      else H('MS', big ? 0.88 : 0.78, c.l, c.h, '實體長黑、幾乎無影線，賣壓主導' + (big ? '，且帶量。' : '。'));
+    }
+    const lL = lo >= body * 2 && up <= Math.max(body * 0.5, rg * 0.1) && rg >= ar * 0.8, lU = up >= body * 2 && lo <= Math.max(body * 0.5, rg * 0.1) && rg >= ar * 0.8;
+    if (lL) { if (tr === -1) H('HAM', 0.78, c.l, c.h, '下跌後出現長下影線，低檔有買盤承接；隔日收高確認更佳。'); else if (tr === 1) H('HM', 0.66, c.l, c.h, '上漲後出現長下影線，盤中曾遭大量賣壓，留意高檔轉弱。'); }
+    if (lU) { if (tr === 1) H('SS', 0.78, c.l, c.h, '上漲後留長上影線，上方賣壓沉重。'); else if (tr === -1) H('IHAM', 0.6, c.l, c.h, '下跌後出現倒鎚，買盤試探反攻，需隔日紅 K 確認。'); }
+  }
+  if (doji) {
+    if (lo >= rg * 0.7) H('DD', adj(0.72, -1), c.l, c.h, '蜻蜓十字（T 字），下方有強支撐。');
+    else if (up >= rg * 0.7) H('DG', adj(0.72, 1), c.l, c.h, '墓碑十字（倒 T），上方壓力強。');
+    else H('DOJI', 0.55, c.l, c.h, '十字線，多空拉鋸，' + (tr !== 0 ? '趨勢中出現常為變盤訊號。' : '觀察下一根方向。'));
+  }
+  const lo2 = Math.min(p.l, c.l), hi2 = Math.max(p.h, c.h); const pb = kb.body(p), pBull = p.c > p.o, pBear = p.c < p.o;
+  if (pBear && bull && pb >= ab * 0.3 && c.c >= p.o && c.o <= p.c && body > pb) H('EGB', adj(0.86, -1), lo2, hi2, '陽線實體完全吞噬前一根陰線，多方反攻' + (big ? '，且帶量。' : '。'));
+  if (pBull && bear && pb >= ab * 0.3 && c.c <= p.o && c.o >= p.c && body > pb) H('EGS', adj(0.86, 1), lo2, hi2, '陰線實體完全吞噬前一根陽線，空方反撲' + (big ? '，且帶量。' : '。'));
+  if (pBear && pb >= ab && bull && c.o <= p.c && c.c > kb.mid(p) && c.c < p.o) H('PIER', adj(0.78, -1), lo2, hi2, '開低後收復前一根長黑實體一半以上，買盤回籠。');
+  if (pBull && pb >= ab && bear && c.o >= p.c && c.c < kb.mid(p) && c.c > p.o) H('DCC', adj(0.78, 1), lo2, hi2, '開高後跌破前一根長紅實體一半，賣壓湧現。');
+  const inside = Math.max(c.o, c.c) <= Math.max(p.o, p.c) && Math.min(c.o, c.c) >= Math.min(p.o, p.c) && body <= pb * 0.5;
+  if (inside && pb >= ab) { if (pBear) H('HRB', adj(0.68, -1), lo2, hi2, '長黑後出現小實體孕線，賣壓暫歇。'); if (pBull) H('HRS', adj(0.68, 1), lo2, hi2, '長紅後出現小實體孕線，買氣轉弱。'); }
+  if (p.l > 0 && Math.abs(p.l - c.l) / p.l <= 0.002 && tr === -1 && c.c > c.o) H('TB', 0.72, lo2, hi2, '連兩根低點幾乎相同，低點獲得支撐。');
+  if (p.h > 0 && Math.abs(p.h - c.h) / p.h <= 0.002 && tr === 1 && c.c < c.o) H('TT', 0.72, lo2, hi2, '連兩根高點幾乎相同，上檔遇壓。');
+  const a = cs[i - 2], b = p; const lo3 = Math.min(a.l, b.l, c.l), hi3 = Math.max(a.h, b.h, c.h); const abody = kb.body(a), bbody = kb.body(b);
+  if (a.c < a.o && abody >= ab && bbody <= abody * 0.4 && Math.max(b.o, b.c) <= a.c + abody * 0.1 && bull && c.c > kb.mid(a)) H('MST', adj(0.9, -1), lo3, hi3, '長黑、小星、長紅三根組合，底部反轉訊號。');
+  if (a.c > a.o && abody >= ab && bbody <= abody * 0.4 && Math.min(b.o, b.c) >= a.c - abody * 0.1 && bear && c.c < kb.mid(a)) H('EST', adj(0.9, 1), lo3, hi3, '長紅、小星、長黑三根組合，頭部反轉訊號。');
+  const sold = (x, pv) => x.c > x.o && x.c > pv.c && x.o >= Math.min(pv.o, pv.c) && x.o <= Math.max(pv.o, pv.c) && kb.body(x) >= ab * 0.5 && kb.up(x) <= kb.body(x) * 0.35;
+  const crow = (x, pv) => x.c < x.o && x.c < pv.c && x.o >= Math.min(pv.o, pv.c) && x.o <= Math.max(pv.o, pv.c) && kb.body(x) >= ab * 0.5 && kb.lo(x) <= kb.body(x) * 0.35;
+  if (a.c > a.o && abody >= ab * 0.5 && sold(b, a) && sold(c, b)) H('S3', tr === 1 ? 0.8 : 0.88, lo3, hi3, '連三根實體紅 K 逐步墊高，多方動能延續' + (tr === 1 ? '（已漲一段，留意追高）。' : '。'));
+  if (a.c < a.o && abody >= ab * 0.5 && crow(b, a) && crow(c, b)) H('C3', tr === -1 ? 0.8 : 0.88, lo3, hi3, '連三根實體黑 K 逐步走低，賣壓持續。');
+  if (c.l > p.h) H('GU', big ? 0.86 : 0.74, p.h, c.h, '向上跳空，缺口 ' + f(p.h) + '～' + f(c.l) + ' 為短線支撐。');
+  if (c.h < p.l) H('GD', big ? 0.86 : 0.74, c.l, p.l, '向下跳空，缺口 ' + f(c.h) + '～' + f(p.l) + ' 為短線壓力。');
+  let res = -Infinity, sup = Infinity; for (let k = i - 20; k < i; k++) { res = Math.max(res, cs[k].h); sup = Math.min(sup, cs[k].l); }
+  if (c.c > res && big) H('BO', 0.84, sup, c.h, '帶量收在前 20 根高點 ' + f(res) + ' 之上。');
+  if (c.c < sup && big) H('BD', 0.84, c.l, res, '帶量收在前 20 根低點 ' + f(sup) + ' 之下。');
+  if (c.h > res && c.c < res && up >= body) H('BT', 0.8, c.l, c.h, '盤中突破前高 ' + f(res) + ' 後拉回收在下方，形成多頭陷阱。');
+  if (c.l < sup && c.c > sup && lo >= body) H('RT', 0.8, c.l, c.h, '盤中跌破前低 ' + f(sup) + ' 後收復，形成空頭陷阱。');
+  return out;
+}
+function kaPlan(cur, dir, latest, x) {
+  const p = cur.c, atr = x.atr, f = fmtPx; if (!(atr > 0)) return null;
+  if (dir > 0) {
+    const bl = latest.filter((h) => KP[h.k][2] > 0); const pl = bl.length ? Math.min(...bl.map((h) => h.low)) : cur.l, ph = bl.length ? Math.max(...bl.map((h) => h.high)) : cur.h;
+    let stop = Math.min(pl, x.support < p ? x.support : pl) - atr * 0.3; stop = Math.max(p - atr * 3, Math.min(p - atr * 0.8, stop));
+    const risk = p - stop; const tp1 = x.resistance > p + risk ? x.resistance : p + risk * 1.5; const tp2 = Math.max(p + risk * 3, tp1 + risk);
+    return { bull: true, title: '偏多操作參考', trigger: '收盤站穩形態高點 ' + f(ph) + '，或回測 ' + f(p - atr * 0.5) + ' 附近不破再布局', e0: p - atr * 0.5, e1: p, stop, tp1, tp2, rr: (tp1 - p) / risk,
+      note: '停損以 ATR(14)=' + f(atr) + ' 調整；目標一優先取前 20 根壓力 ' + f(x.resistance) + '。' };
+  }
+  if (dir < 0) {
+    const bs = latest.filter((h) => KP[h.k][2] < 0); const ph = bs.length ? Math.max(...bs.map((h) => h.high)) : cur.h, pl = bs.length ? Math.min(...bs.map((h) => h.low)) : cur.l;
+    let stop = Math.max(ph, x.resistance > p ? x.resistance : ph) + atr * 0.3; stop = Math.min(p + atr * 3, Math.max(p + atr * 0.8, stop));
+    const risk = stop - p; const tp1 = x.support < p - risk ? x.support : p - risk * 1.5; const tp2 = Math.max(0, Math.min(p - risk * 3, tp1 - risk));
+    return { bull: false, title: '偏空：持股減碼／防守參考', trigger: '反彈至 ' + f(p) + '～' + f(p + atr * 0.5) + ' 減碼；收盤跌破形態低點 ' + f(pl) + ' 轉保守', e0: p, e1: p + atr * 0.5, stop, tp1, tp2, rr: (p - tp1) / risk,
+      note: '空手者觀望；放空者以 ' + f(stop) + ' 為停損。下方第一支撐 ' + f(x.support) + '。' };
+  }
+  return null;
+}
+function kaEntry(dir, plan, x, latest, last) {
+  const rr = plan ? plan.rr : 0; const f = fmtPx; const r2 = (v) => v.toFixed(2);
+  const bullRev = latest.some((h) => h.i === last && KP[h.k][2] > 0 && (KP[h.k][1] === '反轉' || h.k === 'RT'));
+  const bearRev = latest.some((h) => h.i === last && KP[h.k][2] < 0 && (KP[h.k][1] === '反轉' || h.k === 'BT'));
+  if (dir === 2 && rr >= 1.5 && x.vol !== 'DT' && x.loc !== 'R') return { label: '建議進場', level: 2, reason: '多方訊號強、盈虧比 1:' + r2(rr) + '，可依布局區間進場，跌破 ' + f(plan.stop) + ' 停損。', tip: '可續抱，停利上移' };
+  if (dir > 0 && rr >= 1.2 && x.loc !== 'R' && x.vol !== 'DT') return { label: '可分批進場', level: 1, reason: '偏多、盈虧比 1:' + r2(rr) + '，先進 1/3～1/2，站穩形態高點再加碼。', tip: '續抱' };
+  if (dir > 0) return { label: '等回測再進', level: 0, reason: x.vol === 'DT' ? '價漲量縮，追價風險高，等回測支撐 ' + f(x.support) + ' 附近量縮不破再進。' : x.loc === 'R' ? '接近壓力 ' + f(x.resistance) + '，等突破站穩或回測再進。' : '方向偏多但盈虧比僅 1:' + r2(rr) + '，等拉回到 ' + f(plan ? plan.e0 : x.ma20) + ' 附近再進。', tip: '續抱' };
+  if (dir === 0 && bullRev) return { label: '觀察止跌', level: 0, reason: '出現止跌形態但力道未確認，等下一根收紅並站上 ' + f(x.ma20) + '（MA20）再考慮。', tip: '續抱觀察' };
+  if (dir === 0) return { label: '觀望', level: 0, reason: '多空不明，等帶量突破 ' + f(x.resistance) + ' 或回測 ' + f(x.support) + ' 有撐再決定。', tip: '續抱觀察' };
+  if (dir < 0 && bullRev) return { label: '等待止跌確認', level: -1, reason: '空頭格局中出現止跌形態，尚未扭轉，等站回 MA20 ' + f(x.ma20) + ' 再評估。', tip: '暫不加碼' };
+  if (dir === -1) return { label: '暫不進場', level: -1, reason: '偏空' + (bearRev ? '，最新出現轉弱形態' : '') + '，等止跌訊號出現再評估。', tip: '反彈減碼、跌破 ' + f(x.support) + ' 防守' };
+  return { label: '不宜進場', level: -2, reason: '強烈偏空' + (x.loc === 'B' ? '且跌破支撐' : '') + '，避免接刀。', tip: '建議減碼，嚴設停損' };
+}
+const KVOL = { C: '帶量（≥ 1.5 倍均量）', D: '量縮（≤ 0.6 倍均量）', DT: '量價背離：價創高、量縮', DB: '量價背離：價創低、量縮', N: '量能正常' };
+const KLOC = { S: '接近支撐', R: '接近壓力', M: '區間中段', A: '突破壓力上方', B: '跌破支撐下方' };
+/** K 線形態分析：全歷史掃描（統計同形態 N 根後勝率）＋近 3 根形態＋量價、位置、趨勢綜合評分與操作計畫 */
+function klineAnalyze(cs, forward = 5) {
+  if (!cs || cs.length < 40) return null;
+  const n = cs.length, cl = cs.map((x) => x.c), last = n - 1, cur = cs[last]; const f = fmtPx;
+  const ma20 = smaAt(cl, last, 20), ma60 = smaAt(cl, last, 60);
+  let vm = 0; for (let k = last - 20; k < last; k++) vm += cs[k].v || 0; vm /= 20;
+  const atr = atrAt(cs, last); let res = -Infinity, sup = Infinity, hi20 = -Infinity, lo20 = Infinity;
+  for (let k = last - 20; k < last; k++) { res = Math.max(res, cs[k].h); sup = Math.min(sup, cs[k].l); hi20 = Math.max(hi20, cl[k]); lo20 = Math.min(lo20, cl[k]); }
+  if (ma60 != null && ma60 < cur.c && ma60 > sup) sup = ma60;
+  const trend = kaTrendAt(cl, n);
+  const cv = cur.v || 0, pv = cs[last - 1].v || 0;
+  const vol = cur.c >= hi20 && vm > 0 && cv < vm * 0.8 && pv < vm ? 'DT' : cur.c <= lo20 && vm > 0 && cv < vm * 0.8 && pv < vm ? 'DB' : vm > 0 && cv >= vm * 1.5 ? 'C' : vm > 0 && cv <= vm * 0.6 ? 'D' : 'N';
+  const near = Math.max(atr, cur.c * 0.015);
+  const loc = cur.c > res ? 'A' : cur.c < sup ? 'B' : cur.c - sup <= near ? 'S' : res - cur.c <= near ? 'R' : 'M';
+  const x = { trend, ma20, ma60, atr, support: sup, resistance: res, vol, loc };
+  const all = []; for (let i = 22; i <= last; i++) kaDetect(cs, cl, i).forEach((h) => all.push(h));
+  const stats = {};
+  all.filter((h) => h.i + forward <= last && KP[h.k][2] !== 0).forEach((h) => { const r = (cl[h.i + forward] / cl[h.i] - 1) * (KP[h.k][2] > 0 ? 1 : -1); (stats[h.k] = stats[h.k] || []).push(r); });
+  Object.keys(stats).forEach((k) => { const a = stats[k]; stats[k] = { count: a.length, win: a.filter((r) => r > 0).length / a.length, avg: a.reduce((s, v) => s + v, 0) / a.length * 100 }; });
+  const recent = all.filter((h) => h.i >= n - 40);
+  const latest = all.filter((h) => h.i >= n - 3).sort((a, b) => b.i - a.i || b.conf - a.conf);
+  const decay = { [last]: 1, [last - 1]: 0.6, [last - 2]: 0.35 }; const reasons = []; let score = 0;
+  latest.forEach((h) => { const st = stats[h.k]; const hist = st && st.count >= 3 ? 0.6 + st.win * 0.8 : 1; score += KP[h.k][2] * h.conf * (decay[h.i] ?? 0.3) * hist; });
+  if (latest.length) reasons.push('近 3 根出現：' + Array.from(new Set(latest.map((h) => KP[h.k][0]))).join('、'));
+  const lastDir = latest.filter((h) => h.i === last).reduce((a, h) => a + KP[h.k][2], 0);
+  if (vol === 'C' && lastDir !== 0) { score += 0.4 * Math.sign(lastDir); reasons.push('今日帶量，' + (lastDir > 0 ? '多方' : '空方') + '形態可信度提高'); }
+  if (vol === 'DT') { score -= 0.8; reasons.push('價創 20 日新高但量縮，追價力道不足'); }
+  if (vol === 'DB') { score += 0.5; reasons.push('價創 20 日新低但量縮，殺盤力道減弱'); }
+  if (loc === 'S') { score += 0.5; reasons.push('股價接近支撐 ' + f(sup)); } else if (loc === 'R') { score -= 0.5; reasons.push('股價接近壓力 ' + f(res)); }
+  else if (loc === 'A') { score += 0.4; reasons.push('收盤站上前 20 根高點'); } else if (loc === 'B') { score -= 0.4; reasons.push('收盤跌破前 20 根低點'); }
+  score += trend * 0.5;
+  reasons.push('趨勢：' + (trend === 1 ? '多頭趨勢' : trend === -1 ? '空頭趨勢' : '盤整') + '（MA20 ' + f(ma20) + (ma60 != null ? '、MA60 ' + f(ma60) : '') + '）');
+  const dir = score >= 2.2 ? 2 : score >= 0.8 ? 1 : score <= -2.2 ? -2 : score <= -0.8 ? -1 : 0;
+  const strength = Math.max(3, Math.min(97, Math.round(50 + score * 14)));
+  const plan = kaPlan(cur, dir, latest, x);
+  return { cs, dir, strength, score, latest, recent, x, plan, stats, forward, reasons, entry: kaEntry(dir, plan, x, latest, last) };
+}
+/** 週 K：由日 K 合併（週一為一週起點） */
+function weeklyBars(b) {
+  const out = []; let wk = null;
+  b.forEach((x) => { const d = new Date(x.d.replace(/\//g, '-') + 'T00:00:00Z'); const mon = new Date(d); mon.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7)); const key = mon.toISOString().slice(0, 10);
+    if (!wk || wk.key !== key) { wk = { key, d: x.d, o: x.o, h: x.h, l: x.l, c: x.c, v: x.v || 0 }; out.push(wk); } else { wk.h = Math.max(wk.h, x.h); wk.l = Math.min(wk.l, x.l); wk.c = x.c; wk.v += x.v || 0; wk.d = x.d; } });
+  return out;
+}
+
+// ---- K 棒策略訊號（普通股／ETF 分流） ----
+const KS_ST = { SFP: '流動性掃蕩（SFP）', BOS: '突破＋缺口回踩（BOS／FVG）', BOX: '箱型爆量突破', ENG: '關鍵均線吞噬', IB: '母子線壓縮突破', R3: '上升三法中繼', PANIC: '恐慌大跌末端止跌', GAP: '竭盡缺口回補' };
+const KS_TM = { CLOSE: ['收盤確認', 'K 棒收盤前 5 分鐘或收盤價確認後進場'], NEXT: ['次日開盤', '訊號 K 棒確認後，於下一根 K 棒開盤價進場'], RETEST: ['限價回踩', '不追高，價格回踩關鍵價位（缺口、頸線、箱頂）時限價買進'], BRK: ['盤中突破', '價格盤中突破關鍵點位（例如母棒高點＋1 檔）時觸發'] };
+const KS_STA = { ACTIVE: '今日成立', RECENT: '近日成立', WAITING: '等待觸發', TRIGGERED: '已觸發' };
+function rsiAt(c, n = 14, end = c.length - 1) { if (end < n) return 50; let g = 0, l = 0; for (let i = end - n + 1; i <= end; i++) { const d = c[i] - c[i - 1]; if (d > 0) g += d; else l -= d; } if (l === 0) return 100; return 100 - 100 / (1 + (g / n) / (l / n)); }
+function kbarSignals(cs, etf, tickOf) {
+  if (!cs || cs.length < 30) return [];
+  const n = cs.length, cl = cs.map((x) => x.c), f = fmtPx;
+  const ma = (p) => cl.map((_, i) => smaAt(cl, i, p)); const ma10 = ma(10), ma20 = ma(20), ma60 = ma(60); const vv = cs.map((x) => x.v || 0); const vma20 = vv.map((_, i) => smaAt(vv, i, 20));
+  const tick = (p) => tickOf(p); const volR = (i) => (vma20[i - 1] > 0 ? (cs[i].v || 0) / vma20[i - 1] : 1); const conf = (v) => Math.max(30, Math.min(95, Math.floor(v)));
+  const bodyMin = (x) => Math.max(kb.body(x), kb.range(x) * 0.05); const br = (x) => (kb.range(x) > 0 ? kb.body(x) / kb.range(x) : 0);
+  const sig = (st, bull, i, entry, sl, tp1, tp2, cf, tm, desc, pattern, status, trailing) => ({ st, bull, i, age: n - 1 - i, entry, sl, tp1, tp2, rr: Math.abs(entry - sl) > 0 ? Math.abs(tp1 - entry) / Math.abs(entry - sl) : 0,
+    conf: cf, tm, desc, pattern, status: status || (i === n - 1 ? 'ACTIVE' : 'RECENT'), trailing });
+  const out = [];
+  const hiOf = (a, b) => { let m = -Infinity; for (let k = a; k < b; k++) m = Math.max(m, cs[k].h); return m; }; const loOf = (a, b) => { let m = Infinity; for (let k = a; k < b; k++) m = Math.min(m, cs[k].l); return m; };
+  if (!etf) {
+    for (let i = n - 3; i < n; i++) { if (i < 21) continue; const c = cs[i]; const sL = loOf(i - 20, i), sH = hiOf(i - 20, i);
+      if (c.l < sL && c.c > sL && kb.lo(c) >= 1.5 * bodyMin(c)) { const fresh = i === n - 1; const entry = fresh ? c.c : cs[i + 1].o; const sl = c.l - tick(c.l); const tp1 = entry + (entry - sl) * 2;
+        let cf = 70; if (volR(i) >= 1.5) cf += 10; if (c.c >= c.l + kb.range(c) * 0.66) cf += 5; if ((ma60[i] || 0) < c.c) cf += 5;
+        out.push(sig('SFP', true, i, entry, sl, tp1, sH > tp1 ? sH : null, conf(cf), fresh ? 'CLOSE' : 'NEXT', fresh ? `收盤前 5 分鐘確認收盤價仍在前低 ${f(sL)} 之上，以收盤價 ${f(entry)} 進場；或次日開盤進場。` : `訊號已於 ${n - 1 - i} 日前成立，以次日開盤價 ${f(entry)} 為進場參考；現價離進場價過遠時不追。`,
+          `盤中跌破前 20 日低點 ${f(sL)} 後收回，下影線 ${f(kb.lo(c))} ≥ 實體 1.5 倍（掃停損後拉回）。`)); }
+      if (c.h > sH && c.c < sH && kb.up(c) >= 1.5 * bodyMin(c)) { const sl = c.h + tick(c.h); const tp1 = c.c - (sl - c.c) * 2; let cf = 68; if (volR(i) >= 1.5) cf += 10; if ((ma20[i] ?? Infinity) > c.c) cf += 5;
+        out.push(sig('SFP', false, i, c.c, sl, tp1, sL < tp1 ? sL : null, conf(cf), 'CLOSE', `持股者：收盤確認仍在前高 ${f(sH)} 之下時減碼；空手者不進場。站回 ${f(sl)} 則訊號失效。`, `盤中突破前 20 日高點 ${f(sH)} 後拉回，上影線 ≥ 實體 1.5 倍（假突破）。`)); } }
+    const bos = []; for (let j = Math.max(21, n - 12); j < n - 2; j++) { const b1 = cs[j], b3 = cs[j + 2]; const atr = atrAt(cs, j); const pH = hiOf(j - 20, j);
+      if (!(b1.c > b1.o && br(b1) >= 0.6 && kb.body(b1) >= atr * 0.9 && b1.c > pH && b1.h < b3.l)) continue;
+      const top = b3.l, mid = b1.h + (b3.l - b1.h) / 2; let touched = false; for (let k = j + 3; k < n; k++) if (cs[k].l <= top) touched = true;
+      const sl = Math.min(b1.o, b1.l) - tick(b1.l); const swing = hiOf(j, n); const entry = mid; const tp1 = swing > entry + (entry - sl) ? swing : entry + (entry - sl) * 2;
+      let cf = 72; if (volR(j) >= 1.8) cf += 8; if ((ma20[n - 1] || 0) < cs[n - 1].c) cf += 5;
+      bos.push(sig('BOS', true, j + 2, entry, sl, tp1, null, conf(cf), 'RETEST', touched ? `價格已回踩缺口（${f(mid)}～${f(top)}），回踩不破可依限價進場；收盤跌破 ${f(sl)} 停損。` : `突破當下不追高。掛限價單等待回踩缺口頂部 ${f(top)} 或缺口 50% 位置 ${f(mid)} 買進。`,
+        `長紅突破前 20 日高點 ${f(pH)}，並留下 ${f(b1.h)}～${f(b3.l)} 的不平衡缺口。`, touched ? 'TRIGGERED' : 'WAITING')); }
+    if (bos.length) out.push(bos[bos.length - 1]);
+    for (let i = n - 3; i < n; i++) { if (i < 36) continue; const c = cs[i]; const top = hiOf(i - 15, i), bot = loOf(i - 15, i); const atr = atrAt(cs, i - 1);
+      if ((top - bot) / bot > 0.12 && top - bot > atr * 4.5) continue; const vr = volR(i), h = top - bot;
+      if (c.c > top && br(c) >= 0.6 && vr >= 1.8) { const fresh = i === n - 1; const entry = fresh ? c.c : top; const sl = fresh ? (c.o + c.c) / 2 - tick(c.c) : top - atr * 0.5;
+        let cf = 72 + Math.min(10, (vr - 1.8) * 5); if ((ma60[i] || 0) < c.c) cf += 5;
+        out.push(sig('BOX', true, i, entry, sl, Math.max(top + h, entry + (entry - sl) * 1.5), top + h * 2, conf(cf), fresh ? 'CLOSE' : 'RETEST',
+          fresh ? `激進：收盤前 15 分鐘確認量能達標、實體站穩箱頂 ${f(top)}，以 ${f(entry)} 買進。穩健：1～3 天內等縮量回踩 ${f(top)} 不破再進。` : `突破後第 ${n - 1 - i} 天：等縮量回踩箱頂 ${f(top)} 附近、盤中止跌時限價買進，跌破 ${f(sl)} 停損。`,
+          `盤整 15 日（箱頂 ${f(top)}、箱底 ${f(bot)}）後爆量 ${vr.toFixed(1)} 倍長紅突破；目標為箱高等倍映射。`)); }
+      if (c.c < bot && br(c) >= 0.6 && vr >= 1.8) { const sl = Math.max(bot, (c.o + c.c) / 2) + tick(bot);
+        out.push(sig('BOX', false, i, c.c, sl, bot - h, null, conf(70 + Math.min(10, (vr - 1.8) * 5)), 'CLOSE', `持股者：爆量跌破箱底 ${f(bot)}，收盤確認後減碼；站回 ${f(sl)} 才重新評估。空手者不進場。`, `盤整 15 日後爆量 ${vr.toFixed(1)} 倍長黑跌破箱底。`)); } }
+    for (let i = n - 2; i < n; i++) { if (i < 61) continue; const b1 = cs[i - 1], b2 = cs[i]; const atr = atrAt(cs, i);
+      const m = [['20 日均線', ma20[i]], ['60 日均線', ma60[i]]].filter(([, v]) => v != null).find(([, v]) => Math.abs(b2.l - v) <= atr || Math.abs(b2.h - v) <= atr || (b2.l <= v && b2.h >= v)); if (!m) continue;
+      const resist = hiOf(i - 20, i), support = loOf(i - 20, i);
+      if (b1.c < b1.o && b2.c > b2.o && b2.o <= b1.c && b2.c >= b1.o && kb.body(b2) > kb.body(b1)) { const fresh = i === n - 1; const entry = fresh ? b2.c : cs[i + 1].o; const sl = b2.l - tick(b2.l);
+        const tp1 = resist > entry + (entry - sl) ? resist : entry + (entry - sl) * 2; let cf = 68; if (volR(i) >= 1.3) cf += 8; if (b2.c > m[1]) cf += 6;
+        out.push(sig('ENG', true, i, entry, sl, tp1, null, conf(cf), fresh ? 'CLOSE' : 'NEXT', fresh ? `吞噬紅 K 收盤確定（完全包覆前一根）時，於收盤前以 ${f(entry)} 進場，或次日開盤買進。` : `吞噬於昨日成立，以今日開盤 ${f(entry)} 為進場參考。`, `在${m[0]}（${f(m[1])}）附近出現多頭吞噬。`)); }
+      if (b1.c > b1.o && b2.c < b2.o && b2.o >= b1.c && b2.c <= b1.o && kb.body(b2) > kb.body(b1)) { const sl = b2.h + tick(b2.h); const tp1 = support < b2.c - (sl - b2.c) ? support : b2.c - (sl - b2.c) * 2;
+        out.push(sig('ENG', false, i, b2.c, sl, tp1, null, conf(b2.c < m[1] ? 74 : 66), 'CLOSE', `持股者：空頭吞噬收盤確定後減碼；站回 ${f(sl)} 視為失效。`, `在${m[0]}（${f(m[1])}）附近出現空頭吞噬。`)); } }
+  } else {
+    const ib = []; for (let i = n - 3; i < n; i++) { if (i < 21) continue; const m = cs[i - 1], k = cs[i]; const mm = ma20[i]; if (mm == null) continue; if (!(k.h <= m.h && k.l >= m.l && k.c > mm)) continue;
+      const trig = m.h + tick(m.h); let hit = false; for (let j = i + 1; j < n; j++) if (cs[j].h >= trig) hit = true; const sl = k.l - tick(k.l); let cf = 70; if ((ma60[i] || 0) < k.c) cf += 6; if (kb.range(k) < kb.range(m) * 0.6) cf += 5;
+      ib.push(sig('IB', true, i, trig, sl, trig + (trig - sl) * 2, null, conf(cf), 'BRK', hit ? `已盤中突破母棒高點 ${f(trig)} 觸發；以子棒低點 ${f(sl)} 停損，收盤跌破 20 日均線（${f(mm)}）出場。` : `設定盤中觸發單：價格突破母棒高點 ${f(m.h)}＋1 檔（${f(trig)}）瞬間進場；未突破前不動作。`,
+        `20 日均線上方的母子線（子棒 ${f(k.l)}～${f(k.h)} 收斂在母棒 ${f(m.l)}～${f(m.h)} 內），波動壓縮待表態。`, hit ? 'TRIGGERED' : 'WAITING', '移動停利：收盤跌破 20 日均線出場')); }
+    if (ib.length) out.push(ib[ib.length - 1]);
+    for (let e = n - 2; e < n; e++) { if (e < 25) continue; const b1 = cs[e - 4], mid = cs.slice(e - 3, e), b5 = cs[e]; const atr = atrAt(cs, e - 4);
+      if (!(b1.c > b1.o && br(b1) >= 0.6 && kb.body(b1) >= atr * 0.8)) continue; if (!mid.every((x) => kb.body(x) <= kb.body(b1) * 0.5 && x.l >= b1.l && x.h <= b1.h + atr * 0.3)) continue; if (!(b5.c > b5.o && br(b5) >= 0.5 && b5.c > b1.h)) continue;
+      const fresh = e === n - 1; const entry = fresh ? b5.c : cs[e + 1].o; const sl = b1.l - tick(b1.l);
+      out.push(sig('R3', true, e, entry, sl, entry + (entry - sl) * 2, null, conf((ma20[e] || 0) < b5.c ? 78 : 68), fresh ? 'CLOSE' : 'NEXT', fresh ? `第 5 根長紅收盤前確認已超越第 1 根高點 ${f(b1.h)}，於收盤以 ${f(entry)} 進場。` : `上升三法昨日確立，以今日開盤 ${f(entry)} 為參考。`,
+        `長紅後三根小 K 整理不破 ${f(b1.l)}，再以長紅突破 ${f(b1.h)}（多方中繼）。`, null, `移動停利：沿 10 日均線（${f(ma10[e] || b5.c)}）或 20 日均線抱牢`)); }
+    const pn = []; for (let i = n - 3; i < n; i++) { if (i < 25) continue; const c = cs[i]; const r = Math.min(rsiAt(cl, 14, i), rsiAt(cl, 14, i - 1)); if (r >= 30) continue;
+      const hammer = kb.lo(c) >= 2.5 * bodyMin(c) && volR(i) >= 2; const a = cs[i - 2], b = cs[i - 1];
+      const star = a.c < a.o && br(a) >= 0.55 && kb.body(b) <= kb.body(a) * 0.4 && Math.max(b.o, b.c) <= a.c + atrAt(cs, i) * 0.3 && c.c > c.o && c.c >= (a.o + a.c) / 2; if (!hammer && !star) continue;
+      const fresh = i === n - 1; const entry = fresh ? c.c : cs[i + 1].o; const lm = loOf(i - 4, i + 1); const sl = lm - tick(lm); const m6 = ma60[i]; const tp1 = m6 != null && m6 > entry + (entry - sl) ? m6 : entry + (entry - sl) * 2;
+      pn.push(sig('PANIC', true, i, entry, sl, tp1, null, conf(hammer && star ? 85 : hammer ? 78 : 74), fresh ? 'CLOSE' : 'NEXT', (fresh ? '止跌 K 棒收盤確定時進場' : `止跌訊號 ${n - 1 - i} 日前成立，可在 ${f(entry)} 附近`) + `；ETF 大跌末端屬右側較安全的分批加碼點，建議分 2～3 批。停損 ${f(sl)}，目標回升至 60 日均線${m6 != null ? '（' + f(m6) + '）' : ''}。`,
+        `RSI(14) ${r.toFixed(0)} 超賣，` + (hammer ? `爆量 ${volR(i).toFixed(1)} 倍長下影線` : '早晨之星') + '止跌。')); }
+    if (pn.length) out.push(pn[pn.length - 1]);
+    const gp = []; for (let g = Math.max(22, n - 5); g < n - 1; g++) { const pre = cs[g - 1], gap = cs[g]; if (!(gap.h < pre.l)) continue; if ((ma20[g] || 0) <= gap.c && pre.c >= (ma20[g - 1] || 0)) continue;
+      let fi = -1; for (let k = g + 1; k <= Math.min(n - 1, g + 3); k++) if (cs[k].c > cs[k].o && cs[k].c > pre.l) { fi = k; break; } if (fi < 0) continue;
+      const fresh = fi === n - 1; const c = cs[fi]; const entry = fresh ? c.c : cs[fi + 1].o; const sl = gap.l - tick(gap.l); const top = hiOf(Math.max(0, g - 20), g); const tp1 = top > entry + (entry - sl) ? top : entry + (entry - sl) * 2;
+      gp.push(sig('GAP', true, fi, entry, sl, tp1, null, conf(volR(fi) >= 1.3 ? 78 : 70), fresh ? 'CLOSE' : 'NEXT', fresh ? `紅 K 已完全回補向下缺口（收在 ${f(pre.l)} 之上），收盤前以 ${f(entry)} 進場。` : `缺口回補已確立，以 ${f(entry)} 為進場參考。`,
+        `下跌末端跳空缺口（${f(gap.h)}～${f(pre.l)}）於 ${fi - g} 日內被紅 K 回補，空方力竭。`)); }
+    if (gp.length) out.push(gp[gp.length - 1]);
+  }
+  const lastC = cs[n - 1].c;
+  const valid = (s) => { for (let k = s.i + 1; k < n; k++) if (s.bull ? cs[k].c < s.sl : cs[k].c > s.sl) return false; return s.bull ? lastC > s.sl : lastC < s.sl; };
+  const seen = new Set();
+  return out.filter(valid).filter((s) => { const k = s.st + s.bull; if (seen.has(k)) return false; seen.add(k); return true; }).sort((a, b) => a.age - b.age || b.conf - a.conf);
+}
+/** 以 K 棒策略訊號修正進場建議（與 App refineEntry 相同） */
+function refineEntry(r, sigs, etf) {
+  const e = r.entry; const f = fmtPx;
+  const now = sigs.filter((s) => s.age <= 1 && s.status !== 'WAITING' && s.conf >= 70);
+  const best = (l) => l.reduce((a, s) => (!a || s.conf > a.conf ? s : a), null);
+  const bull = best(now.filter((s) => s.bull)), bear = best(now.filter((s) => !s.bull)), wait = best(sigs.filter((s) => s.bull && s.status === 'WAITING'));
+  const tag = (s) => '【' + KS_ST[s.st] + '｜' + KS_TM[s.tm][0] + '】' + s.desc;
+  if (bull && (!bear || bull.conf > bear.conf + 5)) {
+    const lv = r.dir === -2 && !(etf && bull.st === 'PANIC') ? Math.max(e.level, -1) : e.level >= 1 && bull.conf >= 80 && r.dir > 0 ? 2 : Math.min(2, Math.max(e.level + 1, etf ? 1 : 0));
+    return { label: { 2: '建議進場', 1: '可分批進場', 0: '等回測再進' }[lv] || '等待止跌確認', level: lv, reason: tag(bull) + ' 停損 ' + f(bull.sl) + '。' + e.reason, tip: lv >= 1 ? '續抱，可依訊號加碼' : e.tip };
+  }
+  if (bear) { const lv = Math.min(e.level, r.dir > 0 ? 0 : -1); return { label: { 0: '觀望', '-1': '暫不進場' }[lv] || '不宜進場', level: lv, reason: tag(bear) + ' ' + e.reason, tip: '減碼，跌破 ' + f(Math.min(bear.sl, r.x.support)) + ' 防守' }; }
+  if (etf && e.level <= -2) { const rsi = rsiAt(r.cs.map((x) => x.c)); if (rsi < 32) return { label: '等待止跌確認', level: -1, reason: 'ETF 已超賣（RSI ' + rsi.toFixed(0) + '），不追殺；等止跌 K 棒或缺口回補再分批。' + e.reason, tip: '暫不加碼，勿殺低' }; }
+  if (wait && e.level >= -1 && e.level <= 1) return { label: e.level >= 1 ? e.label : wait.tm === 'BRK' ? '等突破觸發' : '等回測再進', level: Math.max(e.level, 0), reason: tag(wait) + ' ' + e.reason, tip: e.tip };
+  return e;
+}
+/** 波動：近 20 日年化波動、相對一年中位數的倍數、ATR(14)／股價 */
+function volaOf(cs) {
+  if (!cs || cs.length < 60) return null;
+  const r = []; for (let i = 1; i < cs.length; i++) r.push(Math.log(cs[i].c / cs[i - 1].c));
+  const sd = (l) => { const m = l.reduce((a, v) => a + v, 0) / l.length; return Math.sqrt(l.reduce((a, v) => a + (v - m) ** 2, 0) / Math.max(1, l.length - 1)); };
+  const cur = sd(r.slice(-20)) * Math.sqrt(250); const hist = []; for (let k = 20; k <= r.length; k++) if (k % 5 === 0) hist.push(sd(r.slice(k - 20, k)) * Math.sqrt(250));
+  const h = hist.slice(-50).sort((a, b) => a - b); const med = h.length ? h[Math.floor(h.length / 2)] : cur;
+  let atr = 0; for (let i = cs.length - 14; i < cs.length; i++) { const p = cs[i - 1].c; atr += Math.max(cs[i].h - cs[i].l, Math.abs(cs[i].h - p), Math.abs(cs[i].l - p)); } atr = atr / 14 / cs[cs.length - 1].c * 100;
+  const regime = med > 0 ? cur / med : 1;
+  const label = regime >= 1.6 ? '波動急遽放大' : regime >= 1.25 ? '波動放大' : regime <= 0.7 ? '波動收斂' : '波動正常';
+  // 一年內每 20 日年化波動走勢（給圖）
+  const series = []; for (let k = Math.max(20, r.length - 250); k <= r.length; k++) series.push([cs[k].d, sd(r.slice(k - 20, k)) * Math.sqrt(250) * 100]);
+  return { atrPct: atr, annual: cur * 100, regime, label, med: med * 100, series };
+}
+/** 一年光譜：近一年收盤線性迴歸 ±1σ／±2σ，回傳區位 0（特價）～5（極貴） */
+function bandInfo(b, price) {
+  const cl = b.slice(-250).map((x) => x.c); const n = cl.length; if (n < 60) return null;
+  const mx = (n - 1) / 2, my = cl.reduce((a, v) => a + v, 0) / n; let sxy = 0, sxx = 0; cl.forEach((v, i) => { sxy += (i - mx) * (v - my); sxx += (i - mx) ** 2; });
+  const slope = sxy / sxx, a0 = my - slope * mx; const sigma = Math.sqrt(cl.reduce((acc, v, i) => acc + (v - (a0 + slope * i)) ** 2, 0) / n); const t = a0 + slope * (n - 1);
+  const lines = [-2, -1, 0, 1, 2].map((k) => t + k * sigma); const i = lines.findIndex((v) => price < v); const zone = i < 0 ? 5 : i;
+  return { zone, name: ['特價', '便宜', '合理偏低', '合理偏高', '昂貴', '極貴'][zone], trend: t, lines, z: sigma > 0 ? (price - t) / sigma : 0 };
+}
+async function idxCloses(sym) { const r = await fetchYahoo(sym, '6mo', '1d', 1800); return r ? ((r.indicators.quote[0].close) || []).filter((v) => v != null) : []; }
+/** 投資分析指數（0–100，與 App InvestAnalysis 同因子與權重） */
+async function investAnalysis(sym, bars) {
+  const us = isUs(sym); const q = S.q[sym] || {}; const etf = D.isEtf(sym) || (!us && /^00/.test(sym)) || q.type === 'ETF';
+  const b = bars.slice(-250); const raw = b.map((x) => x.c); const price = q.price || raw[raw.length - 1]; if (!price) return null;
+  const c = raw.slice(0, -1).concat([price]); const F = []; const clamp = (v) => Math.round(Math.max(0, Math.min(100, v))); const add = (name, score, weight, note) => F.push({ name, score: clamp(score), weight, note });
+  const f2 = (v) => fmtPx(v);
+  // 趨勢
+  if (c.length >= 25) { const m20 = smaAt(c, c.length - 1, 20), m60 = smaAt(c, c.length - 1, 60), m120 = smaAt(c, c.length - 1, 120), m20p = smaAt(c, c.length - 6, 20); let s = 0, k = 0; const notes = [];
+    [['月線', m20], ['季線', m60], ['半年線', m120]].forEach(([nm, m]) => { if (m > 0) { k++; if (price >= m) { s++; notes.push('站上' + nm); } else notes.push('跌破' + nm); } });
+    if (k) { let sc = s / k * 80; if (m20 != null && m20p > 0) { if (m20 > m20p) { sc += 20; notes.push('月線上彎'); } else notes.push('月線下彎'); }
+      const base = bars[bars.length - 1].d === ymd() && bars.length > 1 ? bars[bars.length - 2] : bars[bars.length - 1]; const rg = base.h - base.l; const upK = base.l + rg * 1.382, dnK = base.h - rg * 1.382;
+      if (price >= upK) { sc += 5; notes.push('站上上關'); } else if (price < dnK) { sc -= 10; notes.push('跌破下關'); }
+      add('趨勢', sc, 25, notes.join('、')); } }
+  // 動能
+  if (c.length >= 21) { const rsi = rsiAt(c); const r20 = (c[c.length - 1] / c[c.length - 21] - 1) * 100; const base = rsi >= 80 ? 35 : rsi >= 70 ? 55 : rsi >= 50 ? 50 + (rsi - 50) * 1.5 : rsi >= 30 ? 25 + (rsi - 30) * 1.25 : 45;
+    add('動能', base + Math.max(-10, Math.min(10, r20)), 15, 'RSI ' + rsi.toFixed(0) + '（' + (rsi >= 80 ? '過熱' : rsi >= 70 ? '偏強' : rsi >= 50 ? '多方' : rsi >= 30 ? '空方' : '超賣') + '）、近 20 日 ' + (r20 >= 0 ? '+' : '') + r20.toFixed(1) + '%'); }
+  // 估值（台股）
+  if (!us) { const val = await kv('sx:val'); const v = val && val[sym]; const pe = v && v[0] > 0 ? v[0] : null, y = v && v[1] >= 0 ? v[1] : null; const parts = [], notes = [];
+    if (pe) { parts.push(pe < 10 ? 85 : pe < 15 ? 72 : pe < 20 ? 58 : pe < 30 ? 42 : 28); notes.push('本益比 ' + pe.toFixed(1)); }
+    if (y != null && v[1] > 0) { parts.push(y >= 6 ? 85 : y >= 4.5 ? 72 : y >= 3 ? 58 : y >= 1.5 ? 45 : 35); notes.push('殖利率 ' + y.toFixed(2) + '%'); }
+    if (parts.length) add('估值', parts.reduce((a, v0) => a + v0, 0) / parts.length, 20, notes.join('、')); }
+  // 位置（52 週）
+  { const hi = Math.max(...b.map((x) => x.h)), lo = Math.min(...b.map((x) => x.l)); if (hi > lo) { const pos = Math.max(0, Math.min(1, (price - lo) / (hi - lo))); add('位置', 85 - pos * 55, 10, '位於 52 週區間 ' + (pos * 100).toFixed(0) + '%（低 ' + f2(lo) + '／高 ' + f2(hi) + '）'); } }
+  // 籌碼（台股）
+  if (!us) { try { const days = ((await sapi('chip', sym, '&n=20')).days || []).slice(0, 5); if (days.length) { const lots = days.reduce((a, d) => a + d.f + d.t + d.dl, 0) / 1000, fr = days.reduce((a, d) => a + d.f, 0) / 1000; const buy = days.filter((d) => d.f + d.t + d.dl > 0).length;
+    add('籌碼', 50 + (buy - days.length / 2) * 12 + (lots > 0 ? 8 : lots < 0 ? -8 : 0), 15, `法人近 ${days.length} 日 ${fmtSigned(Math.round(lots))} 張（外資 ${fmtSigned(Math.round(fr))}），買超 ${buy} 天`); } } catch (e) {} }
+  // 市場
+  { const isym = us ? '^GSPC' : '^TWII'; const ic = await idxCloses(isym).catch(() => []); if (ic.length >= 60) { const last = ic[ic.length - 1]; const m60 = ic.slice(-60).reduce((a, v) => a + v, 0) / 60, m20 = ic.slice(-20).reduce((a, v) => a + v, 0) / 20;
+    add('市場', (last >= m60 ? 65 : 35) + (last >= m20 ? 15 : -10), 10, (us ? 'S&P 500' : '加權指數') + (last >= m60 ? ' 在季線之上' : ' 在季線之下') + (last >= m20 ? '、站上月線' : '、跌破月線')); } }
+  // 風險
+  if (c.length >= 30) { const r = []; for (let i = 1; i < c.length; i++) r.push(Math.log(c[i] / c[i - 1])); const m = r.reduce((a, v) => a + v, 0) / r.length; const vol = Math.sqrt(r.reduce((a, v) => a + (v - m) ** 2, 0) / (r.length - 1)) * Math.sqrt(252) * 100;
+    add('風險', vol < 15 ? 80 : vol < 25 ? 65 : vol < 35 ? 50 : vol < 50 ? 35 : 25, 5, '年化波動 ' + vol.toFixed(1) + '%'); }
+  // 股價光譜
+  const band = bandInfo(bars, price);
+  if (band) add('股價光譜', [90, 75, 60, 45, 25, 10][band.zone], 20, `一年光譜「${band.name}」區，偏離趨勢 ${(band.z >= 0 ? '+' : '') + band.z.toFixed(1)}σ（便宜價 ${f2(band.lines[1])}、趨勢價 ${f2(band.trend)}、昂貴價 ${f2(band.lines[3])}）`);
+  // 分析師（個股）或 ETF 指標
+  let analyst = null, etfInfo = null;
+  if (!etf) { try { const fd = (await ys(sym, 'financialData')).financialData || {}; const raw0 = (k) => { const v = fd[k] && fd[k].raw; return v > 0 ? v : null; };
+    const key = fd.recommendationKey && fd.recommendationKey !== 'none' ? fd.recommendationKey : null;
+    analyst = { rating: key ? ({ strong_buy: '強力買進', buy: '買進', hold: '持有', underperform: '表現落後', sell: '賣出', strong_sell: '強力賣出' }[key] || key) : null, mean: raw0('recommendationMean'), count: raw0('numberOfAnalystOpinions'), target: raw0('targetMeanPrice'), high: raw0('targetHighPrice'), low: raw0('targetLowPrice') };
+    const parts = [], notes = []; if (analyst.mean) { parts.push(Math.max(10, Math.min(95, 100 - (analyst.mean - 1) * 21))); notes.push((analyst.rating || '評等') + '（' + analyst.mean.toFixed(1) + '）'); }
+    if (analyst.target) { const up = (analyst.target / price - 1) * 100; parts.push(Math.max(10, Math.min(95, 50 + up * 1.5))); notes.push('目標價 ' + f2(analyst.target) + '（' + (up >= 0 ? '+' : '') + up.toFixed(0) + '%）'); }
+    if (parts.length) { if (analyst.count) notes.push(analyst.count + ' 位分析師'); add('分析師', parts.reduce((a, v0) => a + v0, 0) / parts.length, 10, notes.join('、')); } else analyst = null; } catch (e) {} }
+  else {
+    etfInfo = {}; const dh = await divHist(sym).catch(() => []); const yAgo = yearAgoYmd(1); const y12 = dh.filter((d) => d[0] >= yAgo).reduce((a, d) => a + d[1], 0); if (y12 > 0) etfInfo.yieldPct = y12 / price * 100;
+    const two = yearAgoYmd(2); const recentDiv = dh.filter((d) => d[0] >= two); let filled = 0, days = [];
+    recentDiv.forEach(([d0]) => { const i = bars.findIndex((x) => x.d >= d0); if (i <= 0) return; const pre = bars[i - 1].c; const j = bars.findIndex((x, k) => k >= i && x.c >= pre); if (j >= 0) { filled++; days.push(j - i + 1); } });
+    if (recentDiv.length) { etfInfo.divCount = recentDiv.length; etfInfo.filled = filled; etfInfo.avgFill = days.length ? days.reduce((a, v) => a + v, 0) / days.length : null; }
+    const parts = [], notes = []; if (etfInfo.yieldPct != null) { const y = etfInfo.yieldPct; parts.push(y >= 7 ? 80 : y >= 5 ? 72 : y >= 3 ? 60 : y >= 1 ? 48 : 40); notes.push('殖利率 ' + y.toFixed(2) + '%'); }
+    if (etfInfo.divCount) { parts.push(30 + 60 * etfInfo.filled / etfInfo.divCount); notes.push(`填息 ${etfInfo.filled}/${etfInfo.divCount}` + (etfInfo.avgFill ? `（平均 ${etfInfo.avgFill.toFixed(0)} 天）` : '')); }
+    if (parts.length) add('配息', parts.reduce((a, v0) => a + v0, 0) / parts.length, 10, notes.join('、'));
+    const vols = bars.slice(-20).map((x) => x.v || 0).filter((v) => v > 0); if (vols.length) { const v = vols.reduce((a, x) => a + x, 0) / vols.length; const lots = us ? v : v; etfInfo.avgVol = lots;
+      const sc = us ? (v >= 5e6 ? 85 : v >= 1e6 ? 72 : v >= 2e5 ? 58 : v >= 5e4 ? 45 : 30) : (v >= 10000 ? 85 : v >= 3000 ? 72 : v >= 1000 ? 60 : v >= 200 ? 45 : 30);
+      add('流動性', sc, 5, '近 20 日均量 ' + fmtInt(v) + (us ? ' 股' : ' 張') + (sc < 50 ? '，買賣價差可能較大' : '')); }
+    try { const r = await ys(sym, 'summaryDetail,defaultKeyStatistics,fundProfile'); const g = (m, k) => { const v = r[m] && r[m][k] && r[m][k].raw; return v > 0 ? v : null; };
+      const nav = g('summaryDetail', 'navPrice'), assets = g('summaryDetail', 'totalAssets') || g('defaultKeyStatistics', 'totalAssets'); const ex0 = r.fundProfile && r.fundProfile.feesExpensesInvestment && r.fundProfile.feesExpensesInvestment.annualReportExpenseRatio; const ex = ex0 && ex0.raw > 0 ? ex0.raw * 100 : null;
+      const p2 = [], n2 = []; if (ex != null) { p2.push(ex <= 0.2 ? 85 : ex <= 0.5 ? 70 : ex <= 1 ? 52 : 35); n2.push('費用率 ' + ex.toFixed(2) + '%'); } if (assets) { p2.push(assets >= 1e10 ? 80 : assets >= 1e9 ? 65 : assets >= 1e8 ? 50 : 35); n2.push('規模 ' + (assets >= 1e8 ? fmtInt(assets / 1e8) + ' 億' : fmtInt(assets / 1e4) + ' 萬')); }
+      if (p2.length) add('規模費用', p2.reduce((a, v0) => a + v0, 0) / p2.length, 5, n2.join('、'));
+      if (nav) { const p = ((q.prev || price) / nav - 1) * 100; etfInfo.premium = p; etfInfo.nav = nav; add('折溢價', p > 2 ? 25 : p > 1 ? 40 : p > 0.3 ? 55 : p >= -0.3 ? 72 : p >= -1 ? 70 : 60, 10, '昨收' + (p >= 0 ? '溢價 ' : '折價 ') + Math.abs(p).toFixed(2) + '%（前一日淨值 ' + f2(nav) + '）'); } } catch (e) {}
+  }
+  if (!F.length) return null;
+  const W = F.reduce((a, x) => a + x.weight, 0); const score = Math.round(F.reduce((a, x) => a + x.score * x.weight, 0) / W);
+  const [label, advice] = score >= 70 ? ['偏多', '多數指標正向，可考慮分批布局；仍需設定停損與控制部位'] : score >= 58 ? ['中性偏多', '趨勢或基本面略佔優勢，適合拉回分批或續抱'] : score >= 45 ? ['中性', '多空訊號互見，建議觀望或維持原部位'] : score >= 33 ? ['中性偏空', '弱勢指標較多，新資金宜保守，持有者留意支撐'] : ['偏空', '趨勢與籌碼偏弱，宜降低部位或等待轉強訊號'];
+  const ratioOf = (s) => (s >= 70 ? 80 : s >= 58 ? 60 : s >= 45 ? 40 : s >= 33 ? 25 : 10);
+  const where = band ? `股價位於一年光譜「${band.name}」區（趨勢價 ${f2(band.trend)}）` : '無股價光譜資料'; const z = band ? band.zone : null;
+  const vd = z == null ? (score >= 58 ? ['可分批買進', `指數 ${score} 偏多；${where}`, ratioOf(score), 1] : score >= 45 ? ['觀望', `指數 ${score} 中性；${where}`, ratioOf(score), 0] : ['暫不建議買進', `指數 ${score} 偏弱；${where}`, 10, -1])
+    : z <= 1 && score >= 45 ? ['推薦買進（分批）', `價格便宜且指標不弱：${where}、指數 ${score}`, score >= 58 ? 80 : 60, 1]
+    : z <= 1 ? ['便宜但偏弱：小量分批', `${where}，但指數 ${score} 趨勢與籌碼偏弱，宜小量分批或等止跌訊號`, 25, 0]
+    : z <= 3 && score >= 58 ? ['推薦買進（分批）', `價格合理、指數 ${score} 偏多；${where}`, 60, 1]
+    : z <= 3 && score >= 45 ? ['觀望／定期定額', `價格合理、指數 ${score} 中性；${where}`, 30, 0]
+    : z <= 3 ? ['暫不建議買進', `價格不算便宜、指數 ${score} 偏弱；${where}`, 10, -1]
+    : score >= 70 ? ['可續抱，新資金等拉回', `${where}，偏貴但指數 ${score} 強勢`, 10, 0] : ['不建議追高', `${where}，價格偏貴且指數 ${score} 不夠強`, 0, -1];
+  return { score, label, advice, factors: F, analyst, etf: etfInfo, band, verdict: { title: vd[0], reason: vd[1], ratio: vd[2], tone: vd[3] }, isEtf: etf };
+}
+/** 個股日 K（2 年）並以即時報價補上今日 K 棒 */
+async function liveBars(sym, range = '2y') {
+  const key = sym + range; const b0 = barCache[key] || (barCache[key] = await loadBars(sym, range)); if (!b0 || !b0.length) return [];
+  const q = S.q[sym] || {}; const b = b0.slice(); const today = ymd();
+  if (q.price && !isUs(sym) && twOpen()) { const last = b[b.length - 1]; const cur = { d: today, o: q.open || q.price, h: Math.max(q.high || q.price, q.price), l: Math.min(q.low || q.price, q.price), c: q.price, v: q.volLots || 0 }; if (last.d === today) b[b.length - 1] = cur; else b.push(cur); }
+  return b;
+}
+const LVC = { 2: 'up', 1: 'up', 0: '', '-1': 'down', '-2': 'down' };
+function kaCardHtml(r, weekly, sym) {
+  const f = fmtPx; const x = r.x; const dc = r.dir > 0 ? 'up' : r.dir < 0 ? 'down' : ''; const n = r.cs.length;
+  const hit = (h) => { const st = r.stats[h.k]; const d = KP[h.k][2]; return `<div class="tile" style="margin-top:6px"><div class="row"><b class="${d > 0 ? 'up' : d < 0 ? 'down' : ''}" style="flex:1">${KP[h.k][0]}</b><span class="tag">${KP[h.k][1]}</span><span class="tag ${d > 0 ? 'up' : d < 0 ? 'down' : ''}">${DIRL[d]}</span></div>
+    <div class="row small muted"><span style="flex:1">${esc(r.cs[h.i].d)}</span><span>可信度 ${Math.round(h.conf * 100)}%</span></div><div class="small text2">${esc(h.note)}</div>
+    ${st && st.count >= 2 ? `<div class="small ${st.win >= 0.55 ? 'up' : st.win < 0.45 ? 'down' : 'muted'}">此股歷史出現 ${st.count} 次，${r.forward} 根後符合方向 ${(st.win * 100).toFixed(0)}%，平均 ${(st.avg >= 0 ? '+' : '') + st.avg.toFixed(2)}%</div>` : ''}</div>`; };
+  const older = r.recent.filter((h) => h.i < n - 3).sort((a, b) => b.i - a.i);
+  const p = r.plan; const e = r.entry;
+  return `<h2>K 線形態分析<span class="r"><span class="seg" id="kaTf"><button data-tf="d" class="${weekly ? '' : 'on'}">日 K</button><button data-tf="w" class="${weekly ? 'on' : ''}">週 K</button></span></span></h2>
+    <div class="row wrap" style="gap:10px;align-items:center"><span class="badge ${dc}" style="font-size:15px;padding:4px 10px">${DIRL[r.dir]}</span><span class="small muted">強度 ${r.strength}</span>
+      <span class="tag">${x.trend === 1 ? '多頭趨勢' : x.trend === -1 ? '空頭趨勢' : '盤整'}</span><span class="tag">${KVOL[x.vol]}</span><span class="tag">${KLOC[x.loc]}</span></div>
+    <div class="bar" style="margin-top:8px"><div style="width:${r.strength}%;background:${css(r.dir >= 0 ? '--up' : '--down')}"></div></div>
+    <div class="tile" style="margin-top:10px;border-left:3px solid ${css(LVC[e.level] === 'up' ? '--up' : LVC[e.level] === 'down' ? '--down' : '--muted')}"><div class="row"><b class="${LVC[e.level]}" style="font-size:16px;flex:1">${esc(e.label)}</b><span class="small muted">持股者：${esc(e.tip)}</span></div><div class="small text2" style="margin-top:4px">${esc(e.reason)}</div></div>
+    <div class="grid g4" style="margin-top:10px;gap:8px">${[['支撐', f(x.support), 'up'], ['壓力', f(x.resistance), 'down'], ['MA20', f(x.ma20), ''], ['ATR(14)', f(x.atr), '']].map(([k, v, c]) => `<div><div class="small muted">${k}</div><div class="num ${c}">${v}</div></div>`).join('')}</div>
+    <div class="chart-wrap" id="kaChart" style="margin-top:10px"><canvas></canvas><div class="chart-tip"></div></div>
+    <div style="margin-top:10px"><b>最新形態（近 3 根）</b>${r.latest.length ? Array.from(new Map(r.latest.map((h) => [h.k + h.i, h])).values()).map(hit).join('') : '<div class="small muted">近 3 根沒有明顯的 K 線形態，以趨勢與量價為主。</div>'}</div>
+    <div class="tile" style="margin-top:10px"><b>判斷依據</b>${r.reasons.map((t) => `<div class="small text2">・${esc(t)}</div>`).join('')}</div>
+    ${p ? `<div class="tile" style="margin-top:10px;background:${css(p.bull ? '--up' : '--down')}14"><div class="row"><b class="${p.bull ? 'up' : 'down'}" style="flex:1">${esc(p.title)}</b><span class="small muted">盈虧比</span> <b class="num ${p.rr >= 2 ? 'up' : p.rr < 1.2 ? 'down' : ''}">1 : ${p.rr.toFixed(2)}</b></div>
+      <div class="small text2" style="margin-top:4px">${esc(p.trigger)}</div>${kvRows([[p.bull ? '布局區間' : '減碼區間', f(p.e0) + ' ～ ' + f(p.e1)], ['停損／防守', f(p.stop)], ['目標一', f(p.tp1)], ['目標二', f(p.tp2)]])}<div class="small muted">${esc(p.note)}</div></div>`
+      : '<div class="small muted" style="margin-top:8px">訊號中性：建議觀望，等待帶量突破壓力或跌破支撐再決定方向。</div>'}
+    ${older.length ? `<details style="margin-top:8px"><summary class="small" style="cursor:pointer;color:var(--primary)">近 40 根其他形態（${older.length}）</summary>${older.map(hit).join('')}</details>` : ''}
+    <div class="small muted" style="margin-top:6px">形態辨識依據 K 棒實體、影線、前趨勢、量能與前 20 根高低點；勝率為此股過去 ${weekly ? '5 年週 K' : '2 年日 K'} 同形態出現後 ${r.forward} 根的結果。僅供參考，不構成投資建議。</div>`;
+}
+function ksCardHtml(sigs, etf) {
+  const f = fmtPx;
+  return `<h2>K 棒策略訊號<span class="r small muted">${etf ? 'ETF 策略：母子線、上升三法、恐慌止跌、缺口回補' : '普通股策略：SFP、BOS／FVG、箱型突破、均線吞噬'}</span></h2>
+    ${sigs.length ? sigs.map((s) => `<div class="tile" style="margin-top:8px;border-left:3px solid ${css(s.bull ? '--up' : '--down')}">
+      <div class="row wrap"><b class="${s.bull ? 'up' : 'down'}" style="flex:1">${KS_ST[s.st]}</b><span class="tag ${s.bull ? 'up' : 'down'}">${s.bull ? '做多' : '偏空／減碼'}</span><span class="tag">${KS_STA[s.status]}${s.age ? '（' + s.age + ' 日前）' : ''}</span><span class="tag">信心 ${s.conf}</span></div>
+      <div class="small text2" style="margin-top:4px">${esc(s.pattern)}</div>
+      <div class="grid g4" style="margin-top:6px;gap:6px">${[['進場', f(s.entry)], ['停損', f(s.sl)], ['停利', f(s.tp1) + (s.tp2 ? '／' + f(s.tp2) : '')], ['風報比', '1 : ' + s.rr.toFixed(2)]].map(([k, v]) => `<div><div class="small muted">${k}</div><div class="num">${v}</div></div>`).join('')}</div>
+      <div class="small" style="margin-top:6px"><span class="tag">${KS_TM[s.tm][0]}</span> ${esc(s.desc)}</div><div class="small muted">${KS_TM[s.tm][1]}</div>${s.trailing ? `<div class="small muted">${esc(s.trailing)}</div>` : ''}</div>`).join('')
+      : '<div class="small muted">近 3 日沒有成立中的策略訊號（已跌破停損的訊號自動排除）。</div>'}
+    <div class="small muted" style="margin-top:6px">每個訊號附進場時機、停損、停利與風報比；成立後收盤跌破停損即失效。僅供參考，不構成投資建議。</div>`;
+}
+function iaCardHtml(a) {
+  const col = a.score >= 58 ? 'up' : a.score < 45 ? 'down' : ''; const v = a.verdict;
+  return `<h2>投資分析指數<span class="r tag ${col}">${esc(a.label)}</span></h2>
+    <div class="row" style="gap:16px;align-items:center"><div class="num ${col}" style="font-size:38px;font-weight:800">${a.score}</div><div class="sp"><div class="bar"><div style="width:${a.score}%;background:${css(a.score >= 50 ? '--up' : '--down')}"></div></div><div class="small text2" style="margin-top:6px">${esc(a.advice)}</div></div></div>
+    <div class="tile" style="margin-top:10px;border-left:3px solid ${css(v.tone > 0 ? '--up' : v.tone < 0 ? '--down' : '--muted')}"><div class="row"><b class="${v.tone > 0 ? 'up' : v.tone < 0 ? 'down' : ''}" style="flex:1;font-size:15px">${esc(v.title)}</b><span class="small muted">參考投入 ${v.ratio}%</span></div><div class="small text2">${esc(v.reason)}</div></div>
+    <div class="scroll-x" style="margin-top:10px"><table class="tbl"><thead><tr><th style="text-align:left">因子</th><th>分數</th><th>權重</th><th style="text-align:left">依據</th></tr></thead><tbody>${a.factors.map((x) => `<tr><td style="text-align:left">${esc(x.name)}</td><td class="num ${x.score >= 58 ? 'up' : x.score < 45 ? 'down' : ''}">${x.score}</td><td class="num">${x.weight}</td><td class="small" style="text-align:left;white-space:normal">${esc(x.note)}</td></tr>`).join('')}</tbody></table></div>
+    ${a.analyst ? `<div class="small muted" style="margin-top:6px">分析師：${esc(a.analyst.rating || '—')}　目標價 ${fmtPx(a.analyst.target)}（${fmtPx(a.analyst.low)}～${fmtPx(a.analyst.high)}）</div>` : ''}
+    <div class="small muted" style="margin-top:6px">${a.isEtf ? 'ETF 依趨勢、動能、52 週位置、法人籌碼、配息與填息、流動性、規模費用、折溢價、大盤環境與波動度計算' : '依趨勢、動能、估值、52 週位置、法人籌碼、分析師、大盤環境與波動度計算'}的參考分數，缺資料的項目不計入。僅供參考，不構成投資建議。</div>`;
+}
+function voCardHtml(v, plan) {
+  const c = v.regime >= 1.25 ? 'down' : v.regime <= 0.7 ? 'up' : '';
+  return `<h2>波動<span class="r tag ${c}">${esc(v.label)}</span></h2>
+    <div class="grid g3" style="gap:8px">${[['近 20 日年化波動', v.annual.toFixed(0) + '%'], ['一年中位數', v.med.toFixed(0) + '%（目前 ×' + v.regime.toFixed(1) + '）'], ['ATR(14)／股價', v.atrPct.toFixed(2) + '%（每日平均振幅）']].map(([k, x]) => `<div class="tile"><div class="k">${k}</div><div class="num" style="font-size:16px;font-weight:700;margin-top:4px">${x}</div></div>`).join('')}</div>
+    <div class="chart-wrap" id="voChart" style="margin-top:10px"><canvas></canvas><div class="chart-tip"></div></div>
+    ${v.regime > 1 ? '<div class="small text2" style="margin-top:6px">波動越大，建議投入比例越低（綜合進場建議已自動打折）。</div>' : ''}
+    ${plan ? `<div style="margin-top:8px"><b>操作參考（日 K）</b>${kvRows([['布局區間', fmtPx(plan.e0) + ' ～ ' + fmtPx(plan.e1)], ['停損', fmtPx(plan.stop)], ['目標一／二', fmtPx(plan.tp1) + ' ／ ' + fmtPx(plan.tp2)]])}</div>` : ''}
+    <div class="small muted" style="margin-top:6px">年化波動＝近 20 日日報酬標準差 × √250；倍數為目前波動相對近一年中位數。</div>`;
+}
+
 // ───────── 登入 ─────────
 function loginView(msg, mode) {
   const p = S.policy; mode = mode || store.get('lmode', 'login');
@@ -3722,6 +4152,7 @@ async function start(meResp) {
   S.me = me; S.code = me.code ? await verifyCode(me.code) : null;
   if (me.phone === false && !S.cloudDir) { S.cloudDir = 'w2p'; store.set('cdir', 'w2p'); }
   shell();
+  dlAppVer();
   S.keys = store.get('keys', {}); S.dirty = store.get('dirty', false);
   // 手動同步：只有這個瀏覽器還沒有資料（第一次登入）才自動下載一次；其餘由使用者按「同步」
   const firstLoad = !Object.keys(S.keys).length;
