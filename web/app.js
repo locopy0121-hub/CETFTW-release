@@ -3161,7 +3161,8 @@ function bindHtml(me) {
   if (me.phone === undefined) return '';
   if (me.phone) return `<div class="small" style="margin-top:8px">📱 已綁定手機 App${me.phoneAt ? '（最後登入 ' + esc(String(me.phoneAt).slice(0, 16)) + '）' : ''}</div>`;
   const dl = location.origin + '/';
-  return `<div class="notice" style="margin-top:8px">📱 尚未綁定手機 App。想在手機使用：<a href="${dl}" target="_blank" rel="noopener">下載 App</a> 後在「設置 › 會員與授權 › 帳號與同步」用同一個 Google 帳號登入，第一次登入時可選擇保留網頁版或手機的資料。</div>`;
+  return `<div class="notice" style="margin-top:8px">📱 尚未綁定手機 App（只用網頁也能使用全部會員功能，不受裝置碼限制）。想在手機使用：<a href="${dl}" target="_blank" rel="noopener">下載 App</a> 後在「設置 › 會員與授權 › 帳號與同步」用同一個 Google 帳號登入，第一次登入時可選擇保留網頁版或手機的資料。
+    <label class="row small" style="margin-top:6px;cursor:pointer;gap:6px"><input type="checkbox" id="bindRem" style="width:auto" ${store.get('bindRemind', true) ? 'checked' : ''}> 每週提醒我綁定手機 App</label></div>`;
 }
 VIEWS.member = {
   title: '會員',
@@ -3196,6 +3197,7 @@ VIEWS.member = {
         <tbody>${FEATURES.map(([k, t]) => `<tr><td>${esc(t)}</td>${cols.map(([, , c, mask]) => `<td style="color:${mask & F[k] ? argb(c) : 'var(--border)'};font-weight:700">${mask & F[k] ? '✓' : '—'}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
         <div class="small muted" style="margin-top:6px">自選、持股記帳、個股行情等基本功能各等級皆可使用。</div></div>`;
     $('#pfE').onclick = () => onboarding(false);
+    if ($('#bindRem')) $('#bindRem').onchange = (e) => { store.set('bindRemind', e.target.checked); toast(e.target.checked ? '會每週提醒一次' : '已關閉綁定提醒'); };
     $('#apBtn').onclick = () => applyModal();
     $('#lo').onclick = async () => { if ((await dialog('登出', '登出後這個瀏覽器的資料會清除（雲端資料保留），重新登入即可恢復。', [['', '取消'], ['ok', '登出', 'primary']])) === 'ok') logout(); };
     $('#syn').onclick = async () => { await push(); await pull(); this.fill(); };
@@ -3716,6 +3718,10 @@ async function start(meResp) {
   if (!me.registered) return logout('登入已失效，請重新登入');
   S.me = me; S.code = me.code ? await verifyCode(me.code) : null;
   if (me.phone === false && !S.cloudDir) { S.cloudDir = 'w2p'; store.set('cdir', 'w2p'); }
+  // 只用網頁的會員：每週提醒一次可綁定手機 App（會員頁可關閉）
+  if (me.phone === false && store.get('bindRemind', true) && Date.now() - store.get('bindRemAt', 0) > 7 * 864e5) {
+    store.set('bindRemAt', Date.now()); setTimeout(() => toast('📱 也可以在手機使用：下載 App 後用同一個 Google 帳號登入即可綁定同步（會員頁可關閉此提醒）', 9000), 4000);
+  }
   shell();
   S.keys = store.get('keys', {}); S.dirty = store.get('dirty', false);
   try { const pr = await pull(); if (pr === 'empty') { S.syncMsg = me.phone ? '雲端還沒有手機資料' : '網頁為主（尚未綁定手機）'; if (me.phone) setTimeout(() => toast('雲端還沒有資料：請在手機 App「會員與授權 › 帳號與同步」開啟「與電腦網頁版同步」。', 10000), 1500); } }
