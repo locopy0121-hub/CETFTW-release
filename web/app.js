@@ -814,7 +814,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"v1.1.354","sha":"6a02438","at":"2026-11-22 02:28"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"928c596","at":"2026-11-22 02:29"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -1235,14 +1235,14 @@ VIEWS.trades = {
   title: '交易紀錄',
   render() {
     const years = Array.from(new Set(D.trades().map((t) => String(t.d).slice(0, 4)))).sort().reverse();
-    return head('交易紀錄', `<button class="btn" id="expF">匯出篩選結果</button><label class="btn" style="cursor:pointer">匯入 CSV<input type="file" id="imp" accept=".csv,text/csv" hidden></label><button class="btn primary" id="addT">＋ 新增交易</button>`) +
+    return head('交易紀錄', `<button class="btn" id="expF">匯出篩選結果</button><label class="btn" style="cursor:pointer">匯入 CSV<input type="file" id="imp" accept=".csv,.aes,text/csv" hidden></label><button class="btn primary" id="addT">＋ 新增交易</button>`) +
       `<div class="row wrap" style="margin-bottom:12px"><input id="tq" placeholder="篩選代號或名稱" style="max-width:220px" value="${esc(S.pref.tq || '')}">
       <select id="tt" style="max-width:130px"><option value="">全部類別</option>${Object.entries(TYPE_N).map(([k, n]) => `<option value="${k}" ${S.pref.tt === k ? 'selected' : ''}>${n}</option>`).join('')}</select>
       <select id="ty" style="max-width:120px"><option value="">全部年度</option>${years.map((y) => `<option ${S.pref.ty === y ? 'selected' : ''}>${y}</option>`).join('')}</select></div><div id="dyn"></div>`;
   },
   bind() {
     $('#addT').onclick = () => tradeModal();
-    $('#imp').onchange = async (e) => { const file = e.target.files[0]; e.target.value = ''; if (!file) return; if (!can('BACKUP')) return toast('匯入為會員功能（備份與設定檔）'); importTrades(await file.text()); };
+    $('#imp').onchange = async (e) => { const file = e.target.files[0]; e.target.value = ''; if (!file) return; if (!can('BACKUP')) return toast('匯入為會員功能（備份與設定檔）'); const t = await expOpen(await file.text()); if (t != null) importTrades(t.replace(/^\ufeff/, '')); };
     const f = () => { S.pref.tq = $('#tq').value.trim(); S.pref.tt = $('#tt').value; S.pref.ty = $('#ty').value; savePref(); this.fill(); };
     $('#tq').oninput = f; $('#tt').onchange = f; $('#ty').onchange = f;
     $('#expF').onclick = () => { if (!can('BACKUP')) return toast('匯出為會員功能（備份與設定檔）'); this._exp = true; this.fill(); };
@@ -3913,6 +3913,7 @@ VIEWS.member = {
         <tbody>${FEATURES.map(([k, t]) => `<tr><td>${esc(t)}</td>${cols.map(([, , c, mask]) => `<td style="color:${mask & F[k] ? argb(c) : 'var(--border)'};font-weight:700">${mask & F[k] ? '✓' : '—'}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
         <div class="small muted" style="margin-top:6px">自選、持股記帳、個股行情等基本功能各等級皆可使用。</div></div>`;
     $('#pfE').onclick = () => onboarding(false);
+    if (lineOaId()) { $('#pfE').closest('.card').insertAdjacentHTML('beforeend', '<div id="lineBind"></div>'); lineBindFill(); }
     $('#sAuto').onchange = (e) => { S.pref.syncAuto = e.target.checked; savePref(); toast(e.target.checked ? '已改為自動同步' : '已改為手動同步：按「立即同步」才會上傳／下載'); renderSync(); };
     $('#apBtn').onclick = () => applyModal();
     $('#lo').onclick = async () => { if ((await dialog('登出', '登出後這個瀏覽器的資料會清除（雲端資料保留），重新登入即可恢復。', [['', '取消'], ['ok', '登出', 'primary']])) === 'ok') logout(); };
@@ -3922,6 +3923,21 @@ VIEWS.member = {
   },
   syms() { return []; },
 };
+
+/** LINE 綁定（會員資料庫在 D1 時開放）：產生 6 位數綁定碼，在官方帳號傳「綁定 123456」 */
+async function lineBindFill(code) {
+  const el = $('#lineBind'); if (!el) return;
+  let st; try { st = await api('lineStatus', { session: S.session }); } catch (e) { el.remove(); return; }
+  if (st.kicked) return kicked();
+  const oa = lineOaId(); const msg = code ? 'https://line.me/R/oaMessage/' + encodeURIComponent(oa) + '/?' + encodeURIComponent('綁定 ' + code) : '';
+  el.innerHTML = `<div class="tile" style="margin-top:12px"><div class="row"><div class="sp"><b>LINE 綁定</b><div class="small ${st.bound && !st.friend ? 'up' : 'muted'}">${st.bound ? (st.friend ? '已綁定官方帳號（' + esc(st.boundAt) + '），到價提醒與會員通知會傳到 LINE' : '已綁定，但你已封鎖官方帳號，收不到通知') : '綁定後，LINE 上設定的到價提醒會歸到你的會員帳號'}</div></div>
+      <button class="btn sm ${st.bound ? '' : 'primary'}" id="lbCode">${st.bound ? '重新綁定' : '產生綁定碼'}</button>${st.bound ? '<button class="btn sm" id="lbOff">解除綁定</button>' : ''}</div>
+    ${code ? `<div style="margin-top:10px"><div style="font-size:24px;font-weight:700;letter-spacing:4px" class="num">${code}</div><div class="small muted">10 分鐘內在官方帳號 ${esc(oa)} 傳送「綁定 ${code}」即可完成。</div>
+      <div class="row" style="gap:8px;margin-top:8px"><a class="btn sm primary" href="${msg}" target="_blank" rel="noopener">開啟 LINE 傳送</a><button class="btn sm" id="lbRe">完成後更新狀態</button></div></div>` : ''}</div>`;
+  $('#lbCode').onclick = async () => { try { const r = await api('lineCode', { session: S.session }); lineBindFill(r.code); } catch (e) { toast(e.message); } };
+  if ($('#lbOff')) $('#lbOff').onclick = async () => { if ((await dialog('解除 LINE 綁定', '解除後到價提醒與會員通知不再對應你的會員帳號。', [['', '取消'], ['ok', '解除', 'primary']])) !== 'ok') return; try { await api('lineUnbind', { session: S.session }); lineBindFill(); } catch (e) { toast(e.message); } };
+  if ($('#lbRe')) $('#lbRe').onclick = () => lineBindFill();
+}
 
 // ───────── 股息 ─────────
 function barsHtml(items, color) {
@@ -4334,8 +4350,56 @@ document.addEventListener('keydown', (e) => {
   if (Date.now() - gKey < 1200) { const r = { h: '', w: 'watch', p: 'hold', t: 'trades', d: 'div', a: 'analysis', m: 'market', s: 'settings' }[k]; if (r != null) { location.hash = '#/' + r; gKey = 0; } }
 });
 function csvCell(v) { const s = String(v == null ? '' : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
-function download(name, text) {
-  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + text], { type: 'text/csv;charset=utf-8' })); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+// ───────── 匯出加密（AES-256-GCM＋PBKDF2-SHA256 20 萬次；與 App 格式相同，可互相匯入）─────────
+const EXP_ITER = 200000;
+let EXP_PWD = '';   // 本次開啟期間記住的匯出密碼（只在記憶體，不存檔）
+const b64big = (u8) => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
+async function expKey(pwd, salt, iter) {
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pwd), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: iter }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+async function expEncrypt(plain, pwd, kind) {
+  const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await expKey(pwd, salt, EXP_ITER), new TextEncoder().encode(plain)));
+  return JSON.stringify({ app: 'ClaudeETF', enc: 'AES-256-GCM', kdf: 'PBKDF2-SHA256', iter: EXP_ITER, kind, salt: b64big(salt), iv: b64big(iv), ct: b64big(ct) });
+}
+function expIsEnc(text) { try { return /^\s*\{/.test(text) && JSON.parse(text).enc === 'AES-256-GCM'; } catch (e) { return false; } }
+async function expDecrypt(text, pwd) {
+  try { const o = JSON.parse(text); const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64bytes(o.iv) }, await expKey(pwd, b64bytes(o.salt), o.iter || EXP_ITER), b64bytes(o.ct)); return new TextDecoder().decode(pt); }
+  catch (e) { return null; }
+}
+/** 取得匯出密碼（第一次輸入兩次確認，可記住到關閉網頁為止） */
+async function expPassword() {
+  if (EXP_PWD) return EXP_PWD;
+  let box = null;
+  const v = await dialog('設定匯出密碼', `<div class="notice small" style="margin-bottom:8px">為保護個人投資資料，匯出的檔案一律以 AES-256 加密；匯入（App 或網頁版）時需輸入同一組密碼。<b>密碼忘記就無法開啟檔案</b>。</div>
+      <div class="field"><label>匯出密碼（至少 8 個字）</label><input id="xp1" type="password" autocomplete="new-password"></div>
+      <div class="field"><label>再輸入一次</label><input id="xp2" type="password" autocomplete="new-password"></div>
+      <label class="row" style="gap:6px;justify-content:flex-start"><input type="checkbox" id="xpR" style="width:auto" checked>關閉網頁前記住這組密碼</label><div id="merr" class="small up"></div>`,
+    [['', '取消'], ['ok', '加密匯出', 'primary']], (b) => { box = b; return () => { const a = $('#xp1', b).value; return a.length < 8 ? '密碼至少 8 個字' : a !== $('#xp2', b).value ? '兩次輸入的密碼不同' : null; }; });
+  if (v !== 'ok') return null;
+  const pwd = $('#xp1', box).value; if ($('#xpR', box).checked) EXP_PWD = pwd; return pwd;
+}
+/** 開啟加密檔：先試記住的密碼，不對再詢問 */
+async function expOpen(text) {
+  if (!expIsEnc(text)) return text;
+  if (EXP_PWD) { const t = await expDecrypt(text, EXP_PWD); if (t != null) return t; }
+  for (let i = 0; i < 3; i++) {
+    let box = null;
+    const v = await dialog('輸入匯出密碼', `<div class="small muted" style="margin-bottom:8px">這是加密的匯出檔（AES-256），請輸入匯出時設定的密碼。</div><div class="field"><label>匯出密碼</label><input id="xpo" type="password"></div>${i ? '<div class="small up">密碼錯誤，請再試一次</div>' : ''}`,
+      [['', '取消'], ['ok', '開啟', 'primary']], (b) => { box = b; });
+    if (v !== 'ok') return null;
+    const pwd = $('#xpo', box).value; const t = await expDecrypt(text, pwd);
+    if (t != null) { EXP_PWD = pwd; return t; }
+  }
+  toast('密碼錯誤，無法開啟檔案'); return null;
+}
+/** 下載匯出檔：一律加密（檔名加 .aes） */
+async function download(name, text) {
+  const pwd = await expPassword(); if (!pwd) return;
+  const enc = await expEncrypt(text.startsWith('\ufeff') ? text : '\ufeff' + text, pwd, /\.csv$/.test(name) ? 'csv' : 'backup');
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([enc], { type: 'application/octet-stream' })); a.download = name + '.aes'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  toast('已加密匯出（AES-256）');
 }
 function exportCsv(kind) {
   const day = ymd().replace(/\//g, '-');
