@@ -814,7 +814,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"v1.1.338","sha":"39ba9f7","at":"2026-11-21 19:12"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"57c5d1b","at":"2026-11-21 21:35"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -1597,15 +1597,12 @@ VIEWS.s = {
       <div class="card"><h2>分價量（近 60 日）</h2><div class="vp">${bins.map((v, i) => i).reverse().map((i) => { const p0 = lo + bw * i, p1 = p0 + bw; const here = price >= p0 && price < p1;
         return `<div class="row"><span class="num small" style="width:110px">${fmtPx(p0)}–${fmtPx(p1)}</span><div class="sp"><div style="height:12px;width:${(bins[i] / bmax * 100).toFixed(1)}%;background:${i === poc ? 'var(--warn)' : here ? 'var(--primary)' : '#475569'};border-radius:3px"></div></div><span class="small muted" style="width:70px;text-align:right">${fmtVol(bins[i])}</span></div>`; }).join('')}</div>
         <div class="small muted" style="margin-top:6px">橘色為成交最密集的價區（籌碼支撐／壓力），藍色為目前價格所在區間。</div></div>
-      <div class="card" id="season"><h2>月份漲跌（近 10 年）</h2><div class="muted small">載入中…</div></div>`;
-    const k = 'm' + sym; const m = barCache[k] || (barCache[k] = await fetchYahoo(ysym(sym), '10y', '1mo', 86400));
+      <div class="card" id="season"><h2>月份漲跌</h2><div class="muted small">載入中…</div></div>`;
+    const k = 'mx' + sym; const m = barCache[k] || (barCache[k] = await fetchYahoo(ysym(sym), 'max', '1mo', 86400));
     if (S.route !== 's' || this.sym !== sym || !$('#season')) return;
     if (!m || !m.timestamp) { $('#season').innerHTML = '<h2>月份漲跌</h2><div class="muted small">無資料</div>'; return; }
-    const c = m.indicators.quote[0].close; const st = Array.from({ length: 12 }, () => []);
-    m.timestamp.forEach((t, i) => { if (!i || c[i] == null || c[i - 1] == null) return; const d = new Date((t + 8 * 3600) * 1000); st[d.getUTCMonth()].push((c[i] / c[i - 1] - 1) * 100); });
-    $('#season').innerHTML = `<h2>月份漲跌（近 10 年）</h2><div class="mcal">${st.map((arr, i) => { const avg = arr.length ? arr.reduce((a, v) => a + v, 0) / arr.length : 0; const win = arr.length ? arr.filter((v) => v > 0).length / arr.length * 100 : 0;
-      return `<div class="mc" style="background:color-mix(in srgb, ${css(avg >= 0 ? '--up' : '--down')} ${Math.round(Math.min(60, Math.abs(avg) * 8) + 8)}%, var(--card2))"><div class="small">${i + 1} 月</div><div class="num">${fmtPct(avg, 1)}</div><div class="small muted">勝率 ${win.toFixed(0)}%</div></div>`; }).join('')}</div>
-      <div class="small muted" style="margin-top:6px">各月份平均報酬與上漲機率（月 K 收盤），過去表現不代表未來。</div>`;
+    const c = m.indicators.quote[0].close; const pairs = m.timestamp.map((t, i) => [new Date((t + 8 * 3600) * 1000), c[i]]).filter((x) => x[1] != null);
+    const draw = () => { const el = $('#season'); if (!el) return; el.innerHTML = seasonHtml(pairs); seasonBind(el, draw); }; draw();
   },
   async news() {
     const sym = this.sym; const el = $('#news'); if (!el) return;
@@ -2004,6 +2001,34 @@ VIEWS.index = {
 };
 // ───────── 指數詳情（台股加權、櫃買、美股與全球指數）：圖表、關鍵數據、技術面、波動、回撤、每年報酬、月份季節性、盤後摘要／VIX ─────────
 const IX_TW = { '^TWII': 't00', '^TWOII': 'o00' };
+/** 月份漲跌（季節性）：可選近 3／5／10／20 年、全部（最大）或自訂年數；pairs＝[[Date, 月收盤], …]（由舊到新） */
+const SEASON_Y = [3, 5, 10, 20, 0];
+function seasonYears() { const v = S.pref.seasonY; return v == null ? 10 : +v; }
+function seasonHtml(pairs) {
+  const total = Math.max(0, (pairs.length - 1) / 12); const yrs = seasonYears();
+  const use = yrs > 0 ? pairs.slice(-(Math.round(yrs * 12) + 1)) : pairs;
+  const st = Array.from({ length: 12 }, () => []);
+  use.forEach(([d, v], i) => { if (!i || !use[i - 1][1] || v == null) return; st[d.getUTCMonth()].push((v / use[i - 1][1] - 1) * 100); });
+  const from = use.length ? use[0][0].getUTCFullYear() : '';
+  const span = yrs > 0 && yrs < total ? '近 ' + yrs + ' 年' : '全部 ' + from + ' 年起（' + total.toFixed(total >= 10 ? 0 : 1) + ' 年）';
+  const avgs = st.map((a) => (a.length ? a.reduce((x, v) => x + v, 0) / a.length : null));
+  const valid = avgs.map((v, i) => [v, i]).filter(([v]) => v != null); const best = valid.slice().sort((a, b) => b[0] - a[0])[0], worst = valid.slice().sort((a, b) => a[0] - b[0])[0];
+  const btn = (y) => `<button data-sy="${y}" class="${yrs === y || (y === 0 && yrs <= 0) ? 'on' : ''}">${y ? y + ' 年' : '最大'}</button>`;
+  const custom = !SEASON_Y.includes(yrs);
+  return `<h2>月份漲跌（${esc(span)}）</h2>
+    <div class="row wrap" style="gap:8px;margin-bottom:8px"><div class="seg">${SEASON_Y.map(btn).join('')}</div>
+      <label class="row small" style="gap:4px">自訂 <input type="number" data-syc min="1" max="100" step="1" value="${custom ? yrs : ''}" placeholder="年" style="width:64px;padding:4px 6px"> 年</label>
+      <span class="small muted">資料共 ${total.toFixed(total >= 10 ? 0 : 1)} 年</span></div>
+    <div class="mcal">${st.map((arr, i) => { const avg = avgs[i] || 0; const win = arr.length ? arr.filter((v) => v > 0).length / arr.length * 100 : 0;
+      return `<div class="mc" style="background:color-mix(in srgb, ${css(avg >= 0 ? '--up' : '--down')} ${Math.round(Math.min(60, Math.abs(avg) * 8) + 8)}%, var(--card2))"><div class="small">${i + 1} 月</div><div class="num">${arr.length ? fmtPct(avg, 1) : '—'}</div><div class="small muted">勝率 ${win.toFixed(0)}%</div><div class="small muted">${arr.length} 次</div></div>`; }).join('')}</div>
+    <div class="small muted" style="margin-top:6px">${best ? `表現最好 ${best[1] + 1} 月（平均 ${fmtPct(best[0], 1)}）、最差 ${worst[1] + 1} 月（平均 ${fmtPct(worst[0], 1)}）。` : ''}各月份平均報酬與上漲機率（月 K 收盤），過去表現不代表未來。</div>`;
+}
+/** 綁定年數切換；redraw 重新畫這張卡 */
+function seasonBind(el, redraw) {
+  if (!el) return;
+  $$('[data-sy]', el).forEach((b) => b.onclick = () => { S.pref.seasonY = +b.dataset.sy; savePref(); redraw(); });
+  const c = $('[data-syc]', el); if (c) c.onchange = () => { const v = Math.round(+c.value); if (v >= 1 && v <= 100) { S.pref.seasonY = v; savePref(); redraw(); } };
+}
 const IX_FROM = { t00: '^TWII', o00: '^TWOII' };
 function ixName(sym) { const w = WORLD.concat(FXS).find(([k]) => k === sym); return w ? w[1] : (INDEXES.find((x) => x.k === sym) || {}).n || sym; }
 function ixQuote(sym) { return S.q[IX_TW[sym] || sym] || {}; }
@@ -2110,10 +2135,8 @@ VIEWS.ix = {
       for (let i = 1; i < ys.length; i++) rows.push([ys[i], (yr[ys[i]] / yr[ys[i - 1]] - 1) * 100]); const last = rows.slice(-15).reverse(); const mx = Math.max(...last.map((x) => Math.abs(x[1])), 1);
       const up = rows.filter((x) => x[1] > 0).length;
       $('#ixYr').innerHTML = `<h2>每年報酬<span class="r small muted">上漲 ${up}／${rows.length} 年</span></h2>${last.map(([y, r]) => `<div class="row" style="gap:8px;height:24px"><span class="small num" style="width:42px">${y}${y === new Date().getFullYear() ? '*' : ''}</span><div class="sp" style="position:relative;height:10px"><div style="position:absolute;top:0;bottom:0;${r >= 0 ? 'left:50%' : 'right:50%'};width:${(Math.abs(r) / mx * 50).toFixed(1)}%;background:${css(r >= 0 ? '--up' : '--down')};border-radius:3px"></div></div><span class="num small ${cls(r)}" style="width:62px;text-align:right">${fmtPct(r, 1)}</span></div>`).join('')}<div class="small muted" style="margin-top:4px">＊今年為年初至今。價格指數不含股息。</div>`;
-      // 月份季節性（近 10 年）
-      const st = Array.from({ length: 12 }, () => []); const M10 = M.slice(-121); M10.forEach(([d, v], i) => { if (!i) return; st[d.getUTCMonth()].push((v / M10[i - 1][1] - 1) * 100); });
-      $('#ixSeason').innerHTML = `<h2>月份漲跌（近 10 年）</h2><div class="mcal">${st.map((arr, i) => { const avg = arr.length ? arr.reduce((a, x) => a + x, 0) / arr.length : 0; const win = arr.length ? arr.filter((x) => x > 0).length / arr.length * 100 : 0;
-        return `<div class="mc" style="background:color-mix(in srgb, ${css(avg >= 0 ? '--up' : '--down')} ${Math.round(Math.min(60, Math.abs(avg) * 8) + 8)}%, var(--card2))"><div class="small">${i + 1} 月</div><div class="num">${fmtPct(avg, 1)}</div><div class="small muted">勝率 ${win.toFixed(0)}%</div></div>`; }).join('')}</div>`; }
+      // 月份季節性（可選年數，最大＝全部歷史）
+      const drawS = () => { const el = $('#ixSeason'); if (!el) return; el.innerHTML = seasonHtml(M); seasonBind(el, drawS); }; drawS(); }
     // 台股：盤後摘要；美股：VIX
     if (tw) { const m = await kv('sx:mkt'); const el2 = $('#ixMkt'); if (!el2) return;
       el2.innerHTML = `<h2>盤後摘要<span class="r small muted">${esc((m && m.d) || '')}</span></h2>${m ? `<div class="grid g2" style="gap:10px"><div><div class="small muted">上漲／下跌／平盤</div><div class="num big"><span class="up">${m.u}</span>／<span class="down">${m.dn}</span>／${m.f}</div><div class="small">漲停 <span class="up">${m.lu}</span>　跌停 <span class="down">${m.ld}</span></div></div>
@@ -4963,7 +4986,9 @@ function loginView(msg, mode) {
       <label class="row small" style="justify-content:center;margin-top:10px;cursor:pointer"><input type="checkbox" id="agree" style="width:auto" ${store.get('agree', false) ? 'checked' : ''}> 我同意以 Google 帳號識別會員身分，並了解本服務內容僅供參考、不構成投資建議</label>`
     : `<div class="text2" style="margin-top:12px">用註冊時的 Google 帳號登入（與手機 App 相同帳號）</div>
       <div class="feat"><div>📈 自選行情牆、指數、今日漲跌停</div><div>💼 持股損益、資產配置、交易記帳</div><div>📊 個股 K 線、進場建議、籌碼與財務</div><div>🔄 與手機 App 自動同步</div></div>`}
+    ${QR_HINT ? `<div class="notice" style="margin-top:14px;text-align:left">這是電腦登入用的 QR Code：請打開手機「台美股資產」App › 會員 › 帳號與同步 ›「掃描登入網頁版」來掃描，不是用相機開啟。</div>` : ''}
     <div id="gbtn" class="gbtn" style="margin-top:14px">${p.gClient || MOCK ? '' : '<div class="notice">管理員尚未開放網頁登入（Google 登入未設定）。</div>'}</div>
+    ${mode === 'login' ? `<div style="margin-top:12px"><button class="btn" id="qrBtn" style="min-width:280px">📱 用 App 掃描登入</button><div class="small muted" style="margin-top:4px">手機 App 已登入帳號時，掃描 QR Code 即可登入，免在電腦輸入 Google 帳號</div></div>` : ''}
     <div id="lerr" class="small up" style="margin-top:10px"></div>
     ${lineOaId() ? `<div style="margin-top:14px">${lineJoinHtml()}</div>` : ''}
     <div class="small muted" style="margin-top:18px">${mode === 'reg' ? '已經在手機 App 用 Google 登入過？直接按「登入」即可，不需重新註冊。' : '還沒有帳號？按上方「註冊新帳號」。'}同一帳號網頁同時只能在一個瀏覽器使用。</div>${webVerHtml()}</div></div>`;
@@ -4981,13 +5006,78 @@ function loginView(msg, mode) {
     else { const sc = document.createElement('script'); sc.src = 'https://accounts.google.com/gsi/client'; sc.async = true; sc.onload = init; sc.onerror = () => { $('#lerr').textContent = '無法載入 Google 登入，請檢查網路或關閉阻擋程式。'; }; document.head.appendChild(sc); }
   };
   if ($('#agree')) $('#agree').onchange = (e) => { store.set('agree', e.target.checked); showBtn(); };
+  if ($('#qrBtn')) $('#qrBtn').onclick = () => qrLogin();
   showBtn();
+}
+// 用相機掃到登入 QR Code 而開啟網頁時（網址帶 ?qr=）顯示提示，並把網址清乾淨
+const QR_HINT = /[?&]qr=/.test(location.search);
+if (QR_HINT) try { history.replaceState(null, '', location.pathname + location.hash); } catch (e) {}
+/** 瀏覽器簡述（顯示在手機確認畫面，讓使用者辨認是哪台電腦） */
+function uaText() {
+  const u = navigator.userAgent;
+  const b = /Edg\//.test(u) ? 'Edge' : /OPR\//.test(u) ? 'Opera' : /Chrome\//.test(u) ? 'Chrome' : /Firefox\//.test(u) ? 'Firefox' : /Safari\//.test(u) ? 'Safari' : '瀏覽器';
+  const o = /Windows/.test(u) ? 'Windows' : /Mac OS X/.test(u) && !/Mobile/.test(u) ? 'macOS' : /Android/.test(u) ? 'Android' : /iPhone|iPad/.test(u) ? 'iOS' : /Linux/.test(u) ? 'Linux' : '';
+  return b + (o ? ' · ' + o : '') + ' · ' + new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
+}
+/** 產生 QR Code（SVG）：使用 qrcode-generator（jsDelivr），載入失敗時用 QR 圖片服務備援 */
+async function qrSvg(text, px = 220) {
+  try {
+    if (!window.qrcode) await new Promise((ok, no) => { const sc = document.createElement('script'); sc.src = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js'; sc.onload = ok; sc.onerror = no; document.head.appendChild(sc); });
+    const q = window.qrcode(0, 'M'); q.addData(text); q.make();
+    const n = q.getModuleCount(), cell = Math.max(2, Math.floor(px / (n + 4)));
+    return q.createSvgTag({ cellSize: cell, margin: cell * 2, scalable: true });
+  } catch (e) {
+    return `<img alt="QR Code" width="${px}" height="${px}" src="https://api.qrserver.com/v1/create-qr-code/?size=${px}x${px}&margin=8&data=${encodeURIComponent(text)}">`;
+  }
+}
+/** 用 App 掃描登入：網頁取得一次性代碼 → 顯示 QR Code 與確認碼 → 輪詢等手機確認 → 取得網頁工作階段 */
+async function qrLogin() {
+  let alive = true, timer = 0;
+  const bg = document.createElement('div'); bg.className = 'modal-bg';
+  bg.innerHTML = `<div class="modal" style="text-align:center;max-width:360px"><h3>用 App 掃描登入</h3><div class="mb" id="qrB"><div class="small muted">產生中…</div></div><div class="acts"><button class="btn" data-x>取消</button></div></div>`;
+  document.body.appendChild(bg);
+  const close = () => { alive = false; clearTimeout(timer); bg.remove(); };
+  $('[data-x]', bg).onclick = close; bg.onclick = (e) => { if (e.target === bg) close(); };
+  const box = $('#qrB', bg);
+  const make = async () => {
+    let r;
+    try { r = await api('qrNew', { ua: uaText() }); }
+    catch (e) { box.innerHTML = `<div class="notice err">${esc(/未知動作|驗證失敗/.test(e.message) ? '管理員的會員伺服器需要更新到第 11 版才能掃描登入，請先用 Google 帳號登入。' : e.message)}</div>`; return; }
+    if (!alive) return;
+    const url = location.origin + '/web?qr=' + r.id; const end = Date.now() + (r.ttl || 180) * 1000;
+    box.innerHTML = `<div class="qrbox" style="background:#fff;border-radius:12px;padding:10px;display:inline-block;width:240px;height:240px">${await qrSvg(url, 220)}</div>
+      <div class="row" style="justify-content:center;gap:8px;margin-top:10px;align-items:baseline"><span class="small text2">確認碼</span><b class="num" style="font-size:28px;color:var(--primary)">${esc(r.code)}</b></div>
+      <div class="small text2" id="qrSt" style="margin-top:6px">打開手機「台美股資產」App › 會員 › 帳號與同步 ›「掃描登入網頁版」，掃描後確認手機上的確認碼相同再按「確認登入」。</div>
+      <div class="small muted" id="qrT" style="margin-top:6px"></div>`;
+    const svg = $('svg', box); if (svg) { svg.setAttribute('width', '220'); svg.setAttribute('height', '220'); }
+    const poll = async () => {
+      if (!alive) return;
+      const left = Math.max(0, Math.round((end - Date.now()) / 1000));
+      if ($('#qrT', bg)) $('#qrT', bg).textContent = left ? `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} 後失效` : '';
+      if (!left) { box.innerHTML = `<div class="small text2">QR Code 已失效</div><button class="btn primary" id="qrRe" style="margin-top:10px">重新產生</button>`; $('#qrRe', bg).onclick = () => { box.innerHTML = '<div class="small muted">產生中…</div>'; make(); }; return; }
+      let p = null; try { p = await api('qrPoll', { id: r.id, key: r.key }); } catch (e) {}
+      if (!alive) return;
+      if (p && p.st === 'ok' && p.session) { close(); toast('已用手機 App 登入', 3000); await loginWith(p, false); return; }
+      if (p && p.st === 'deny') { box.innerHTML = `<div class="notice err">手機上已拒絕這次登入。</div><button class="btn primary" id="qrRe" style="margin-top:10px">重新產生</button>`; $('#qrRe', bg).onclick = () => { box.innerHTML = '<div class="small muted">產生中…</div>'; make(); }; return; }
+      if (p && p.st === 'expired') { timer = setTimeout(poll, 0); return; }
+      if (p && p.scanned && $('#qrSt', bg)) { $('#qrSt', bg).innerHTML = '<b class="up">✓ 手機已掃描</b>，請在手機上確認確認碼並按「確認登入」。'; }
+      timer = setTimeout(poll, 2000);
+    };
+    timer = setTimeout(poll, 1500);
+  };
+  make();
 }
 async function onCredential(resp, reg) {
   $('#lerr').textContent = reg ? '註冊中…' : '登入中…';
   try {
     const r = await api('login', { idToken: resp.credential, web: true, version: 'web', trialStart: dayNum(), register: !!reg });
     if (!r.session) throw new Error('伺服器未回傳登入資訊（請管理員更新雲端伺服器程式為第 4 版）');
+    await loginWith(r, reg);
+  } catch (e) { $('#lerr').textContent = e.message === '裝置碼錯誤' ? '雲端會員伺服器版本過舊（需第 4 版），請管理員更新 Apps Script 程式碼後重新部署。' : e.message; }
+}
+/** 取得網頁工作階段後（Google 登入或 App 掃描登入）：保存並進入 */
+async function loginWith(r, reg) {
+  {
     S.session = r.session; store.set('session', r.session);
     // 換帳號登入：清除上一個帳號的本機資料
     if (store.get('no', '') !== r.no) { S.keys = {}; S.rev = 0; S.dirty = false; store.del('keys'); store.set('rev', 0); store.set('dirty', false); }
@@ -4995,7 +5085,7 @@ async function onCredential(resp, reg) {
     if (reg && !r.isNew && r.serverVersion) toast('這個 Google 帳號已經註冊過，已直接登入', 4000);
     await start(r);
     if (r.isNew || (r.serverVersion >= 5 && !r.contact && !store.get('profSkip', false))) setTimeout(() => onboarding(r.isNew), 600);
-  } catch (e) { $('#lerr').textContent = e.message === '裝置碼錯誤' ? '雲端會員伺服器版本過舊（需第 4 版），請管理員更新 Apps Script 程式碼後重新部署。' : e.message; }
+  }
 }
 async function logout(msg) {
   const ses = S.session;
