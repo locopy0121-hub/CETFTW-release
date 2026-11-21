@@ -327,3 +327,15 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--primary); o
 .f-stance button.up:not(.on), .f-stance button.down:not(.on) { color: var(--muted); }
 .f-wrap { grid-column: 1 / -1; max-width: 860px; width: 100%; display: flex; flex-direction: column; gap: 12px; }
 .f-wrap > .card { margin: 0; }
+
+/* 側欄功能分類（可收合） */
+.nav-g { display: flex; align-items: center; justify-content: space-between; margin: 10px 4px 2px; padding: 2px 8px; font-size: 11px; letter-spacing: 1px; color: var(--muted); cursor: pointer; user-select: none; border-radius: 6px; }
+.nav-g:first-child { margin-top: 2px; }
+.nav-g:hover { color: var(--text2); }
+.nav-g i { font-style: normal; font-size: 10px; transition: transform .15s; }
+.nav-g.fold i { transform: rotate(-90deg); }
+.nav-g.fold + .nav-gl a:not(.on) { display: none; }
+.side { overflow-y: auto; scrollbar-width: thin; }
+.nav { flex: 0 0 auto; }
+:root[data-density="compact"] .nav a { padding: 7px 12px; }
+@media (min-width: 901px) { :root[data-side="mini"] .nav-g { justify-content: center; margin: 8px 0 2px; padding: 0; height: 1px; background: var(--border); font-size: 0; } :root[data-side="mini"] .nav-g i { display: none; } :root[data-side="mini"] .nav-g.fold + .nav-gl a:not(.on) { display: flex; } }

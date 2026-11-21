@@ -814,7 +814,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"v1.1.356","sha":"20907fb","at":"2026-11-22 03:25"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"dd86fd9","at":"2026-11-22 04:01"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -840,6 +840,15 @@ function rtStatusText() {
 const NAV = [['', '總覽', '🏠'], ['watch', '行情', '📈'], ['hold', '持股', '💼'], ['trades', '交易', '🧾'], ['div', '股息', '💰'], ['analysis', '分析', '📊'], ['compare', '比較', '⚖️'], ['calendar', '行事曆', '📅'], ['sim', '模擬交易', '🎮'], ['tools', '工具', '🧮'],
   ['alerts', '提醒', '🔔'], ['market', '市場', '🌐'], ['news', '新聞', '📰'], ['cash', '現金與帳戶', '🏦'], ['member', '會員', '👤'], ['settings', '設定', '⚙️']];
 const BOTTOM = ['', 'watch', 'hold', 'market', 'more'];
+// 功能分類（側欄、更多頁）：依使用情境分四群
+const NAV_GROUPS = [['資產', ['', 'hold', 'trades', 'div', 'cash']], ['行情與研究', ['watch', 'market', 'news', 'calendar', 'compare']],
+  ['分析與工具', ['analysis', 'alerts', 'sim', 'tools']], ['帳號', ['member', 'settings']]];
+const NAV_DESC = { '': '資產總覽、今日損益、指數與漲跌停', hold: '持股明細、成本、報酬與占比', trades: '交易紀錄、篩選、匯入匯出', div: '股息日曆、歷年股息、預估年股息', cash: '現金流紀錄與證券帳戶',
+  watch: '自選行情、行情牆、熱度圖', market: '大盤、類股、排行、美股與 ETF', news: '財經新聞與關鍵字搜尋', calendar: '除權息、股利發放、總經事件', compare: '多檔走勢與報酬相關係數',
+  analysis: '每年報酬、近 12 個月與投資組合分析', alerts: '到價與事件提醒', sim: '模擬持股與下單練習', tools: '交易成本、漲跌停價、定期定額複利試算',
+  member: '會員方案、帳號同步、LINE 綁定', settings: '外觀、版面、即時行情、資料' };
+const navItem = (r) => NAV.find((x) => x[0] === r);
+function navFold() { try { return new Set(JSON.parse(localStorage.getItem('cetf_navfold') || '[]')); } catch (e) { return new Set(); } }
 const PARENT = { ix: 'market', crash: 'market', s: 'none', limits: 'market', rank: 'market', index: 'market', us: 'market', etf: 'market', report: 'market', diag: 'settings', more: 'more' };
 /** 下載手機 App（Android）：連到發佈站下載頁，顯示 App 圖示與最新版本 */
 function dlAppHtml(big) {
@@ -864,7 +873,9 @@ async function dlAppVer() {
   try { const j = await (await fetch('/api/latest', { cache: 'no-store' })).json(); if (j && j.tag) $$('.dlv').forEach((el) => { el.textContent = 'Android ' + j.tag + (j.size ? ' · ' + (j.size / 1048576).toFixed(0) + ' MB' : ''); }); } catch (e) {}
 }
 function shell() {
-  const navHtml = NAV.map(([r, n, ic]) => `<a href="#/${r}" data-r="${r}"><span class="ic">${ic}</span><span>${n}</span></a>`).join('');
+  const fold = navFold();
+  const navHtml = NAV_GROUPS.map(([g, rs], gi) => `<div class="nav-g${fold.has(gi) ? ' fold' : ''}" data-ng="${gi}"><span>${g}</span><i>▾</i></div><div class="nav-gl" data-ngl="${gi}">${rs.map((r) => { const [, n, ic] = navItem(r);
+    return `<a href="#/${r}" data-r="${r}" title="${esc(n + '：' + (NAV_DESC[r] || ''))}"><span class="ic">${ic}</span><span>${n}</span></a>`; }).join('')}</div>`).join('');
   const botHtml = BOTTOM.map((r) => { const it = NAV.find((x) => x[0] === r) || ['more', '更多', '☰']; return `<a href="#/${r}" data-r="${r}"><span class="ic">${it[2]}</span><span>${it[1]}</span></a>`; }).join('');
   $('#app').innerHTML = `<div class="shell">
     <aside class="side"><div class="brand"><div class="logo">台</div>台美股資產</div>
@@ -874,11 +885,13 @@ function shell() {
     <main class="main" id="view"></main>
     <nav class="bottom">${botHtml}</nav></div>`;
   bindSearch($('#gs'), (sym) => { location.hash = '#/s/' + sym; });
+  // 側欄分類可收合（記住狀態）；收合時仍顯示目前所在的頁面
+  $$('[data-ng]').forEach((h) => h.onclick = () => { const f = navFold(); const gi = +h.dataset.ng; if (f.has(gi)) f.delete(gi); else f.add(gi); try { localStorage.setItem('cetf_navfold', JSON.stringify([...f])); } catch (e) {} h.classList.toggle('fold', f.has(gi)); });
 }
 document.addEventListener('keydown', (e) => {
   if (e.key === '/' && !/INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || '')) { const g = $('#gs'); if (g && g.offsetParent) { e.preventDefault(); g.focus(); } else { e.preventDefault(); location.hash = '#/more'; } }
 });
-function markNav(r) { $$('[data-r]').forEach((a) => a.classList.toggle('on', a.dataset.r === r)); const m = member(); $('#mb').innerHTML = badge(m) + ' <span class="small muted">' + esc(stateLine(m)) + '</span>'; }
+function markNav(r) { $$('.nav [data-r], .bottom [data-r]').forEach((a) => a.classList.toggle('on', a.dataset.r === r)); const m = member(); $('#mb').innerHTML = badge(m) + ' <span class="small muted">' + esc(stateLine(m)) + '</span>'; }
 function head(title, right = '') { return `<div class="top"><h1>${esc(title)}</h1>${right}</div>`; }
 
 // 指數列＋漲跌停列（總覽、行情、持股共用）
@@ -4252,7 +4265,9 @@ VIEWS.more = {
   render() {
     return head('更多') + `<div class="search" style="margin-bottom:12px"><input id="ms2" placeholder="搜尋個股：代號或名稱" autocomplete="off"><div class="res hide"></div></div>
       <div class="card" style="margin-bottom:12px;padding:10px">${dlAppHtml(true)}</div>
-      <div class="card list">${NAV.filter(([r]) => !BOTTOM.includes(r)).map(([r, n, ic]) => `<a class="it" href="#/${r}" style="color:inherit"><span style="font-size:20px">${ic}</span><div class="l"><div class="t1">${n}</div></div><span class="muted">›</span></a>`).join('')}</div>`;
+      <div class="grid g2 stack">${NAV_GROUPS.map(([g, rs]) => `<div class="card"><h2>${g}</h2><div class="list">${rs.map((r) => { const [, n, ic] = navItem(r);
+        return `<a class="it" href="#/${r}" style="color:inherit"><span style="font-size:20px">${ic}</span><div class="l"><div class="t1">${n}${BOTTOM.includes(r) ? ' <span class="small muted">（下方選單）</span>' : ''}</div><div class="t2">${esc(NAV_DESC[r] || '')}</div></div><span class="muted">›</span></a>`; }).join('')}</div></div>`).join('')}</div>
+      <div class="small muted" style="margin-top:10px">電腦版可按 Ctrl＋K 開啟指令面板，快速跳到任何頁面或個股。</div>`;
   },
   bind() { bindSearch($('#ms2'), (sym) => { location.hash = '#/s/' + sym; }); dlAppVer(); },
   fill() {}, syms() { return []; },
@@ -4325,6 +4340,16 @@ VIEWS.settings = {
         <div class="small muted" style="margin-top:10px">網頁版 · 與手機 App 共用帳號與資料</div></div></div>`;
   },
   bind() {
+    // 設定分類：外觀／版面／行情／資料／其他，只看需要的那一類
+    const SET_CAT = { 外觀: '外觀', 總覽版面: '版面', 持股表格欄位: '版面', 行情牆: '版面', 各頁版面: '版面', 即時行情: '行情', 資料: '資料' };
+    const cards = $$('#view .card').filter((c) => c.querySelector('h2'));
+    cards.forEach((c) => { const t = (c.querySelector('h2').childNodes[0] || {}).textContent || ''; c.dataset.scat = SET_CAT[t.trim()] || '其他'; });
+    const cats = ['全部', '外觀', '版面', '行情', '資料', '其他']; let cur0 = ''; try { cur0 = sessionStorage.getItem('cetf_scat') || '全部'; } catch (e) { cur0 = '全部'; }
+    const bar = document.createElement('div'); bar.className = 'seg setcat'; bar.style.cssText = 'margin-bottom:12px;flex-wrap:wrap';
+    bar.innerHTML = cats.map((c) => `<button data-sc="${c}" class="${c === cur0 ? 'on' : ''}">${c}${c === '全部' ? '' : ' ' + cards.filter((x) => x.dataset.scat === c).length}</button>`).join('');
+    const grid = cards[0] && cards[0].parentElement; if (grid) grid.parentElement.insertBefore(bar, grid);
+    const apply = (c) => { cards.forEach((x) => { x.style.display = c === '全部' || x.dataset.scat === c ? '' : 'none'; }); $$('[data-sc]', bar).forEach((b) => b.classList.toggle('on', b.dataset.sc === c)); try { sessionStorage.setItem('cetf_scat', c); } catch (e) {} };
+    $$('[data-sc]', bar).forEach((b) => b.onclick = () => apply(b.dataset.sc)); apply(cur0);
     const re = () => { savePref(); applyLook(); route(); };
     $$('[data-k]').forEach((b) => b.onclick = () => { const k = b.dataset.k; const v = b.dataset.v; S.pref[k] = k === 'refresh' || k === 'usRefresh' ? +v : v; re(); if (k === 'twSrc' || k === 'bgRefresh') { FG.authFail = ''; tick(); } });
     $('#ovTk').onchange = (e) => { S.pref.ovTicker = e.target.checked; savePref(); };
