@@ -289,3 +289,14 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--primary); o
 .webver { font-size: 11px; color: var(--muted); margin-top: 4px; cursor: pointer; }
 .webver b { color: var(--text2); font-weight: 600; }
 .line-qr { width: 92px; height: 92px; border-radius: 10px; background: #fff; padding: 4px; flex: none; }
+
+/* 光譜（網頁版樣式）：偏離走勢＋價格階梯 */
+.bz-wrap { margin: 4px 0 8px; }
+.bz-ladder { display: flex; flex-direction: column; gap: 2px; }
+.bz-row { display: grid; grid-template-columns: 44px 64px 1fr auto; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px; font-size: 13px; color: var(--text2); border-left: 3px solid transparent; }
+.bz-row.on { background: var(--tip); color: var(--text); border-left-color: var(--primary); font-weight: 600; }
+.bz-step { font-size: 8px; letter-spacing: -1px; color: var(--muted); }
+.bz-row.on .bz-step { color: var(--primary); }
+.bz-rng { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bz-dist { text-align: right; white-space: nowrap; }
+@media (max-width: 420px) { .bz-row { grid-template-columns: 34px 58px 1fr auto; gap: 6px; font-size: 12px; } }

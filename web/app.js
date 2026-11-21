@@ -814,7 +814,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"81eca80","at":"2026-11-21 23:55"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"292b547","at":"2026-11-22 00:09"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -1597,26 +1597,18 @@ VIEWS.s = {
     const base = b[b.length - 1].d === today && b.length > 1 ? b[b.length - 2] : b[b.length - 1];
     const r = base.h - base.l; const kp = [['上關', snap(base.l + r * 1.382)], ['中關', snap((base.h + base.l) / 2)], ['下關', snap(base.h - r * 1.382)]];
     const price = (S.q[sym] || {}).price || b[b.length - 1].c;
-    // 光譜：近一年收盤線性迴歸
-    const cl = b.slice(-250).map((x) => x.c); const n = cl.length; const mx = (n - 1) / 2, my = cl.reduce((a, v) => a + v, 0) / n;
-    let sxy = 0, sxx = 0; cl.forEach((v, i) => { sxy += (i - mx) * (v - my); sxx += (i - mx) ** 2; }); const slope = sxy / sxx; const a0 = my - slope * mx;
-    const sigma = Math.sqrt(cl.reduce((acc, v, i) => acc + (v - (a0 + slope * i)) ** 2, 0) / n); const trend = a0 + slope * (n - 1);
-    const lines = [-2, -1, 0, 1, 2].map((k) => trend + k * sigma); const zi = (() => { const i = lines.findIndex((v) => price < v); return i < 0 ? 5 : i; })();
-    const ZN = ['特價', '便宜', '合理偏低', '合理偏高', '昂貴', '極貴']; const ZC = ['#16a34a', '#22c55e', '#86efac', '#fcd34d', '#f97316', '#ef4444'];
-    const pos = Math.max(0, Math.min(100, ((price - (trend - 3 * sigma)) / (6 * sigma)) * 100));
     // 分價量：近 60 日依收盤分 12 區
     const pv = b.slice(-60); const lo = Math.min(...pv.map((x) => x.l)), hi = Math.max(...pv.map((x) => x.h)); const bins = Array(12).fill(0); const bw = (hi - lo) / 12 || 1;
     pv.forEach((x) => { const i = Math.min(11, Math.floor(((x.h + x.l + x.c) / 3 - lo) / bw)); bins[i] += x.v || 0; }); const bmax = Math.max(...bins, 1); const poc = bins.indexOf(bmax);
     el.innerHTML = `<div class="card"><h2>三關價<span class="r small muted">依 ${esc(base.d)} 高 ${fmtPx(base.h)}／低 ${fmtPx(base.l)}</span></h2><div class="grid g3">${kp.map(([k, v]) => `<div class="tile"><div class="k">${k}</div><div class="v num ${price >= v ? 'up' : 'down'}">${fmtPrice(v)}</div><div class="s muted">${price >= v ? '現價在上方' : '現價在下方'}</div></div>`).join('')}</div>
         <div class="small muted" style="margin-top:6px">上關＝L＋(H−L)×1.382、中關＝(H＋L)÷2、下關＝H−(H−L)×1.382；未調整除權息。</div></div>
-      <div class="card"><h2>股價光譜（近一年）<span class="r tag" style="color:${ZC[zi]}">${ZN[zi]}</span></h2>
-        <div class="band">${ZC.map((c, i) => `<div style="background:${c}33;border-top:3px solid ${c}"><span>${ZN[i]}</span></div>`).join('')}<i style="left:${pos}%"></i></div>
-        <div class="row between small muted" style="margin-top:6px">${lines.map((v) => `<span class="num">${fmtPx(v)}</span>`).join('')}</div>
-        <div class="small muted" style="margin-top:6px">趨勢線 ${fmtPx(trend)}，現價偏離 ${sigma ? ((price - trend) / sigma).toFixed(2) : 0} 個標準差；只代表相對過去趨勢的位置。</div></div>
+      <div class="card" id="proBand"></div>
       <div class="card"><h2>分價量（近 60 日）</h2><div class="vp">${bins.map((v, i) => i).reverse().map((i) => { const p0 = lo + bw * i, p1 = p0 + bw; const here = price >= p0 && price < p1;
         return `<div class="row"><span class="num small" style="width:110px">${fmtPx(p0)}–${fmtPx(p1)}</span><div class="sp"><div style="height:12px;width:${(bins[i] / bmax * 100).toFixed(1)}%;background:${i === poc ? 'var(--warn)' : here ? 'var(--primary)' : '#475569'};border-radius:3px"></div></div><span class="small muted" style="width:70px;text-align:right">${fmtVol(bins[i])}</span></div>`; }).join('')}</div>
         <div class="small muted" style="margin-top:6px">橘色為成交最密集的價區（籌碼支撐／壓力），藍色為目前價格所在區間。</div></div>
       <div class="card" id="season"><h2>月份漲跌</h2><div class="muted small">載入中…</div></div>`;
+    { const bd = bandInfo(b, price); const ss = bandSeries(b); const pb = $('#proBand');
+      if (bd && ss && pb) { pb.innerHTML = bandCardHtml('股價光譜（近一年）', bd, price, fmtPx, 'proBz'); drawBandZ($('#proBz'), ss, price, bd); } else if (pb) pb.remove(); }
     const k = 'mx' + sym; const m = barCache[k] || (barCache[k] = await fetchYahoo(ysym(sym), 'max', '1mo', 86400));
     if (S.route !== 's' || this.sym !== sym || !$('#season')) return;
     if (!m || !m.timestamp) { $('#season').innerHTML = '<h2>月份漲跌</h2><div class="muted small">無資料</div>'; return; }
@@ -2138,9 +2130,7 @@ VIEWS.ix = {
       const v = volaOf(b); const kr = klineAnalyze(b);
       if (v) { $('#ixVol').innerHTML = voCardHtml(v, null).replace('<h2>波動', '<h2>波動（日 K）'); drawSeries($('#voChart'), v.series.map((x) => x[0]), [{ v: v.series.map((x) => x[1]), color: '#f59e0b', name: '年化波動', fill: true }], { h: 180, fmt: (x) => x.toFixed(0) + '%', key: 'ixvo' + sym }); }
       if (kr) { $('#ixKa').innerHTML = kaCardHtml(kr, false, sym).replace(/<span class="seg" id="kaTf">[\s\S]*?<\/span><\/span><\/h2>/, '</h2>'); drawChart($('#kaChart'), b.slice(-120), { key: 'ixka' + sym, count: 60, pats: true, mas: [20, 60], H: 280 }); }
-      const bd = bandInfo(b, px0); if (bd) { const ZC2 = ['#16a34a', '#22c55e', '#84cc16', '#eab308', '#f97316', '#ef4444']; const pos = Math.max(2, Math.min(98, (bd.z + 3) / 6 * 100));
-        $('#ixBand').innerHTML = `<h2>一年光譜<span class="r tag" style="color:${ZC2[bd.zone]};border-color:${ZC2[bd.zone]}">${bd.name}</span></h2><div class="band">${ZC2.map((cc, i) => `<div style="background:${cc}33;border-top:3px solid ${cc}"><span>${['特價', '便宜', '合理偏低', '合理偏高', '昂貴', '極貴'][i]}</span></div>`).join('')}<i style="left:${pos}%"></i></div>
-          <div class="row between small muted" style="margin-top:6px">${bd.lines.map((x) => `<span class="num">${fmt(x, 0)}</span>`).join('')}</div><div class="small muted" style="margin-top:6px">近一年收盤迴歸趨勢 ${fmt(bd.trend, 0)}，目前偏離 ${(bd.z >= 0 ? '+' : '') + bd.z.toFixed(2)} 個標準差。</div>`; }
+      const bd = bandInfo(b, px0); const bs = bandSeries(b); if (bd && bs) { $('#ixBand').innerHTML = bandCardHtml('一年光譜', bd, px0, (x) => fmt(x, 0), 'ixBz'); drawBandZ($('#ixBz'), bs, px0, bd); }
     } else { $('#ixTech').innerHTML = '<h2>技術面</h2><div class="small muted">資料不足</div>'; }
     // 回撤（週線，全期間）
     if (W.length > 20) { let peak = 0, peakD = '', mdd = 0, mddD = ''; const ds = []; W.forEach(([d, v]) => { if (v > peak) { peak = v; peakD = d; } const x = (v / peak - 1) * 100; ds.push([d, x]); if (x < mdd) { mdd = x; mddD = d; } });
@@ -4482,6 +4472,60 @@ function bandInfo(b, price) {
   const slope = sxy / sxx, a0 = my - slope * mx; const sigma = Math.sqrt(cl.reduce((acc, v, i) => acc + (v - (a0 + slope * i)) ** 2, 0) / n); const t = a0 + slope * (n - 1);
   const lines = [-2, -1, 0, 1, 2].map((k) => t + k * sigma); const i = lines.findIndex((v) => price < v); const zone = i < 0 ? 5 : i;
   return { zone, name: ['特價', '便宜', '合理偏低', '合理偏高', '昂貴', '極貴'][zone], trend: t, lines, z: sigma > 0 ? (price - t) / sigma : 0 };
+}
+/**
+ * 光譜（網頁版自有樣式）：「趨勢偏離走勢」＋「價格階梯」。
+ * 偏離走勢：近一年每日收盤相對迴歸趨勢的偏離（σ），以單線呈現，±1σ 為常態區、±2σ 為極端區；
+ * 價格階梯：由高到低列出各區的價格門檻，標出現價所在的一階與距離上下一階的漲跌幅。
+ */
+const BZ_N = ['特價', '便宜', '合理偏低', '合理偏高', '昂貴', '極貴'];
+function bandSeries(b) {
+  const bb = b.slice(-250); const cl = bb.map((x) => x.c); const n = cl.length; if (n < 60) return null;
+  const mx = (n - 1) / 2, my = cl.reduce((a, v) => a + v, 0) / n; let sxy = 0, sxx = 0; cl.forEach((v, i) => { sxy += (i - mx) * (v - my); sxx += (i - mx) ** 2; });
+  const slope = sxy / sxx, a0 = my - slope * mx; const sigma = Math.sqrt(cl.reduce((acc, v, i) => acc + (v - (a0 + slope * i)) ** 2, 0) / n);
+  return { d: bb.map((x) => x.d), z: cl.map((v, i) => (sigma > 0 ? (v - (a0 + slope * i)) / sigma : 0)), sigma };
+}
+function bandCardHtml(title, bd, price, f, id) {
+  const L = bd.lines; const rows = [5, 4, 3, 2, 1, 0].map((zi) => {
+    const lo = zi === 0 ? null : L[zi - 1], hi = zi === 5 ? null : L[zi]; const here = zi === bd.zone;
+    const rng = lo == null ? '低於 ' + f(hi) : hi == null ? f(lo) + ' 以上' : f(lo) + '～' + f(hi);
+    let dist = '';
+    if (here) dist = `<b>現價 ${f(price)}</b>`;
+    else if (zi > bd.zone) dist = `<span class="up">再漲 ${((lo / price - 1) * 100).toFixed(1)}%</span>`;
+    else dist = `<span class="down">再跌 ${((1 - hi / price) * 100).toFixed(1)}%</span>`;
+    return `<div class="bz-row${here ? ' on' : ''}"><span class="bz-step">${'▮'.repeat(zi + 1)}</span><span class="bz-name">${BZ_N[zi]}</span><span class="num bz-rng">${rng}</span><span class="small bz-dist">${dist}</span></div>`;
+  }).join('');
+  const zt = (bd.z >= 0 ? '+' : '') + bd.z.toFixed(2) + 'σ';
+  return `<h2>${title}<span class="r tag">${bd.name}・${zt}</span></h2>
+    <div class="chart-wrap bz-wrap" id="${id}"><canvas></canvas><div class="chart-tip"></div></div>
+    <div class="bz-ladder">${rows}</div>
+    <div class="small muted" style="margin-top:6px">上圖為近一年每日收盤偏離迴歸趨勢（${f(bd.trend)}）的標準差倍數；灰帶為 ±1σ 常態區，虛線為 ±2σ。只代表相對過去趨勢的位置，非買賣建議。</div>`;
+}
+function drawBandZ(wrap, s, price, bd) {
+  if (!wrap || !s) return; const cv = wrap.querySelector('canvas'); const tip = wrap.querySelector('.chart-tip');
+  const W = wrap.clientWidth, H = 170, dpr = window.devicePixelRatio || 1; cv.width = W * dpr; cv.height = H * dpr; cv.style.height = H + 'px';
+  const g = cv.getContext('2d'); g.scale(dpr, dpr); g.clearRect(0, 0, W, H); g.font = '11px sans-serif'; g.textBaseline = 'middle';
+  const z = s.z.slice(); z[z.length - 1] = bd.z; const n = z.length;
+  const lim = Math.max(2.6, Math.ceil(Math.max(...z.map(Math.abs)) * 2) / 2 + 0.2);
+  const padL = 6, padR = 40, top = 10, mh = H - 30; const x = (i) => padL + i / (n - 1) * (W - padL - padR); const y = (v) => top + (lim - v) / (2 * lim) * mh;
+  const pri = css('--primary') || '#3b82f6', mut = css('--muted') || '#94a3b8', grid = css('--grid') || '#33415555';
+  // ±1σ 常態區（灰帶）、±2σ 虛線、0 軸
+  g.fillStyle = mut + '22'; g.fillRect(padL, y(1), W - padL - padR, y(-1) - y(1));
+  g.strokeStyle = grid; g.lineWidth = 1; g.beginPath(); g.moveTo(padL, y(0)); g.lineTo(W - padR, y(0)); g.stroke();
+  g.setLineDash([4, 4]); g.strokeStyle = mut; [2, -2].forEach((k) => { g.beginPath(); g.moveTo(padL, y(k)); g.lineTo(W - padR, y(k)); g.stroke(); }); g.setLineDash([]);
+  g.fillStyle = mut; [[2, '+2σ'], [1, '+1σ'], [0, '趨勢'], [-1, '−1σ'], [-2, '−2σ']].forEach(([k, t]) => g.fillText(t, W - padR + 4, y(k)));
+  // 偏離線：上方、下方分開填色（不同於色帶樣式）
+  const path = () => { g.beginPath(); z.forEach((v, i) => (i ? g.lineTo(x(i), y(v)) : g.moveTo(x(i), y(v)))); };
+  ['up', 'dn'].forEach((side) => { g.save(); g.beginPath(); if (side === 'up') g.rect(0, 0, W, y(0)); else g.rect(0, y(0), W, H); g.clip();
+    path(); g.lineTo(x(n - 1), y(0)); g.lineTo(x(0), y(0)); g.closePath(); g.fillStyle = (side === 'up' ? '#f59e0b' : '#14b8a6') + '33'; g.fill(); g.restore(); });
+  path(); g.strokeStyle = pri; g.lineWidth = 1.6; g.stroke();
+  // 現在位置
+  const cx = x(n - 1), cy = y(z[n - 1]); g.fillStyle = pri; g.beginPath(); g.arc(cx, cy, 4, 0, Math.PI * 2); g.fill(); g.strokeStyle = css('--card') || '#fff'; g.lineWidth = 2; g.stroke();
+  g.fillStyle = mut; const step = Math.max(1, Math.floor(n / 5)); for (let i = 0; i < n - step / 2; i += step) g.fillText(String(s.d[i]).slice(2, 7), Math.max(0, x(i) - 14), H - 8);
+  const info = (i) => esc(s.d[i]) + '　偏離 <b>' + (z[i] >= 0 ? '+' : '') + z[i].toFixed(2) + 'σ</b>';
+  tip.innerHTML = info(n - 1);
+  const move = (e) => { const r = cv.getBoundingClientRect(); const i = Math.max(0, Math.min(n - 1, Math.round((e.clientX - r.left - padL) / (W - padL - padR) * (n - 1)))); tip.innerHTML = info(i); };
+  cv.onmousemove = move; cv.onclick = move; cv.onmouseleave = () => { tip.innerHTML = info(n - 1); };
 }
 async function idxCloses(sym) { const r = await fetchYahoo(sym, '6mo', '1d', 1800); return r ? ((r.indicators.quote[0].close) || []).filter((v) => v != null) : []; }
 /** 投資分析指數（0–100，與 App InvestAnalysis 同因子與權重） */
