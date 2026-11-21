@@ -286,16 +286,19 @@ let pushTimer = null;
 /** 同步方向（由手機設定，記在雲端資料 dir）：p2w＝手機為主（網頁不上傳）、w2p＝網頁為主、''＝舊版雙向 */
 S.cloudDir = store.get('cdir', '');
 function phoneMaster() { return S.cloudDir === 'p2w'; }
-let warnedRO = false;
+/** 同步方式：預設手動（按「同步」才上傳／下載，不跳提醒）；設定或會員頁可改為自動 */
+function autoSync() { return S.pref.syncAuto === true; }
 function changed() {
-  if (phoneMaster()) {
-    store.set('keys', S.keys);
-    if (!warnedRO) { warnedRO = true; toast('目前同步方向為「手機 → 網頁」，網頁上的修改只存在這個瀏覽器、不會同步；要在網頁編輯，請到手機「會員與授權 › 帳號與同步」改為「網頁 → 手機」。', 9000); }
-    return;
-  }
+  if (phoneMaster()) { store.set('keys', S.keys); return; }
   S.dirty = true; store.set('keys', S.keys); store.set('dirty', true);
-  clearTimeout(pushTimer); pushTimer = setTimeout(() => push(), 1500);
+  if (autoSync()) { clearTimeout(pushTimer); pushTimer = setTimeout(() => push(), 1500); }
   renderSync();
+}
+/** 手動同步：先上傳本機變更（網頁為主時），再下載雲端最新資料 */
+async function syncNow() {
+  if (!S.session || S.syncing) return;
+  try { await push(); const r = await pull(); S.syncMsg = r === 'applied' ? '已下載最新資料' : S.syncMsg; if (r === 'applied' && cur) route(); else renderSync(); }
+  catch (e) { S.syncMsg = '同步失敗：' + e.message; renderSync(); }
 }
 async function push(force = false) {
   if (!S.session || S.syncing) return;
@@ -341,8 +344,8 @@ function kicked() {
   logout('你的帳號已在其他瀏覽器登入，這裡已自動登出');
 }
 function renderSync() {
-  const txt = (phoneMaster() ? '📱 手機為主 · ' : S.cloudDir === 'w2p' ? '💻 網頁為主 · ' : '') + (S.syncing ? '同步中…' : S.dirty ? '待上傳…' : (S.syncMsg || '已同步') + (S.lastSync ? ' · ' + hm(S.lastSync) : ''));
-  $$('.syncst').forEach((el) => { el.textContent = txt; });
+  const txt = (phoneMaster() ? '📱 手機為主 · ' : S.cloudDir === 'w2p' ? '💻 網頁為主 · ' : '') + (S.syncing ? '同步中…' : S.dirty ? '有變更未上傳 · 點此同步' : (S.syncMsg || '已同步') + (S.lastSync ? ' · ' + hm(S.lastSync) : '') + (autoSync() ? '' : ' · 點此同步'));
+  $$('.syncst').forEach((el) => { el.textContent = txt; el.title = '點一下立即同步'; el.style.cursor = 'pointer'; el.onclick = () => syncNow(); });
 }
 
 // ───────── 行情 ─────────
@@ -3161,8 +3164,7 @@ function bindHtml(me) {
   if (me.phone === undefined) return '';
   if (me.phone) return `<div class="small" style="margin-top:8px">📱 已綁定手機 App${me.phoneAt ? '（最後登入 ' + esc(String(me.phoneAt).slice(0, 16)) + '）' : ''}</div>`;
   const dl = location.origin + '/';
-  return `<div class="notice" style="margin-top:8px">📱 尚未綁定手機 App（只用網頁也能使用全部會員功能，不受裝置碼限制）。想在手機使用：<a href="${dl}" target="_blank" rel="noopener">下載 App</a> 後在「設置 › 會員與授權 › 帳號與同步」用同一個 Google 帳號登入，第一次登入時可選擇保留網頁版或手機的資料。
-    <label class="row small" style="margin-top:6px;cursor:pointer;gap:6px"><input type="checkbox" id="bindRem" style="width:auto" ${store.get('bindRemind', true) ? 'checked' : ''}> 每週提醒我綁定手機 App</label></div>`;
+  return `<div class="notice" style="margin-top:8px">📱 尚未綁定手機 App（只用網頁也能使用全部會員功能，不受裝置碼限制）。想在手機使用：<a href="${dl}" target="_blank" rel="noopener">下載 App</a> 後在「設置 › 會員與授權 › 帳號與同步」用同一個 Google 帳號登入，第一次登入時可選擇保留網頁版或手機的資料。</div>`;
 }
 VIEWS.member = {
   title: '會員',
@@ -3189,6 +3191,7 @@ VIEWS.member = {
         <div class="tile" style="margin-top:12px"><div class="row"><div class="sp"><b>手機⇄網頁資料同步</b><div class="small muted"><span class="syncst"></span></div></div>
           <button class="btn sm" id="syn">立即同步</button><button class="btn sm" id="dl">從雲端重新下載</button></div>
           <div class="row" style="gap:8px;margin-top:8px"><span class="tag" style="${phoneMaster() ? 'color:var(--primary);border-color:var(--primary)' : ''}">📱 手機 → 網頁</span><span class="tag" style="${S.cloudDir === 'w2p' ? 'color:var(--primary);border-color:var(--primary)' : ''}">💻 網頁 → 手機</span></div>
+          <label class="row small" style="margin-top:8px;cursor:pointer;gap:6px"><input type="checkbox" id="sAuto" style="width:auto" ${autoSync() ? 'checked' : ''}> 自動同步（關閉時只在按「立即同步」時上傳／下載，不會跳出提醒）</label>
           ${bindHtml(me)}
           <div class="small text2" style="margin-top:6px">${phoneMaster() ? '目前以手機為主：手機的變更會自動出現在這裡；網頁上的修改不會上傳。要在網頁記帳或編輯，請在手機「會員與授權 › 帳號與同步」把同步方向改為「網頁 → 手機」。'
             : S.cloudDir === 'w2p' ? (me.phone === false ? '目前只在網頁使用：資料存放在雲端，換電腦或瀏覽器登入同一帳號即可帶回。' : '目前以網頁為主：在這裡的修改會上傳，手機開啟 App 時自動下載；手機上的修改不會上傳。') : '尚未設定同步方向（舊版雙向同步）；請更新手機 App 後在「會員與授權 › 帳號與同步」選擇方向。'}</div>
@@ -3197,10 +3200,10 @@ VIEWS.member = {
         <tbody>${FEATURES.map(([k, t]) => `<tr><td>${esc(t)}</td>${cols.map(([, , c, mask]) => `<td style="color:${mask & F[k] ? argb(c) : 'var(--border)'};font-weight:700">${mask & F[k] ? '✓' : '—'}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
         <div class="small muted" style="margin-top:6px">自選、持股記帳、個股行情等基本功能各等級皆可使用。</div></div>`;
     $('#pfE').onclick = () => onboarding(false);
-    if ($('#bindRem')) $('#bindRem').onchange = (e) => { store.set('bindRemind', e.target.checked); toast(e.target.checked ? '會每週提醒一次' : '已關閉綁定提醒'); };
+    $('#sAuto').onchange = (e) => { S.pref.syncAuto = e.target.checked; savePref(); toast(e.target.checked ? '已改為自動同步' : '已改為手動同步：按「立即同步」才會上傳／下載'); renderSync(); };
     $('#apBtn').onclick = () => applyModal();
     $('#lo').onclick = async () => { if ((await dialog('登出', '登出後這個瀏覽器的資料會清除（雲端資料保留），重新登入即可恢復。', [['', '取消'], ['ok', '登出', 'primary']])) === 'ok') logout(); };
-    $('#syn').onclick = async () => { await push(); await pull(); this.fill(); };
+    $('#syn').onclick = async () => { await syncNow(); this.fill(); };
     $('#dl').onclick = async () => { if ((await dialog('從雲端重新下載', '以雲端資料取代這個網頁的資料？（尚未上傳的變更會遺失）', [['', '取消'], ['ok', '下載', 'primary']])) !== 'ok') return; S.dirty = false; await pull(true); toast('已下載雲端資料'); route(); };
     renderSync();
   },
@@ -3718,20 +3721,18 @@ async function start(meResp) {
   if (!me.registered) return logout('登入已失效，請重新登入');
   S.me = me; S.code = me.code ? await verifyCode(me.code) : null;
   if (me.phone === false && !S.cloudDir) { S.cloudDir = 'w2p'; store.set('cdir', 'w2p'); }
-  // 只用網頁的會員：每週提醒一次可綁定手機 App（會員頁可關閉）
-  if (me.phone === false && store.get('bindRemind', true) && Date.now() - store.get('bindRemAt', 0) > 7 * 864e5) {
-    store.set('bindRemAt', Date.now()); setTimeout(() => toast('📱 也可以在手機使用：下載 App 後用同一個 Google 帳號登入即可綁定同步（會員頁可關閉此提醒）', 9000), 4000);
-  }
   shell();
   S.keys = store.get('keys', {}); S.dirty = store.get('dirty', false);
-  try { const pr = await pull(); if (pr === 'empty') { S.syncMsg = me.phone ? '雲端還沒有手機資料' : '網頁為主（尚未綁定手機）'; if (me.phone) setTimeout(() => toast('雲端還沒有資料：請在手機 App「會員與授權 › 帳號與同步」開啟「與電腦網頁版同步」。', 10000), 1500); } }
+  // 手動同步：只有這個瀏覽器還沒有資料（第一次登入）才自動下載一次；其餘由使用者按「同步」
+  const firstLoad = !Object.keys(S.keys).length;
+  try { if (autoSync() || firstLoad) { const pr = await pull(); if (pr === 'empty') S.syncMsg = me.phone ? '雲端還沒有手機資料' : '網頁為主（尚未綁定手機）'; } else S.syncMsg = '尚未同步'; }
   catch (e) { S.syncMsg = '同步失敗：' + e.message; }
   loadDir().then(() => cur && cur.fill());
   await route();
   tick();
   S.timers.push(setInterval(() => { if (Date.now() - (S.lastTick || 0) >= (twOpen() ? (S.pref.refresh || 10) : 60) * 1000 - 500) tick(); }, 5000));
   // 每分鐘檢查雲端是否有手機的新變更；每 10 分鐘確認登入狀態
-  S.timers.push(setInterval(async () => { if (document.hidden || S.syncing) return; try { if ((await pull()) === 'applied' && cur) { toast('已同步手機的最新變更'); route(); } } catch (e) {} }, 60000));
+  S.timers.push(setInterval(async () => { if (!autoSync() || document.hidden || S.syncing) return; try { if ((await pull()) === 'applied' && cur) route(); } catch (e) {} }, 60000));
   S.timers.push(setInterval(async () => { try { const m = await api('me', { session: S.session, web: true }); if (m.kicked) logout('你的帳號已在其他瀏覽器登入，這裡已自動登出'); else { S.me = m; S.code = m.code ? await verifyCode(m.code) : null; } } catch (e) {} }, 600000));
 }
 async function boot() {
@@ -3746,5 +3747,5 @@ async function boot() {
   }
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
-window.addEventListener('beforeunload', (e) => { if (S.dirty) { push(); e.preventDefault(); e.returnValue = ''; } });
+window.addEventListener('beforeunload', () => { if (S.dirty && autoSync()) push(); });
 boot();
