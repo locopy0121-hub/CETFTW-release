@@ -68,7 +68,7 @@ async function logout(msg) {
 
 // ───────── 主畫面 ─────────
 /** 網頁版本（發布時由 .github/public/sync.sh 填入） */
-const WEB_VER = /*WEBVER*/{"v":"","sha":"be60ccf","at":"2026-11-22 23:41"};
+const WEB_VER = /*WEBVER*/{"v":"v1.1.390","sha":"5329c1b","at":"2026-11-22 23:41"};
 const verText = () => (WEB_VER ? (WEB_VER.v ? (/^v/i.test(WEB_VER.v) ? WEB_VER.v : 'v' + WEB_VER.v) + ' · ' : '') + WEB_VER.sha + (WEB_VER.at ? ' · ' + WEB_VER.at : '') : '開發版');
 const TABS = [['home', '總覽'], ['req', '申請'], ['trade', '交易'], ['msg', '訊息'], ['mem', '會員'], ['pol', '政策'], ['tier', '會員等級'], ['rel', '發布'], ['line', 'LINE'], ['forum', '討論區'], ['job', '工作紀錄']];
 /** 功能位元（與 App License.Feature 順序相同，不可調整） */
@@ -198,7 +198,6 @@ function render() {
     const ms = d.members || []; const st = (s) => ms.filter((m) => m.status === s).length; const reqs = pendingReqs();
     const rel = (app.builds || []).find((b) => !b.draft); const dr = (app.builds || []).find((b) => b.draft);
     v.innerHTML = `<div class="grid g4" style="gap:10px">${[['會員', ms.length], ['有效', st('有效') + st('即將到期')], ['即將到期', st('即將到期')], ['待處理申請', reqs.length]].map(([k, x]) => `<div class="tile"><div class="k">${k}</div><div class="v num">${x}</div></div>`).join('')}</div>
-      ${d.delReq ? `<div class="notice" style="margin-top:12px;cursor:pointer" data-go="mem">♻️ 有 ${d.delReq} 位會員申請恢復已刪除的帳號，到「會員」頁最下方處理 ›</div>` : ''}
       ${!appOnline() ? `<div class="notice" style="margin-top:12px">📱 管理員 App 目前沒有開著：可以先送出工作，App 開啟後約 10 秒內自動執行。</div>` : ''}
       <div class="grid g2 stack" style="margin-top:12px">
         <div class="card"><h2>版本</h2>${kv([['使用者正式版', rel ? rel.tag + '（' + rel.at.slice(0, 10) + '）' : '—'], ['最新測試版', dr ? dr.tag : '—'], ['管理員 App', app.v ? 'v' + app.v : '—'], ['會員伺服器', '第 ' + d.version + ' 版']])}
@@ -224,8 +223,7 @@ function render() {
       <div class="scroll-x"><table class="tbl"><thead><tr><th>代號</th><th>名稱</th><th>等級</th><th>狀態</th><th>到期</th><th>聯絡／Email</th><th>裝置</th><th>最後上線</th></tr></thead><tbody>
       ${ms.map((m) => `<tr class="click" data-no="${esc(m.no)}"><td><b>${esc(m.no)}</b></td><td>${esc(m.name)}</td><td>${esc(m.tier || '—')}</td><td style="color:${/有效/.test(m.status) ? '#22c55e' : /停用|到期/.test(m.status) ? '#ef4444' : 'inherit'}">${esc(m.status || '—')}</td><td class="small">${esc(m.expiry || '—')}</td>
         <td class="small">${esc(m.contact || '')}${m.email ? '<br>' + esc(m.email) : ''}</td><td class="small">${m.device ? esc(m.device) : '💻 網頁'}${m.google ? ' · G' : ''}</td><td class="small">${esc(String(m.seen || '').slice(0, 16))}</td></tr>`).join('')}</tbody></table></div>
-      <div class="small muted" style="margin-top:6px">共 ${ms.length} 位 · 點一列查看與管理</div></div>${d.d1 ? '<div class="card" id="delBox" style="margin-top:12px"></div>' : ''}`;
-    if (d.d1) delBox($('#delBox', v));
+      <div class="small muted" style="margin-top:6px">共 ${ms.length} 位 · 點一列查看與管理</div></div>`;
     const mq = $('#mq'); mq.oninput = () => { S.q = mq.value; const pos = mq.selectionStart; render(); const n = $('#mq'); n.focus(); n.setSelectionRange(pos, pos); };
     $('#newm').onclick = () => issueDialog({});
     $('#msync').onclick = () => job('sync', {}, '已送出同步');
@@ -1005,35 +1003,4 @@ async function renderMsg(v) {
     try { const r2 = await call('msgMember', { no: $('#gNo', x.box).value.trim().toUpperCase(), channel: $('#gC', x.box).value, subject: $('#gS', x.box).value.trim(), text: $('#gT', x.box).value.trim() });
       if (!r2.ok) throw new Error(r2.err); toast(sentText(r2.sent), 6000); renderMsg(v); } catch (e) { toast('發送失敗：' + e.message, 6000); }
   };
-}
-
-// ───────── 刪除中帳號：保留期、恢復申請、立即刪除 ─────────
-async function delBox(el, force) {
-  const draw = (r) => {
-    if (!el.isConnected) return;
-    const fmt = (t) => { if (!t) return ''; const d = new Date(t + 8 * 3600000).toISOString(); return d.slice(0, 10).replace(/-/g, '/') + ' ' + d.slice(11, 16); };
-    el.innerHTML = `<h2>刪除中帳號（${r.list.length}）<span class="r"><span class="small muted">保留</span> <input id="dDays" type="number" min="0" max="90" value="${r.days}" style="width:64px;padding:4px 6px"> <span class="small muted">天</span> <button class="btn sm" id="dSave">儲存</button></span></h2>
-      <div class="small muted" style="margin-bottom:8px">會員自行刪除帳號後先保留 ${r.days} 天（0＝立即刪除）：期間無法登入、停止到價提醒；會員可用同一個 Google 帳號登入申請恢復，期滿自動永久刪除。</div>
-      ${r.list.length ? `<div class="scroll-x"><table class="tbl"><thead><tr><th>代號</th><th>名稱</th><th>等級／到期</th><th>申請刪除</th><th>永久刪除</th><th>恢復申請</th><th></th></tr></thead><tbody>
-        ${r.list.map((x) => `<tr><td><b>${esc(x.no)}</b></td><td>${esc(x.name)}</td><td class="small">${esc(x.tier || '—')}${x.expiry ? '<br>' + esc(x.expiry) : ''}</td><td class="small">${fmt(x.delAt)}<br><span class="muted">${esc(x.src)}</span></td>
-          <td class="small">${fmt(x.purgeAt).slice(0, 10)}<br><span class="${x.left <= 3 ? 'up' : 'muted'}">剩 ${x.left} 天</span></td>
-          <td class="small">${x.restoreAt ? `<span class="badge" style="color:#f59e0b;border-color:#f59e0b">待處理</span> ${fmt(x.restoreAt)}${x.restoreNote ? '<div class="text2">' + esc(x.restoreNote) + '</div>' : ''}` : '<span class="muted">—</span>'}</td>
-          <td style="white-space:nowrap"><button class="btn sm primary" data-drs="${esc(x.no)}">恢復</button> <button class="btn sm danger" data-dpg="${esc(x.no)}">立即刪除</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="small muted">目前沒有刪除中的帳號。</div>'}`;
-    $('#dSave', el).onclick = async () => { const n = +$('#dDays', el).value; const x = await call('delAdmin', { act: 'cfg', days: n }); toast(x.ok ? '✓ 保留天數已改為 ' + x.days + ' 天' : '失敗：' + x.err); delBox(el, true); };
-    $$('[data-drs]', el).forEach((b) => b.onclick = async () => {
-      const no = b.dataset.drs; const y = await dialog('恢復帳號 ' + no, '<div class="small">恢復後會員用原本的 Google 帳號重新登入即可，會員期限、同步資料與到價提醒都還在。</div><label class="row small" style="gap:6px;margin-top:8px;cursor:pointer"><input type="checkbox" id="dN" style="width:auto" checked> 以 LINE／Email 通知會員</label>',
-        [['', '取消'], ['ok', '恢復', 'primary']]);
-      if (y.v !== 'ok') return; const x = await call('delAdmin', { act: 'restore', no, notify: $('#dN', y.box).checked });
-      toast(x.ok ? '✓ 已恢復 ' + no + (x.sent ? '，' + sentText(x.sent) : '') : '失敗：' + x.err, 6000); delBox(el, true);
-    });
-    $$('[data-dpg]', el).forEach((b) => b.onclick = async () => {
-      const no = b.dataset.dpg; const y = await dialog('立即永久刪除 ' + no, '<div class="small">立即清除此會員的個資、同步資料、LINE 綁定與到價提醒，無法復原。</div><div class="field" style="margin-top:8px"><label>輸入會員代號確認</label><input id="dC"></div><div id="derr" class="small up"></div>',
-        [['', '取消'], ['ok', '永久刪除', 'danger']], (bg) => () => ($('#dC', bg).value.trim().toUpperCase() !== no ? '請輸入 ' + no : null));
-      if (y.v !== 'ok') return; const x = await call('delAdmin', { act: 'purge', no }); toast(x.ok ? '✓ 已永久刪除 ' + no : '失敗：' + x.err); delBox(el, true);
-    });
-  };
-  if (S.delL) draw(S.delL); else el.innerHTML = '<h2>刪除中帳號</h2><div class="small muted">讀取中…</div>';
-  if (!force && S.delAt && Date.now() - S.delAt < 30000) return;
-  try { const r = await call('delAdmin', { act: 'list' }); if (!r.ok) throw new Error(r.err); S.delL = r; S.delAt = Date.now(); draw(r); }
-  catch (e) { if (!S.delL) el.innerHTML = `<h2>刪除中帳號</h2><div class="small muted">讀取失敗：${esc(e.message)}${/未知|不支援/.test(e.message) ? '（請在管理員 App 重新部署轉送站）' : ''}</div>`; }
 }
