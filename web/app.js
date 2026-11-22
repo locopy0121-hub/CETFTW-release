@@ -307,6 +307,38 @@ function portfolio() {
 }
 
 // ───────── 同步 ─────────
+// 端對端加密：同步密碼以瀏覽器不可匯出的金鑰加密存在本機（與 AI 金鑰相同），上傳前以匯出檔格式（kind＝sync）加密
+S.e2ee = !!store.get('e2ee', false); S.sealed = !!store.get('sealed', false);
+async function e2eePass() { const e = store.get('e2k', ''); if (!e) return '';
+  try { const [iv, ct] = e.split('.').map(b64bytes); return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, await aiCk(), ct)); } catch (x) { return ''; } }
+async function e2eeSet(pass) {
+  if (!pass) { store.set('e2k', ''); S.e2ee = false; S.sealed = false; store.set('e2ee', false); store.set('sealed', false); return; }
+  const iv = crypto.getRandomValues(new Uint8Array(12)); const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await aiCk(), new TextEncoder().encode(pass));
+  store.set('e2k', b64of(iv) + '.' + b64of(new Uint8Array(ct))); S.e2ee = true; store.set('e2ee', true);
+}
+async function sealSync(json) { const p = await e2eePass(); if (!p) { if (S.sealed) throw new Error('雲端資料已端對端加密：請先在「會員」頁輸入同步密碼，才能上傳'); return json; } return expEncrypt(json, p, 'sync'); }
+async function openSync(data) {
+  if (!expIsEnc(data)) { S.sealed = false; store.set('sealed', false); return data; }
+  S.sealed = true; store.set('sealed', true); const p = await e2eePass();
+  if (!p) throw new Error('雲端資料已端對端加密：請在「會員」頁輸入同步密碼');
+  const t = await expDecrypt(data, p); if (t == null) throw new Error('同步密碼不正確，無法解密雲端資料'); return t;
+}
+async function e2eeModal() {
+  let pass = '';
+  const v = await dialog('端對端加密同步', `<div class="text2 small">設定「同步密碼」後，同步資料會先在這個瀏覽器以 AES-256 加密再上傳；每台手機、每個瀏覽器都要輸入同一組密碼才能同步。</div>
+    <div class="notice err small" style="margin:8px 0">忘記同步密碼將無法讀取雲端資料（各裝置本機資料不受影響，可關閉加密後重新上傳）。</div>
+    <div class="field"><label>同步密碼（至少 8 個字）</label><input id="e2a" type="password" autocomplete="new-password"></div><div class="field"><label>再輸入一次</label><input id="e2b" type="password" autocomplete="new-password"></div><div id="merr" class="small up"></div>`,
+    S.e2ee ? [['off', '關閉加密', 'danger'], ['', '取消'], ['ok', '儲存並同步', 'primary']] : [['', '取消'], ['ok', '儲存並同步', 'primary']], (root) => () => {
+      const a = $('#e2a', root).value, b = $('#e2b', root).value; if (a.length < 8) return '同步密碼至少 8 個字'; if (a !== b) return '兩次輸入不一致'; pass = a; return null; });
+  if (v === 'off') { await e2eeSet(''); if (!phoneMaster()) { S.dirty = true; store.set('dirty', true); } toast('已關閉端對端加密（其他裝置也請關閉）'); route(); return; }
+  if (v !== 'ok' || !pass) return;
+  // 雲端已是密文：先確認密碼解得開（避免用錯誤密碼加密後覆蓋雲端）；要更換密碼請先關閉加密再重新設定
+  try { const r = await api('dataGet', { session: S.session }); if (r && r.data && expIsEnc(r.data) && (await expDecrypt(r.data, pass)) == null) {
+    await dialog('同步密碼不正確', '<div class="text2">這組密碼無法解開雲端資料，請輸入其他裝置設定的同步密碼。<br>若要更換同步密碼，請先在主要裝置「關閉加密」再重新設定。</div>', [['', '知道了', 'primary']]); return; } }
+  catch (e) { toast('無法確認雲端資料：' + e.message); return; }
+  await e2eeSet(pass); if (!phoneMaster()) { S.dirty = true; store.set('dirty', true); }
+  await syncNow(); toast(phoneMaster() ? '已儲存同步密碼（手機為主：請在手機也開啟端對端加密）' : '已開啟端對端加密並上傳'); route();
+}
 function snapshot() { return JSON.stringify({ app: 'ClaudeETF', format: 1, ...(S.cloudDir ? { dir: S.cloudDir } : {}), keys: S.keys }); }
 /** 交易變更後，連帶更新持股與現金（與 App 一致） */
 function recalc() {
@@ -337,7 +369,7 @@ async function push(force = false) {
   if (phoneMaster()) { S.dirty = false; store.set('dirty', false); return; }
   S.syncing = true; renderSync();
   try {
-    const r = await api('dataPut', { session: S.session, baseRev: S.rev, data: snapshot(), src: '網頁', force });
+    const r = await api('dataPut', { session: S.session, baseRev: S.rev, data: await sealSync(snapshot()), src: '網頁', force });
     if (r.kicked) return kicked();
     if (r.conflict) { S.syncing = false; return conflict(); }
     S.rev = r.rev; S.dirty = false; store.set('rev', S.rev); store.set('dirty', false); S.syncMsg = '已上傳'; S.lastSync = Date.now();
@@ -356,7 +388,8 @@ async function pull(force = false) {
     if (Object.keys(S.keys).length) { S.dirty = true; store.set('dirty', true); push(); }
     return 'empty';
   }
-  const o = JSON.parse(r.data);
+  let txt; try { txt = await openSync(r.data); } catch (e) { S.syncMsg = e.message; renderSync(); if (S.route === 'member') route(); return 'locked'; }
+  const o = JSON.parse(txt);
   // 沒有方向（舊資料）且尚未綁定手機：視為網頁為主
   const dir = o.dir || (S.me && S.me.phone === false ? 'w2p' : '');
   if (dir !== S.cloudDir) { S.cloudDir = dir; store.set('cdir', S.cloudDir); }
@@ -846,7 +879,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"102a0a8","at":"2026-11-22 21:31"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"77641e3","at":"2026-11-22 21:44"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -4410,12 +4443,14 @@ VIEWS.member = {
           ${bindHtml(me)}
           <div class="small text2" style="margin-top:6px">${phoneMaster() ? '目前以手機為主：手機的變更會自動出現在這裡；網頁上的修改不會上傳。要在網頁記帳或編輯，請在手機「會員與授權 › 帳號與同步」把同步方向改為「網頁 → 手機」。'
             : S.cloudDir === 'w2p' ? (me.phone === false ? '目前只在網頁使用：資料存放在雲端，換電腦或瀏覽器登入同一帳號即可帶回。' : '目前以網頁為主：在這裡的修改會上傳，手機開啟 App 時自動下載；手機上的修改不會上傳。') : '尚未設定同步方向（舊版雙向同步）；請更新手機 App 後在「會員與授權 › 帳號與同步」選擇方向。'}</div>
-          <div class="small muted" style="margin-top:6px">自選、群組、交易、持股、帳戶與提醒；資料存放在管理員的會員伺服器。同一帳號網頁同時只能在一個瀏覽器登入。手機需用同一個 Google 帳號登入才會同步。</div></div></div></div>
+          <div class="row" style="margin-top:10px;gap:8px;align-items:center"><div class="sp small"><b>🔒 端對端加密${S.e2ee ? '（已開啟）' : ''}</b><div class="${!S.e2ee && S.sealed ? 'up' : 'muted'}">${S.e2ee ? '同步資料在瀏覽器以同步密碼加密後才上傳，伺服器與管理員都無法讀取。' : S.sealed ? '雲端資料已加密：請輸入手機設定的同步密碼。' : '開啟後同步資料先在瀏覽器加密再上傳，只有知道同步密碼的裝置能讀取。'}</div></div><button class="btn sm" id="e2e">${S.e2ee ? '變更' : '設定'}</button></div>
+          <div class="small muted" style="margin-top:6px">自選、群組、交易、持股、帳戶與提醒；資料存放在管理員的會員伺服器${S.e2ee ? '（端對端加密）' : ''}。同一帳號網頁同時只能在一個瀏覽器登入。手機需用同一個 Google 帳號登入才會同步。</div></div></div></div>
       <div class="card" style="margin-top:12px"><h2>會員等級方案</h2><div class="scroll-x"><table class="tbl cmp"><thead><tr><th>功能</th>${cols.map(([n, s, c, , cur]) => `<th style="${cur ? 'background:' + argb(c) + '22' : ''}"><span class="badge" style="color:${argb(c)};border-color:${argb(c)}">${esc(n)}</span><div class="small muted">${esc(s)}${cur ? '・目前' : ''}</div></th>`).join('')}</tr></thead>
         <tbody>${FEATURES.map(([k, t]) => `<tr><td>${esc(t)}</td>${cols.map(([, , c, mask]) => `<td style="color:${mask & F[k] ? argb(c) : 'var(--border)'};font-weight:700">${mask & F[k] ? '✓' : '—'}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
         <div class="small muted" style="margin-top:6px">自選、持股記帳、個股行情等基本功能各等級皆可使用。</div></div>`;
     $('#pfE').onclick = () => onboarding(false);
     if (lineOaId()) { $('#pfE').closest('.card').insertAdjacentHTML('beforeend', '<div id="lineBind"></div>'); lineBindFill(); }
+    $('#e2e').onclick = () => e2eeModal();
     $('#sAuto').onchange = (e) => { S.pref.syncAuto = e.target.checked; savePref(); toast(e.target.checked ? '已改為自動同步' : '已改為手動同步：按「立即同步」才會上傳／下載'); renderSync(); };
     $('#apBtn').onclick = () => applyModal();
     $('#lo').onclick = async () => { if ((await dialog('登出', '登出後這個瀏覽器的資料會清除（雲端資料保留），重新登入即可恢復。', [['', '取消'], ['ok', '登出', 'primary']])) === 'ok') logout(); };
