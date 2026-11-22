@@ -814,7 +814,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"v1.1.360","sha":"06d6fd6","at":"2026-11-22 13:36"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"795a5da","at":"2026-11-22 13:57"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -3003,6 +3003,135 @@ function etfOpsHtml(o) {
       : '<div class="small muted">與前一個資料日相比，持股沒有變動。</div>'}
     <div class="small muted" style="margin-top:6px">依每日揭露的持股（股數）比較；估算金額＝股數變化 × 目前股價，僅供參考，實際以投信公告為準。</div></div>`;
 }
+// ───────── FinMind（台股月營收、季損益、本益比區間、法人 60 日、融資融券、外資持股、股利政策）：經發佈站 /api/fm 共用快取 ─────────
+const FMC = {};
+const etfLike = (sym) => D.isEtf(sym) || (!isUs(sym) && /^00/.test(sym)) || (S.q[sym] || {}).type === 'ETF';
+async function fmGet(ds, sym, span) {
+  const k = ds + sym + span; if (FMC[k] && Date.now() - FMC[k].at < 1800000) return FMC[k].v;
+  const tk = aiHas('finmind') ? await aiKeyGet('finmind') : '';
+  const r = await fetch('/api/fm?ds=' + ds + '&id=' + encodeURIComponent(sym) + '&span=' + span, tk ? { headers: { 'x-fm-token': tk } } : {});
+  if (!/json/.test(r.headers.get('content-type') || '')) throw new Error('NEEDDEPLOY');
+  const j = await r.json(); if (j.err) throw new Error(j.err);
+  FMC[k] = { at: Date.now(), v: j.data || [] }; return FMC[k].v;
+}
+const fmYi = (v) => fmt(v / 1e8, Math.abs(v) >= 1e10 ? 0 : 2);
+const fmFoot = (x) => `<div class="small muted" style="margin-top:6px">資料來源：FinMind${x || ''}</div>`;
+const fmErr = (t, e) => `<div class="card"><h2>${t}</h2>${sapiErr(e)}</div>`;
+function fmBars(vals, colorOf, h = 70) {
+  const mx = Math.max(1e-9, ...vals.map((v) => Math.abs(v))); const neg = vals.some((v) => v < 0);
+  return `<div style="display:flex;align-items:${neg ? 'center' : 'flex-end'};gap:2px;height:${h}px;margin:6px 0">${vals.map((v, i) => { const hh = Math.max(1, Math.abs(v) / mx * (neg ? h / 2 : h));
+    return `<div style="flex:1;height:${neg ? h : hh}px;display:flex;flex-direction:column;justify-content:${neg ? (v >= 0 ? 'flex-start' : 'flex-end') : 'flex-end'}">${neg ? `<div style="height:${h / 2}px;display:flex;align-items:${v >= 0 ? 'flex-end' : 'flex-start'}"><div style="width:100%;height:${hh}px;background:${colorOf(v, i)};border-radius:2px;opacity:.85"></div></div>` : `<div style="width:100%;height:${hh}px;background:${colorOf(v, i)};border-radius:2px;opacity:.85"></div>`}</div>`; }).join('')}</div>`;
+}
+const fmUpDn = (v) => css(v > 0 ? '--up' : v < 0 ? '--down' : '--muted');
+/** 月營收：(年,月,營收) → 月增、年增、累計年增，新到舊 */
+function fmMonthRev(rows) {
+  const m = new Map(); rows.forEach((o) => { let y = +o.revenue_year, mo = +o.revenue_month; if (!(y > 0 && mo >= 1 && mo <= 12)) { const d = new Date(o.date); d.setMonth(d.getMonth() - 1); y = d.getFullYear(); mo = d.getMonth() + 1; } if (o.revenue != null) m.set(y * 100 + mo, +o.revenue); });
+  const ks = Array.from(m.keys()).sort((a, b) => a - b);
+  return ks.map((k) => { const y = Math.floor(k / 100), mo = k % 100, rev = m.get(k); const pv = m.get(mo === 1 ? (y - 1) * 100 + 12 : k - 1), ly = m.get(k - 100);
+    let ytd = 0, lyt = 0, full = true; for (let i = 1; i <= mo; i++) { const a = m.get(y * 100 + i), b = m.get((y - 1) * 100 + i); if (a != null) ytd += a; else full = false; if (b != null) lyt += b; else full = false; }
+    return { y, mo, rev, mom: pv > 0 ? (rev / pv - 1) * 100 : null, yoy: ly > 0 ? (rev / ly - 1) * 100 : null, ytd, ytdYoy: full && lyt > 0 ? (ytd / lyt - 1) * 100 : null }; }).reverse();
+}
+function fmQuarters(rows) {
+  const by = {}; rows.forEach((o) => { (by[o.date] = by[o.date] || {})[o.type] = +o.value; });
+  const pick = (m, ...ks) => { for (const k of ks) if (m[k] != null && !isNaN(m[k])) return m[k]; return null; };
+  return Object.keys(by).sort().reverse().map((d) => { const m = by[d]; const rev = pick(m, 'Revenue', 'OperatingRevenue'), gp = pick(m, 'GrossProfit'), op = pick(m, 'OperatingIncome'), ni = pick(m, 'EquityAttributableToOwnersOfParent', 'IncomeAfterTaxes', 'NetIncome');
+    const dt = new Date(d); return { label: dt.getFullYear() + 'Q' + (Math.floor(dt.getMonth() / 3) + 1), rev, eps: pick(m, 'EPS'), gm: rev && gp != null ? gp / rev * 100 : null, om: rev && op != null ? op / rev * 100 : null, nm: rev && ni != null ? ni / rev * 100 : null }; })
+    .filter((q) => q.rev != null || q.eps != null);
+}
+function fmBand(vals) {
+  const v = vals.filter((x) => x > 0 && isFinite(x)); if (v.length < 20) return null; const s = v.slice().sort((a, b) => a - b); const q = (p) => s[Math.floor((s.length - 1) * p)];
+  return { min: s[0], p25: q(0.25), med: q(0.5), p75: q(0.75), max: s[s.length - 1], cur: v[0], pct: s.filter((x) => x < v[0]).length * 100 / s.length };
+}
+function fmBandHtml(name, b, price, d = 1) {
+  const span = b.max - b.min || 1; const x = (v) => ((v - b.min) / span * 100).toFixed(1); const px = (v) => price > 0 ? fmt(price * v / b.cur, price >= 100 ? 0 : 1) : '—';
+  const col = b.pct <= 25 ? 'down' : b.pct >= 75 ? 'up' : '';
+  return `<div style="margin:10px 0 4px"><div class="row between"><b>${name}</b><span class="num small ${col}">目前 ${fmt(b.cur, d)}　位於 ${b.pct.toFixed(0)}%</span></div>
+    <div style="position:relative;height:14px;margin:8px 0"><div style="position:absolute;left:0;right:0;top:5px;height:4px;background:var(--card2);border-radius:2px"></div>
+      <div style="position:absolute;left:${x(b.p25)}%;width:${(x(b.p75) - x(b.p25)).toFixed(1)}%;top:0;height:14px;background:var(--primary);opacity:.22;border-radius:3px"></div>
+      <div style="position:absolute;left:${x(b.med)}%;top:0;height:14px;width:2px;background:var(--muted)"></div>
+      <div style="position:absolute;left:${x(b.cur)}%;top:1px;width:12px;height:12px;margin-left:-6px;border-radius:50%;background:var(--primary)"></div></div>
+    <div class="scroll-x"><table class="tbl"><thead><tr><th></th><th>低</th><th>25%</th><th>中位</th><th>75%</th><th>高</th></tr></thead><tbody>
+      <tr><td class="muted">比值</td>${[b.min, b.p25, b.med, b.p75, b.max].map((v) => `<td class="num">${fmt(v, d)}</td>`).join('')}</tr>
+      ${price > 0 ? `<tr><td class="muted">對應股價</td>${[b.min, b.p25, b.med, b.p75, b.max].map((v, i) => `<td class="num ${i < 2 ? 'down' : i > 2 ? 'up' : ''}">${px(v)}</td>`).join('')}</tr>` : ''}</tbody></table></div></div>`;
+}
+async function fmFinCards(el, sym, isCur) {
+  const price = (S.q[sym] || {}).price || 0;
+  const [rv, inc, val] = await Promise.allSettled([fmGet('TaiwanStockMonthRevenue', sym, 1500), fmGet('TaiwanStockFinancialStatements', sym, 1280), fmGet('TaiwanStockPER', sym, 1830)]);
+  if (!isCur()) return;
+  let h = '';
+  if (rv.status === 'rejected') h += fmErr('月營收', rv.reason);
+  else { const l = fmMonthRev(rv.value); if (l.length) { const m0 = l[0]; const last24 = l.slice(0, 24).reverse();
+    const s0 = Math.sign(m0.yoy || 0); let streak = 0; if (s0) for (const x of l) { if (Math.sign(x.yoy || 0) === s0) streak++; else break; }
+    h += `<div class="card"><h2>月營收<span class="r small muted">${m0.y}/${m0.mo}</span></h2>
+      <div class="grid g3"><div class="tile"><div class="k">單月營收（億）</div><div class="v num">${fmYi(m0.rev)}</div></div><div class="tile"><div class="k">月增</div><div class="v num ${cls(m0.mom)}">${fmtPct(m0.mom, 1)}</div></div><div class="tile"><div class="k">年增</div><div class="v num ${cls(m0.yoy)}">${fmtPct(m0.yoy, 1)}</div></div></div>
+      ${kvRows([['今年累計（億）', fmYi(m0.ytd)], ['累計年增', fmtPct(m0.ytdYoy, 1)], ['連續', streak >= 2 ? (s0 > 0 ? `年增 ${streak} 個月` : `年減 ${streak} 個月`) : null]])}
+      <div class="small muted" style="margin-top:8px">近 ${last24.length} 個月營收（顏色＝年增／年減）</div>${fmBars(last24.map((x) => x.rev), (v, i) => fmUpDn(last24[i].yoy || 0))}
+      <div class="scroll-x" style="max-height:260px;overflow:auto"><table class="tbl"><thead><tr><th>年月</th><th>營收（億）</th><th>月增</th><th>年增</th><th>累計年增</th></tr></thead><tbody>
+        ${l.slice(0, 24).map((x) => `<tr><td class="num">${x.y}/${x.mo}</td><td class="num">${fmYi(x.rev)}</td><td class="num ${cls(x.mom)}">${fmtPct(x.mom, 1)}</td><td class="num ${cls(x.yoy)}">${fmtPct(x.yoy, 1)}</td><td class="num ${cls(x.ytdYoy)}">${fmtPct(x.ytdYoy, 1)}</td></tr>`).join('')}</tbody></table></div>${fmFoot('（每月 10 日前公布上月營收）')}</div>`; } }
+  if (inc.status === 'rejected') h += fmErr('季度損益', inc.reason);
+  else { const qs = fmQuarters(inc.value); if (qs.length) { const e4 = qs.slice(0, 4).map((q) => q.eps).filter((x) => x != null); const p4 = qs.slice(4, 8).map((q) => q.eps).filter((x) => x != null);
+    const ttm = e4.length === 4 ? e4.reduce((a, b) => a + b, 0) : null, pttm = p4.length === 4 ? p4.reduce((a, b) => a + b, 0) : null; const last = qs.slice(0, 12).reverse();
+    h += `<div class="card"><h2>季度損益<span class="r small muted">營收單位：億</span></h2>
+      ${kvRows([['近四季 EPS', ttm != null ? fmt(ttm, 2) : null], ['前四季 EPS', pttm != null ? fmt(pttm, 2) : null], ['本益比（現價／近四季）', ttm > 0 && price ? fmt(price / ttm, 1) : null], ['最近一季毛利率', qs[0].gm != null ? qs[0].gm.toFixed(1) + '%' : null]])}
+      <div class="small muted" style="margin-top:8px">EPS 趨勢（近 ${last.length} 季）</div>${fmBars(last.map((q) => q.eps || 0), (v) => fmUpDn(v))}
+      <div class="chart-wrap" id="fmMg" style="margin-top:6px"><canvas></canvas><div class="chart-tip"></div></div>
+      <div class="scroll-x"><table class="tbl"><thead><tr><th>季度</th><th>營收</th><th>毛利率</th><th>營益率</th><th>淨利率</th><th>EPS</th></tr></thead><tbody>
+        ${qs.slice(0, 12).map((q) => `<tr><td class="num">${q.label}</td><td class="num">${q.rev != null ? fmYi(q.rev) : '—'}</td><td class="num">${q.gm != null ? q.gm.toFixed(1) + '%' : '—'}</td><td class="num">${q.om != null ? q.om.toFixed(1) + '%' : '—'}</td><td class="num">${q.nm != null ? q.nm.toFixed(1) + '%' : '—'}</td><td class="num ${cls(q.eps)}">${q.eps != null ? fmt(q.eps, 2) : '—'}</td></tr>`).join('')}</tbody></table></div>${fmFoot('（財報為單季數字）')}</div>`;
+    el._fmMg = last; } }
+  if (val.status === 'rejected') h += fmErr('本益比・淨值比區間', val.reason);
+  else { const vs = val.value.slice().sort((a, b) => (a.date < b.date ? 1 : -1)); const per = fmBand(vs.map((x) => +x.PER)), pbr = fmBand(vs.map((x) => +x.PBR)), yl = fmBand(vs.map((x) => +x.dividend_yield));
+    if (vs.length >= 20) h += `<div class="card"><h2>本益比・淨值比區間<span class="r small muted">近 5 年 · ${esc(vs[0].date)}</span></h2>
+      ${per ? fmBandHtml('本益比 PER', per, price) : '<div class="small muted">本益比：近期虧損或資料不足，無法計算區間</div>'}${pbr ? fmBandHtml('股價淨值比 PBR', pbr, price, 2) : ''}
+      ${yl ? kvRows([['殖利率（目前）', fmt(yl.cur, 2) + '%'], ['殖利率（5 年中位）', fmt(yl.med, 2) + '%'], ['殖利率（5 年高）', fmt(yl.max, 2) + '%']]) : ''}
+      <div class="small muted" style="margin-top:6px">「對應股價」＝現價依比值等比例換算（假設每股盈餘、淨值不變），只是區間參考。百分位越低代表相對過去 5 年越便宜。</div>${fmFoot()}</div>`; }
+  el.innerHTML = h;
+  if (rv.status === 'fulfilled' && rv.value.length && $('#oldRev')) $('#oldRev').remove();
+  if (el._fmMg && $('#fmMg')) { const l = el._fmMg; drawSeries($('#fmMg'), l.map((q) => q.label), [{ v: l.map((q) => q.gm), color: css('--primary'), name: '毛利率' }, { v: l.map((q) => q.om), color: '#f59e0b', name: '營益率' }, { v: l.map((q) => q.nm), color: '#a855f7', name: '淨利率' }], { h: 170, fmt: (x) => x.toFixed(0) + '%', key: 'fmmg' + sym }); }
+}
+async function fmChipCards(el, sym, isCur) {
+  const [ins, mg, fh] = await Promise.allSettled([fmGet('TaiwanStockInstitutionalInvestorsBuySell', sym, 110), fmGet('TaiwanStockMarginPurchaseShortSale', sym, 110), fmGet('TaiwanStockShareholding', sym, 200)]);
+  if (!isCur()) return;
+  let h = ''; const draws = [];
+  if (ins.status === 'rejected') h += fmErr('法人 60 日動向', ins.reason);
+  else { const by = {}; ins.value.forEach((o) => { const a = by[o.date] = by[o.date] || [0, 0, 0]; const n = (+o.buy || 0) - (+o.sell || 0); if (/^Foreign/.test(o.name)) a[0] += n; else if (/^Investment_Trust/.test(o.name)) a[1] += n; else if (/^Dealer/.test(o.name)) a[2] += n; });
+    const days = Object.keys(by).sort().reverse().slice(0, 60).map((d) => ({ d, f: by[d][0], t: by[d][1], dl: by[d][2] }));
+    if (days.length > 1) { const L = (v) => Math.round(v / 1000); const sum = (n, k) => days.slice(0, n).reduce((a, x) => a + (k ? x[k] : x.f + x.t + x.dl), 0);
+      const chron = days.slice().reverse(); const cum = (k) => { let s = 0; return chron.map((x) => (s += x[k] / 1000)); };
+      h += `<div class="card" style="grid-column:1/-1"><h2>法人近 ${days.length} 日動向（張）<span class="r small muted">FinMind · ${esc(days[0].d)}</span></h2>
+        <div class="scroll-x"><table class="tbl"><thead><tr><th>累計</th><th>5 日</th><th>20 日</th><th>${days.length} 日</th></tr></thead><tbody>
+          ${[['外資', 'f'], ['投信', 't'], ['自營商', 'dl'], ['合計', '']].map(([n, k]) => `<tr><td>${n}</td>${[5, 20, days.length].map((x) => { const v = L(sum(x, k)); return `<td class="num ${cls(v)}">${fmtSigned(v)}</td>`; }).join('')}</tr>`).join('')}</tbody></table></div>
+        <div class="chart-wrap" id="fmIn" style="margin-top:8px"><canvas></canvas><div class="chart-tip"></div></div><div class="small muted">累計買賣超走勢：藍＝外資、橘＝投信、灰＝自營商</div></div>`;
+      draws.push(() => drawSeries($('#fmIn'), chron.map((x) => x.d.slice(5)), [{ v: cum('f'), color: css('--primary'), name: '外資' }, { v: cum('t'), color: '#f59e0b', name: '投信' }, { v: cum('dl'), color: css('--muted'), name: '自營商' }], { h: 190, zero: true, key: 'fmin' + sym })); } }
+  if (mg.status === 'rejected') h += fmErr('融資融券', mg.reason);
+  else { const ms = mg.value.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 60);
+    if (ms.length) { const m0 = ms[0]; const mb = +m0.MarginPurchaseTodayBalance || 0, sb = +m0.ShortSaleTodayBalance || 0; const chg = (n) => ms[n] ? mb - (+ms[n].MarginPurchaseTodayBalance || 0) : null; const chron = ms.slice().reverse();
+      h += `<div class="card"><h2>融資融券（張）<span class="r small muted">${esc(m0.date)}</span></h2>
+        <div class="grid g3"><div class="tile"><div class="k">融資餘額</div><div class="v num">${fmtInt(mb)}</div><div class="s ${cls(mb - (+m0.MarginPurchaseYesterdayBalance || mb))}">${fmtSigned(mb - (+m0.MarginPurchaseYesterdayBalance || mb))}</div></div>
+          <div class="tile"><div class="k">融券餘額</div><div class="v num">${fmtInt(sb)}</div><div class="s ${cls(sb - (+m0.ShortSaleYesterdayBalance || sb))}">${fmtSigned(sb - (+m0.ShortSaleYesterdayBalance || sb))}</div></div>
+          <div class="tile"><div class="k">券資比</div><div class="v num">${mb ? (sb / mb * 100).toFixed(2) + '%' : '—'}</div></div></div>
+        ${kvRows([['融資 5 日增減', chg(5) != null ? fmtSigned(chg(5)) + ' 張' : null], ['融資 20 日增減', chg(20) != null ? fmtSigned(chg(20)) + ' 張' : null]])}
+        <div class="chart-wrap" id="fmMgn" style="margin-top:8px"><canvas></canvas><div class="chart-tip"></div></div><div class="small muted">融資餘額走勢。股價上漲而融資減少，籌碼相對安定。</div>${fmFoot()}</div>`;
+      draws.push(() => drawSeries($('#fmMgn'), chron.map((x) => x.date.slice(5)), [{ v: chron.map((x) => +x.MarginPurchaseTodayBalance || 0), color: '#ef4444', name: '融資餘額', fill: true }], { h: 160, key: 'fmmgn' + sym })); } }
+  if (fh.status === 'fulfilled') { const hs = fh.value.filter((o) => o.ForeignInvestmentSharesRatio != null).sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 120);
+    if (hs.length > 1) { const r0 = +hs[0].ForeignInvestmentSharesRatio; const dif = (n) => hs[n] ? r0 - +hs[n].ForeignInvestmentSharesRatio : null; const chron = hs.slice().reverse();
+      h += `<div class="card"><h2>外資持股比率<span class="r small muted">${esc(hs[0].date)}</span></h2>
+        <div class="grid g3"><div class="tile"><div class="k">目前</div><div class="v num">${r0.toFixed(2)}%</div></div><div class="tile"><div class="k">20 日變化</div><div class="v num ${cls(dif(20))}">${fmtPct(dif(20))}</div></div><div class="tile"><div class="k">60 日變化</div><div class="v num ${cls(dif(60))}">${fmtPct(dif(60))}</div></div></div>
+        <div class="chart-wrap" id="fmFh" style="margin-top:8px"><canvas></canvas><div class="chart-tip"></div></div>${fmFoot()}</div>`;
+      draws.push(() => drawSeries($('#fmFh'), chron.map((x) => x.date.slice(5)), [{ v: chron.map((x) => +x.ForeignInvestmentSharesRatio), color: css('--primary'), name: '外資持股', fill: true }], { h: 150, fmt: (x) => x.toFixed(1) + '%', key: 'fmfh' + sym })); } }
+  el.innerHTML = h; el.style.display = 'contents'; draws.forEach((f) => { try { f(); } catch (e) {} });
+}
+async function fmDivCard(el, sym, isCur) {
+  let rows; try { rows = await fmGet('TaiwanStockDividend', sym, 3700); } catch (e) { if (isCur()) el.innerHTML = fmErr('股利政策', e); return; }
+  if (!isCur()) return;
+  const ds = rows.map((o) => ({ y: o.year || String(o.date || '').slice(0, 4), cash: (+o.CashEarningsDistribution || 0) + (+o.CashStatutorySurplus || 0), stock: (+o.StockEarningsDistribution || 0) + (+o.StockStatutorySurplus || 0), ex: o.CashExDividendTradingDate || o.StockExDividendTradingDate || '', pay: o.CashDividendPaymentDate || '' }))
+    .filter((d) => d.cash > 0 || d.stock > 0).sort((a, b) => (a.ex < b.ex ? 1 : a.ex > b.ex ? -1 : 0));
+  if (!ds.length) { el.innerHTML = ''; return; }
+  const yk = (d) => (String(d.y).match(/\d+/) || [d.y])[0]; const years = {}; ds.forEach((d) => { years[yk(d)] = (years[yk(d)] || 0) + d.cash + d.stock; }); const ys = Object.keys(years).sort().slice(-10);
+  el.innerHTML = `<div class="card"><h2>股利政策<span class="r small muted">每股（元）· ${Object.keys(years).length} 個年度有配發</span></h2>
+    ${fmBars(ys.map((y) => years[y]), () => css('--primary'))}<div class="row between small muted"><span>${esc(ys[0] || '')}</span><span>${esc(ys[ys.length - 1] || '')}</span></div>
+    <div class="scroll-x" style="max-height:300px;overflow:auto;margin-top:6px"><table class="tbl"><thead><tr><th>所屬期間</th><th>現金</th><th>股票</th><th>除息日</th><th>發放日</th></tr></thead><tbody>
+      ${ds.slice(0, 40).map((d) => `<tr><td>${esc(d.y)}</td><td class="num">${fmt(d.cash, 4).replace(/\.?0+$/, '')}</td><td class="num">${d.stock ? fmt(d.stock, 4).replace(/\.?0+$/, '') : '—'}</td><td class="num">${esc(d.ex || '—')}</td><td class="num">${esc(d.pay || '—')}</td></tr>`).join('')}</tbody></table></div>${fmFoot('（董事會／股東會決議）')}</div>`;
+}
 const STABS = [['ov', '概覽'], ['ta', '技術分析'], ['chip', '籌碼'], ['fin', '財務'], ['hold', '成分'], ['div', '股息'], ['news', '新聞'], ['talk', '討論'], ['co', '公司']];
 /** 個股分頁列：依「分頁列排版」設定排序與隱藏（S.pref.stabL＝{o:順序, h:隱藏, def:預設分頁, pos:'top'|'bottom'}） */
 function stockTabs(sym, all) {
@@ -3207,13 +3336,14 @@ Object.assign(VIEWS.s, {
         <div class="scroll-x" style="margin-top:12px"><table class="tbl"><thead><tr><th>日期</th><th>外資</th><th style="width:16%"></th><th>投信</th><th style="width:16%"></th><th>自營商</th><th style="width:16%"></th><th>合計</th></tr></thead><tbody>
           ${days.map((d) => `<tr><td class="num">${d.d.slice(4, 6)}/${d.d.slice(6)}</td><td class="num ${cls(d.f)}">${fmtSigned(L(d.f))}</td><td>${bar(d.f)}</td><td class="num ${cls(d.t)}">${fmtSigned(L(d.t))}</td><td>${bar(d.t)}</td><td class="num ${cls(d.dl)}">${fmtSigned(L(d.dl))}</td><td>${bar(d.dl)}</td><td class="num ${cls(d.f + d.t + d.dl)}">${fmtSigned(L(d.f + d.t + d.dl))}</td></tr>`).join('')}</tbody></table></div></div>`;
     } else if (err) h += `<div class="card" style="grid-column:1/-1"><h2>三大法人近 20 日</h2>${sapiErr(err)}</div>`;
-    else if (days) h += `<div class="card" style="grid-column:1/-1"><h2>三大法人近 20 日</h2><div class="small muted">上櫃證券只提供最新一日（見下方）。</div></div>`;
+    else if (days) h += `<div class="card" style="grid-column:1/-1"><h2>三大法人近 20 日</h2><div class="small muted">上櫃證券的多日資料請見下方「法人動向」（FinMind）。</div></div>`;
     h += `<div class="card"><h2>最新一日${c && c[0] ? `<span class="r muted">${esc(c[0])}</span>` : ''}</h2>${c ? `<div class="grid g3">${[['外資', c[1]], ['投信', c[2]], ['自營商', c[3]]].map(([k, v]) => `<div><div class="small muted">${k}</div><div class="num big ${cls(v)}">${v == null ? '—' : fmtSigned(v) + ' 張'}</div></div>`).join('')}</div>` : '<div class="small muted">尚無資料</div>'}</div>
       <div class="card"><h2>信用交易</h2>${c ? `<div class="grid g3"><div><div class="small muted">融資餘額</div><div class="num">${fmtInt(c[4])} 張</div><div class="small ${cls((c[4] || 0) - (c[5] || 0))}">${fmtSigned((c[4] || 0) - (c[5] || 0))}</div></div>
         <div><div class="small muted">融券餘額</div><div class="num">${fmtInt(c[6])} 張</div><div class="small ${cls((c[6] || 0) - (c[7] || 0))}">${fmtSigned((c[6] || 0) - (c[7] || 0))}</div></div>
         <div><div class="small muted">券資比</div><div class="num">${c[4] ? ((c[6] || 0) / c[4] * 100).toFixed(2) + '%' : '—'}</div></div>
         <div><div class="small muted">當沖量</div><div class="num">${c[8] != null ? fmtInt(c[8]) + ' 張' : '—'}</div></div></div>` : '<div class="small muted">尚無資料</div>'}</div>`;
-    si.innerHTML = h;
+    si.innerHTML = h + '<div id="fmChip" style="display:contents"></div>';
+    fmChipCards($('#fmChip'), sym, () => this.sym === sym && this.tab() === 'chip' && !!$('#fmChip'));
   },
   // ── 財務 ──
   async t_fin() {
@@ -3226,7 +3356,7 @@ Object.assign(VIEWS.s, {
     let h = `<div class="card"><h2>估值</h2>${kvRows([['本益比', v && v[0] ? fmt(v[0], 2) : yf(sd, 'trailingPE')], ['預估本益比', yf(sd, 'forwardPE')], ['股價淨值比', v && v[2] ? fmt(v[2], 2) : yf(ks, 'priceToBook')],
       ['殖利率', v && v[1] ? fmt(v[1], 2) + '%' : yf(sd, 'dividendYield') || yf(sd, 'trailingAnnualDividendYield')], ['EPS（近四季）', yf(ks, 'trailingEps')], ['預估 EPS', yf(ks, 'forwardEps')],
       ['市值', yf(sd, 'marketCap') || yf(pr, 'marketCap')], ['Beta', yf(sd, 'beta')], ['PEG', yf(ks, 'pegRatio')], ['下次財報', (((ce.earnings || {}).earningsDate || [])[0] || {}).fmt]])}${err ? sapiErr(err) : ''}</div>`;
-    if (rv) h += `<div class="card"><h2>月營收<span class="r small muted">${esc(rv[0])}</span></h2>${kvRows([['當月營收', fmt((rv[1] || 0) * 1000 / 1e8, 2) + ' 億元'], ['月增率', fmtPct(rv[2])], ['年增率', fmtPct(rv[3])], ['累計年增率', fmtPct(rv[4])]])}</div>`;
+    if (rv) h += `<div class="card" id="oldRev"><h2>月營收<span class="r small muted">${esc(rv[0])}</span></h2>${kvRows([['當月營收', fmt((rv[1] || 0) * 1000 / 1e8, 2) + ' 億元'], ['月增率', fmtPct(rv[2])], ['年增率', fmtPct(rv[3])], ['累計年增率', fmtPct(rv[4])]])}</div>`;
     const fin = [['totalRevenue', '營收（近四季）'], ['revenueGrowth', '營收成長（年）'], ['grossMargins', '毛利率'], ['operatingMargins', '營業利益率'], ['profitMargins', '淨利率'], ['returnOnEquity', 'ROE'], ['returnOnAssets', 'ROA'],
       ['earningsGrowth', '獲利成長（年）'], ['debtToEquity', '負債權益比'], ['currentRatio', '流動比率'], ['freeCashflow', '自由現金流'], ['totalCash', '現金'], ['totalDebt', '總負債']].map(([k, n]) => [n, yf(fd, k)]).filter(([, x]) => x);
     if (fin.length) h += `<div class="card"><h2>財務指標</h2>${kvRows(fin)}</div>`;
@@ -3243,7 +3373,8 @@ Object.assign(VIEWS.s, {
       const pos = (x) => (hi > lo ? Math.max(0, Math.min(100, (x - lo) / (hi - lo) * 100)) : 50);
       h += `<div class="card"><h2>分析師觀點</h2>${kvRows([['建議', RK[rk] || rk], ['分析師人數', yf(fd, 'numberOfAnalystOpinions')], ['平均目標價', yf(fd, 'targetMeanPrice')], ['最高', yf(fd, 'targetHighPrice')], ['最低', yf(fd, 'targetLowPrice')], ['潛在空間', mean && cur ? fmtPct((mean / cur - 1) * 100) : null]])}
         ${lo && hi ? `<div style="position:relative;height:8px;background:var(--card2);border-radius:4px;margin:18px 0 6px"><div title="現價" style="position:absolute;left:${pos(cur)}%;top:-5px;width:3px;height:18px;background:var(--text)"></div><div title="平均目標" style="position:absolute;left:${pos(mean)}%;top:-3px;width:10px;height:14px;margin-left:-5px;border-radius:3px;background:var(--primary)"></div></div><div class="row between small muted"><span>${fmtPrice(lo)}</span><span>黑線＝現價、藍＝平均目標價</span><span>${fmtPrice(hi)}</span></div>` : ''}</div>`; }
-    si.innerHTML = h + `<div class="small muted" style="grid-column:1/-1">資料：${us ? '' : '證交所／櫃買公開資料、'}Yahoo Finance；台股財報數字幣別為台幣。</div>`;
+    si.innerHTML = (us || etfLike(sym) ? '' : '<div id="fmFin" style="display:contents"><div class="card empty" style="grid-column:1/-1">讀取 FinMind 月營收與財報…</div></div>') + h + `<div class="small muted" style="grid-column:1/-1">資料：${us ? '' : 'FinMind、證交所／櫃買公開資料、'}Yahoo Finance；台股財報數字幣別為台幣。</div>`;
+    if (!us && !etfLike(sym)) fmFinCards($('#fmFin'), sym, () => this.sym === sym && this.tab() === 'fin' && !!$('#fmFin'));
   },
   // ── 成分 ──
   async t_hold() {
@@ -3279,8 +3410,9 @@ Object.assign(VIEWS.s, {
   // ── 股息 ──
   async t_div() {
     const sym = this.sym; const us = isUs(sym); const si = $('#si');
-    si.innerHTML = `<div id="dvs" style="grid-column:1/-1"></div><div id="dvtax"></div><div id="dvup"></div><div id="dvlist"></div><div id="dvsplit"></div>`;
+    si.innerHTML = `<div id="dvs" style="grid-column:1/-1"></div><div id="dvtax"></div><div id="dvup"></div><div id="dvlist"></div><div id="dvpol"></div><div id="dvsplit"></div>`;
     if (!can('DIVTAX')) { si.innerHTML = lockCard('DIVTAX'); return; }
+    if (!us) fmDivCard($('#dvpol'), sym, () => this.sym === sym && this.tab() === 'div' && !!$('#dvpol'));
     divStatsCard($('#dvs'), sym); this.taxCard();
     { const bar = document.createElement('div'); bar.className = 'row wrap'; bar.style.cssText = 'gap:8px;grid-column:1/-1'; bar.innerHTML = '<button class="btn sm primary" id="toDrip">以此股複利試算 ›</button><button class="btn sm" id="toDivSim">配息試算（要領多少需買多少）›</button>'; si.prepend(bar);
       $('#toDrip').onclick = () => { S.dripSym = sym; S.pref.tool = 'drip'; savePref(); location.hash = '#/tools'; };
@@ -4325,6 +4457,11 @@ VIEWS.settings = {
             : `<div class="row" style="gap:6px"><input id="fgK" type="password" autocomplete="off" placeholder="貼上富果 API Key"><button class="btn sm primary" id="fgS">儲存</button><button class="btn sm" id="fgT">測試</button></div>`}
           <div class="small muted" style="margin-top:4px">金鑰以瀏覽器加密保存在這台電腦，不上傳、不同步到手機（手機 App 請另外在「設置 › 行情資料來源」填寫）。<a href="https://developer.fugle.tw/" target="_blank" rel="noopener">還沒有金鑰？到富果開發者平台免費申請 ›</a></div>
           <div class="small" id="fgR" style="margin-top:4px"></div></div>
+        <div class="field" style="margin-top:10px"><label>FinMind API Token（選填）</label>
+          ${aiHas('finmind') ? `<div class="row wrap" style="gap:6px"><span class="tag up">已儲存</span><button class="btn sm" id="fmT">測試連線</button><button class="btn sm" id="fmD">清除</button></div>`
+            : `<div class="row" style="gap:6px"><input id="fmK" type="password" autocomplete="off" placeholder="貼上 FinMind Token"><button class="btn sm primary" id="fmS">儲存</button><button class="btn sm" id="fmT">測試</button></div>`}
+          <div class="small muted" style="margin-top:4px">個股「財務」的月營收、季度損益、本益比區間，「籌碼」的法人 60 日、融資融券、外資持股，「股息」的股利政策來自 FinMind。不填也能用（由本站共用快取）；查詢量大時填入自己的免費 Token 可提高額度。Token 以瀏覽器加密保存，只在查詢時經本站轉送給 FinMind、不保存。<a href="https://finmindtrade.com/analysis/#/account/user" target="_blank" rel="noopener">免費註冊取得 Token ›</a></div>
+          <div class="small" id="fmR" style="margin-top:4px"></div></div>
         <div class="field"><label>台股盤中更新頻率（證交所）</label><div class="seg">${opt('refresh', 5, '5 秒')}${opt('refresh', 10, '10 秒', 10)}${opt('refresh', 30, '30 秒')}${opt('refresh', 60, '1 分鐘')}</div></div>
         <div class="field"><label>美股盤中更新頻率（Yahoo Finance）</label><div class="seg">${opt('usRefresh', 0, '與台股相同', 0)}${opt('usRefresh', 30, '30 秒')}${opt('usRefresh', 60, '1 分鐘')}${opt('usRefresh', 300, '5 分鐘')}</div></div>
         <div class="field"><label>分頁在背景時</label><div class="seg">${opt('bgRefresh', '', '暫停更新（省流量）', '')}${opt('bgRefresh', '1', '持續更新（提醒不漏）')}</div></div>
@@ -4363,6 +4500,11 @@ VIEWS.settings = {
     $('#rsAll').onclick = async () => { if ((await dialog('重設版面設定', '恢復網頁版預設的外觀與版面？（不影響資料）', [['', '取消'], ['ok', '重設', 'primary']])) !== 'ok') return; S.pref = { layout: 'wall', group: 'all', holdSort: 'mv', sub: 'KD', range: '6M' }; re(); };
     aiSettingsBind();
     const fgOut = (ok, msg) => { const el = $('#fgR'); if (el) { el.textContent = msg; el.className = 'small ' + (ok ? 'up' : 'down'); } };
+    if ($('#fmS')) $('#fmS').onclick = async () => { const v = $('#fmK').value.trim(); if (!v) return toast('請先貼上 Token'); await aiKeySet('finmind', v); Object.keys(FMC).forEach((k) => delete FMC[k]); toast('已儲存 FinMind Token'); route(); };
+    if ($('#fmD')) $('#fmD').onclick = async () => { await aiKeySet('finmind', ''); toast('已清除 FinMind Token'); route(); };
+    if ($('#fmT')) $('#fmT').onclick = async () => { const o = $('#fmR'); const k = $('#fmK') ? $('#fmK').value.trim() : await aiKeyGet('finmind'); o.textContent = '測試中…';
+      try { const r = await fetch('/api/fm?ds=TaiwanStockPrice&id=2330&span=7&nc=1', k ? { headers: { 'x-fm-token': k } } : {}); const j = await r.json(); if (j.err) throw new Error(j.err); const l = (j.data || [])[j.data.length - 1];
+        o.className = 'small up'; o.textContent = l ? `連線成功：2330 ${l.date} 收 ${l.close}` : '連線成功（查無資料）'; } catch (e) { o.className = 'small down'; o.textContent = '失敗：' + (e.message || e); } };
     if ($('#fgS')) $('#fgS').onclick = async () => { const v = $('#fgK').value.trim(); if (!v) return toast('請先貼上金鑰'); await aiKeySet('fugle', v); FG.authFail = ''; fgStop(''); toast('已儲存富果金鑰'); route(); tick(); };
     if ($('#fgD')) $('#fgD').onclick = async () => { await aiKeySet('fugle', ''); fgStop(''); toast('已清除富果金鑰'); route(); };
     if ($('#fgT')) $('#fgT').onclick = async () => { const k = $('#fgK') ? $('#fgK').value.trim() : await aiKeyGet('fugle'); if (!k) return toast('請先貼上金鑰'); fgOut(true, '測試中…'); const [ok, msg] = await fgTest(k); fgOut(ok, msg); if (ok) { FG.authFail = ''; } };
