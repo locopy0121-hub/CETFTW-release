@@ -823,7 +823,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"a3100b0","at":"2026-11-22 19:30"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"c4320c3","at":"2026-11-22 19:33"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -3598,7 +3598,15 @@ Object.assign(VIEWS.s, {
   // ── 新聞 ──
   async t_news() {
     const sym = this.sym; const si = $('#si');
-    si.innerHTML = '<div class="card" id="news"><h2>新聞</h2><div class="muted small">載入中…</div></div><div class="card" id="gnews"><h2>相關新聞</h2><div class="muted small">載入中…</div></div>';
+    const mops = !isUs(sym) && !etfLike(sym);
+    si.innerHTML = (mops ? '<div class="card" id="mops" style="grid-column:1/-1"><h2>重大訊息<span class="r small muted">公開資訊觀測站</span></h2><div class="muted small">載入中…</div></div>' : '') + '<div class="card" id="news"><h2>新聞</h2><div class="muted small">載入中…</div></div><div class="card" id="gnews"><h2>相關新聞</h2><div class="muted small">載入中…</div></div>';
+    if (mops) fetch('/api/mops?id=' + encodeURIComponent(sym)).then((r) => r.json()).then((j) => {
+      const el = $('#mops'); if (!el || this.sym !== sym) return; const l = j.data || [];
+      el.innerHTML = `<h2>重大訊息<span class="r small muted">公開資訊觀測站</span></h2>${j.err ? `<div class="small muted">${esc(j.err)}</div>` : !l.length ? '<div class="small muted">近期沒有重大訊息（開放資料只提供當日訊息，本站從啟用後開始累積，保留 90 天）。</div>'
+        : `<div class="list">${l.slice(0, 10).map((x, i) => `<div class="it" data-mops="${i}" style="display:block"><div class="small muted num">${esc(x.d)} ${esc(x.t || '')}</div><div class="t1" style="white-space:normal">${esc(x.subject)}</div>
+          <div class="small text2 hide" style="margin-top:6px;white-space:pre-wrap">${x.rule ? '符合條款：' + esc(x.rule) + (x.fact ? '　事實發生日：' + esc(x.fact) : '') + '\n' : ''}${esc(x.body || '')}</div></div>`).join('')}</div><div class="small muted" style="margin-top:6px">點標題展開說明。</div>`}`;
+      $$('[data-mops]', el).forEach((it) => it.onclick = () => it.lastElementChild.classList.toggle('hide'));
+    }).catch(() => { const el = $('#mops'); if (el) el.innerHTML = '<h2>重大訊息</h2><div class="small muted">暫時無法取得（轉送站需重新部署才有此功能）。</div>'; });
     this.news();
     if (!can('NEWS')) { $('#gnews').remove(); return; }
     let items = [], fail = false; try { items = await kwNews((isUs(sym) ? sym + ' ' : '') + D.name(sym) + (isUs(sym) ? ' stock' : ' ' + sym + ' 股'), 15); } catch (e) { fail = true; }
