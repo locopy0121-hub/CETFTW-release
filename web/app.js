@@ -846,7 +846,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"4542542","at":"2026-11-22 21:05"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"684d907","at":"2026-11-22 21:18"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -869,13 +869,13 @@ function rtStatusText() {
   return tw + '\n' + us + (S.lastTick ? '\n最近更新：' + hm(S.lastTick) + (document.hidden && S.pref.bgRefresh !== '1' ? '（背景暫停中）' : '') : '');
 }
 // ───────── 版面 ─────────
-const NAV = [['', '總覽', '🏠'], ['watch', '行情', '📈'], ['hold', '持股', '💼'], ['trades', '交易', '🧾'], ['div', '股息', '💰'], ['analysis', '分析', '📊'], ['compare', '比較', '⚖️'], ['screener', '選股器', '🔎'], ['calendar', '行事曆', '📅'], ['sim', '模擬交易', '🎮'], ['tools', '工具', '🧮'],
+const NAV = [['', '總覽', '🏠'], ['watch', '行情', '📈'], ['hold', '持股', '💼'], ['trades', '交易', '🧾'], ['div', '股息', '💰'], ['analysis', '分析', '📊'], ['compare', '比較', '⚖️'], ['screener', '選股器', '🔎'], ['calendar', '行事曆', '📅'], ['sim', '模擬交易', '🎮'], ['strategy', '策略回測', '🧪'], ['tools', '工具', '🧮'],
   ['alerts', '提醒', '🔔'], ['market', '市場', '🌐'], ['news', '新聞', '📰'], ['cash', '現金與帳戶', '🏦'], ['tax', '年度報稅', '🧾'], ['member', '會員', '👤'], ['settings', '設定', '⚙️']];
 const BOTTOM = ['', 'watch', 'hold', 'market', 'more'];
 // 功能分類（側欄、更多頁）：依使用情境分四群
 const NAV_GROUPS = [['資產', ['', 'hold', 'trades', 'div', 'cash', 'tax']], ['行情與研究', ['watch', 'market', 'screener', 'news', 'calendar', 'compare']],
-  ['分析與工具', ['analysis', 'alerts', 'sim', 'tools']], ['帳號', ['member', 'settings']]];
-const NAV_DESC = { tax: '年度已實現、股利所得、合併／分開計稅試算、海外所得最低稅負', '': '資產總覽、今日損益、指數與漲跌停', hold: '持股明細、成本、報酬與占比', trades: '交易紀錄、篩選、匯入匯出', div: '股息日曆、歷年股息、預估年股息', cash: '現金流紀錄與證券帳戶',
+  ['分析與工具', ['analysis', 'alerts', 'sim', 'strategy', 'tools']], ['帳號', ['member', 'settings']]];
+const NAV_DESC = { strategy: '自訂均線、RSI、KD、突破進出場條件，回測勝率與報酬', tax: '年度已實現、股利所得、合併／分開計稅試算、海外所得最低稅負', '': '資產總覽、今日損益、指數與漲跌停', hold: '持股明細、成本、報酬與占比', trades: '交易紀錄、篩選、匯入匯出', div: '股息日曆、歷年股息、預估年股息', cash: '現金流紀錄與證券帳戶',
   watch: '自選行情、行情牆、熱度圖', market: '大盤、類股、排行、美股與 ETF', news: '財經新聞與關鍵字搜尋', calendar: '除權息、股利發放、總經事件', compare: '多檔走勢與報酬相關係數', screener: '全市場條件選股：殖利率、本益比、營收、法人',
   analysis: '每年報酬、近 12 個月與投資組合分析', alerts: '到價與事件提醒', sim: '模擬持股與下單練習', tools: '交易成本、漲跌停價、定期定額複利試算',
   member: '會員方案、帳號同步、LINE 綁定', settings: '外觀、版面、即時行情、資料' };
@@ -4685,6 +4685,58 @@ async function alertModal(sym) {
 
 // ───────── 現金與帳戶 ─────────
 const FLOW_C = ['入金', '出金', '利息', '費用', '其他'];
+// ───────── 自訂策略回測（與 App StrategyBacktest 相同算法；共用 app/src/test/resources/strategy_cases.txt） ─────────
+const STRAT_K = { ma_up: ['均線黃金交叉', '短均線', '長均線', 5, 20], ma_down: ['均線死亡交叉', '短均線', '長均線', 5, 20], above_ma: ['收盤站上均線', '均線天數', null, 20, 0], below_ma: ['收盤跌破均線', '均線天數', null, 20, 0],
+  rsi_below: ['RSI(14) 低於', '數值', null, 30, 0], rsi_above: ['RSI(14) 高於', '數值', null, 70, 0], kd_up: ['KD 黃金交叉', 'K 值低於（0＝不限）', null, 30, 0], kd_down: ['KD 死亡交叉', 'K 值高於（0＝不限）', null, 70, 0],
+  break_high: ['突破 N 日新高', '天數', null, 20, 0], break_low: ['跌破 N 日新低', '天數', null, 10, 0], drop_from_high: ['自 N 日高點回落', '跌幅 %', '天數', 20, 60] };
+const STRAT_P = [['均線黃金交叉', [['ma_up', 5, 20]], [['ma_down', 5, 20]], 0, 0, 0], ['站上季線、跌破出場', [['above_ma', 60]], [['below_ma', 60]], 0, 0, 0],
+  ['RSI 超賣反彈', [['rsi_below', 30]], [['rsi_above', 70]], 15, 0, 0], ['KD 低檔金叉', [['kd_up', 25]], [['kd_down', 75]], 10, 0, 0],
+  ['突破 20 日新高', [['break_high', 20]], [['break_low', 10]], 8, 0, 0], ['跌深 20% 分批', [['drop_from_high', 20, 60]], [], 0, 20, 250]];
+function stratSma(c, n) { const out = []; let s = 0; for (let i = 0; i < c.length; i++) { s += c[i]; if (i >= n) s -= c[i - n]; out.push(n > 0 && i >= n - 1 ? s / n : null); } return out; }
+function stratRsi(c, n = 14) { const out = c.map(() => null); if (c.length <= n) return out; let g = 0, l = 0;
+  for (let i = 1; i <= n; i++) { const d = c[i] - c[i - 1]; if (d > 0) g += d; else l -= d; } let ag = g / n, al = l / n; const v = () => (al === 0 ? 100 : 100 - 100 / (1 + ag / al));
+  out[n] = v(); for (let i = n + 1; i < c.length; i++) { const d = c[i] - c[i - 1]; ag = (ag * (n - 1) + Math.max(d, 0)) / n; al = (al * (n - 1) + Math.max(-d, 0)) / n; out[i] = v(); } return out; }
+function stratKd(b, n = 9) { const k = b.map(() => null), d = b.map(() => null); let pk = 50, pd = 50;
+  for (let i = n - 1; i < b.length; i++) { let hh = -Infinity, ll = Infinity; for (let j = i - n + 1; j <= i; j++) { hh = Math.max(hh, b[j].h); ll = Math.min(ll, b[j].l); }
+    const rsv = hh - ll > 0 ? (b[i].c - ll) / (hh - ll) * 100 : 50; pk = pk * 2 / 3 + rsv / 3; pd = pd * 2 / 3 + pk / 3; k[i] = pk; d[i] = pd; } return [k, d]; }
+function stratDays(a, b) { const f = (s) => Date.parse(String(s).slice(0, 10).replace(/\//g, '-') + 'T00:00:00Z'); const x = (f(b) - f(a)) / 86400000; return isNaN(x) ? null : Math.round(x); }
+function stratRun(b, st, buyCost, sellCost) {
+  if (b.length < 2 || !st.entry.length) return null;
+  const c = b.map((x) => x.c); const smaC = {}; const sma = (n) => smaC[n] || (smaC[n] = stratSma(c, n)); let rsiC = null, kdC = null;
+  const rsi = () => rsiC || (rsiC = stratRsi(c)); const kd = () => kdC || (kdC = stratKd(b));
+  const cross = (f, s, i, up) => { if (i < 1) return false; const f0 = f[i - 1], s0 = s[i - 1], f1 = f[i], s1 = s[i]; if (f0 == null || s0 == null || f1 == null || s1 == null) return false; return up ? f0 <= s0 && f1 > s1 : f0 >= s0 && f1 < s1; };
+  const met = (x, i) => { const [k, p1, p2] = x; const n1 = Math.trunc(p1), n2 = Math.trunc(p2 || 0);
+    switch (k) {
+      case 'ma_up': return cross(sma(n1), sma(n2), i, true); case 'ma_down': return cross(sma(n1), sma(n2), i, false);
+      case 'above_ma': { const m = sma(n1)[i]; return m != null && c[i] > m; } case 'below_ma': { const m = sma(n1)[i]; return m != null && c[i] < m; }
+      case 'rsi_below': { const r = rsi()[i]; return r != null && r < p1; } case 'rsi_above': { const r = rsi()[i]; return r != null && r > p1; }
+      case 'kd_up': { const [K, D] = kd(); return cross(K, D, i, true) && (p1 <= 0 || (K[i] ?? 100) < p1); }
+      case 'kd_down': { const [K, D] = kd(); return cross(K, D, i, false) && (p1 <= 0 || (K[i] ?? 0) > p1); }
+      case 'break_high': { if (!(n1 > 0 && i >= n1)) return false; let m = -Infinity; for (let j = i - n1; j < i; j++) m = Math.max(m, b[j].h); return c[i] > m; }
+      case 'break_low': { if (!(n1 > 0 && i >= n1)) return false; let m = Infinity; for (let j = i - n1; j < i; j++) m = Math.min(m, b[j].l); return c[i] < m; }
+      case 'drop_from_high': { if (!(n2 > 0 && i >= n2 - 1)) return false; let m = -Infinity; for (let j = i - n2 + 1; j <= i; j++) m = Math.max(m, b[j].h); return c[i] <= m * (1 - p1 / 100); }
+    } return false; };
+  let cash = 1, units = 0, inPos = false, entryPx = 0, entryIdx = -1, entryDate = '', pendEntry = false, pendExit = null, held = 0; const trades = [], eq = [];
+  for (let i = 0; i < b.length; i++) {
+    const px = b[i].o > 0 ? b[i].o : b[i].c;
+    if (pendExit && inPos) { cash = units * px * (1 - sellCost); trades.push({ ed: entryDate, ep: entryPx, xd: b[i].d, xp: px, ret: ((px * (1 - sellCost)) / (entryPx * (1 + buyCost)) - 1) * 100, bars: i - entryIdx, why: pendExit }); units = 0; inPos = false; pendExit = null; }
+    if (pendEntry && !inPos) { units = cash / (px * (1 + buyCost)); cash = 0; inPos = true; entryPx = px; entryIdx = i; entryDate = b[i].d; pendEntry = false; }
+    if (inPos) { held++; const r = (b[i].c / entryPx - 1) * 100;
+      pendExit = st.sl > 0 && r <= -st.sl ? '停損' : st.tp > 0 && r >= st.tp ? '停利' : st.hold > 0 && i - entryIdx >= st.hold ? '持有期滿' : st.exit.some((x) => met(x, i)) ? '出場條件' : null; }
+    else if (st.entry.every((x) => met(x, i))) pendEntry = true;
+    eq.push(inPos ? units * b[i].c : cash);
+  }
+  const last = b[b.length - 1];
+  if (inPos) trades.push({ ed: entryDate, ep: entryPx, xd: last.d, xp: last.c, ret: ((last.c * (1 - sellCost)) / (entryPx * (1 + buyCost)) - 1) * 100, bars: b.length - 1 - entryIdx, why: '期末未平倉' });
+  const endEq = inPos ? units * last.c * (1 - sellCost) : cash; let peak = 0, mdd = 0; eq.forEach((v) => { peak = Math.max(peak, v); if (peak > 0) mdd = Math.min(mdd, (v / peak - 1) * 100); });
+  const wins = trades.filter((t) => t.ret > 0), losses = trades.filter((t) => t.ret <= 0); const dd = stratDays(b[0].d, last.d); const yrs = dd == null ? null : dd / 365.25;
+  const avg = (l) => (l.length ? l.reduce((a, t) => a + t.ret, 0) / l.length : null); const ls = losses.reduce((a, t) => a + t.ret, 0);
+  return { trades, total: (endEq - 1) * 100, cagr: yrs != null && yrs >= 0.5 && endEq > 0 ? (endEq ** (1 / yrs) - 1) * 100 : null, bh: (last.c / b[0].c - 1) * 100, mdd: -mdd,
+    win: trades.length ? wins.length * 100 / trades.length : null, avgWin: avg(wins), avgLoss: avg(losses), pf: ls < 0 ? wins.reduce((a, t) => a + t.ret, 0) / -ls : null,
+    exposure: held * 100 / b.length, eq, hold: b.map((x) => x.c / b[0].c), open: inPos };
+}
+function stratCosts(us, etf, disc) { return us ? [0, 0] : [0.001425 * disc, 0.001425 * disc + (etf ? 0.001 : 0.003)]; }
+
 // ───────── 投資組合診斷（與 App PortfolioDiag 相同規則；只用百分比） ─────────
 function pfDiag(i) {
   const ps = i.positions.filter((p) => p.weight > 0).sort((a, b) => b.weight - a.weight); const f1 = (v) => v.toFixed(1);
@@ -4727,6 +4779,76 @@ function pfDiagJson(i, r) { const d = (v) => Math.round(v * 10) / 10; const m = 
   ['maxDrawdownPct', 'volPct'].forEach((k) => { if (i[k] != null) o[k] = d(i[k]); }); if (i.ret1y != null) o.ret1yPct = d(i.ret1y); if (i.bench1y != null) o.bench1yPct = d(i.bench1y); return o; }
 function pfAiHtml(o) { const L = (k, l) => (l && l.length ? `<div style="margin-top:8px"><b>${k}</b>${l.map((x) => `<div class="small">・${esc(x)}</div>`).join('')}</div>` : '');
   return `${o.style ? `<span class="tag">${esc(o.style)}</span>` : ''}<div style="margin-top:6px">${esc(o.summary || '')}</div>${L('優點', o.strengths)}${L('風險', o.risks)}${L('調整方向', o.actions)}<div class="small muted" style="margin-top:8px">${esc(o.by || '')} · ${esc(o.date || '')} · 僅供參考，非投資建議</div>`; }
+
+VIEWS.strategy = {
+  title: '策略回測',
+  render(arg) { if (arg) this.sym = arg.toUpperCase(); this.sym = this.sym || (holdings()[0] || {}).symbol || '0050';
+    if (!this.st) this.preset(0);
+    return head('策略回測') + `<div class="grid g2 stack"><div class="card"><h2>設定</h2>
+      <div class="field search"><label>股票代號</label><input id="sgS" value="${esc(this.sym)}" autocomplete="off"><div class="res hide"></div><div id="sgN" class="small muted" style="margin-top:3px">${esc(D.name(this.sym))} · 還原權值日 K（含息）</div></div>
+      <div class="seg" style="margin:6px 0 10px">${[['1y', '1 年'], ['2y', '2 年'], ['5y', '5 年'], ['10y', '10 年']].map(([k, n]) => `<button data-sr="${k}" class="${(this.range || '2y') === k ? 'on' : ''}">${n}</button>`).join('')}</div>
+      <div class="chips" style="margin-bottom:10px">${STRAT_P.map((p, i) => `<button class="chip ${this.st.name === p[0] ? 'on' : ''}" data-sp="${i}">${esc(p[0])}</button>`).join('')}</div>
+      <div id="sgE"></div>
+      <div class="grid g3" style="margin-top:8px"><div class="field"><label>停損 %</label><input id="sgSl" type="number" step="any" value="${this.st.sl || ''}"></div><div class="field"><label>停利 %</label><input id="sgTp" type="number" step="any" value="${this.st.tp || ''}"></div><div class="field"><label>最多持有（交易日）</label><input id="sgH" type="number" step="1" value="${this.st.hold || ''}"></div></div>
+      <div class="field"><label>台股手續費折數（1＝不打折）</label><input id="sgD" type="number" step="any" value="${this.disc ?? ((D.accounts().find((a) => !a.m || a.m === 'TW') || {}).d || 0.6)}"></div>
+      <div class="small muted">收盤時判斷訊號、隔天開盤成交；一次一個部位、全額進出複利計算。台股賣出另計證交稅（股票 0.3%、ETF 0.1%）。與手機 App 相同算法。</div>
+      <button class="btn primary" id="sgGo" style="margin-top:10px;width:100%">開始回測</button></div>
+      <div id="sgR"><div class="card empty">設定條件後按「開始回測」。</div></div></div>`; },
+  preset(i) { const p = STRAT_P[i]; this.st = { name: p[0], entry: p[1].map((x) => [x[0], x[1] ?? STRAT_K[x[0]][3], x[2] ?? STRAT_K[x[0]][4]]), exit: p[2].map((x) => [x[0], x[1] ?? STRAT_K[x[0]][3], x[2] ?? STRAT_K[x[0]][4]]), sl: p[3], tp: p[4], hold: p[5] }; },
+  conds() {
+    const ed = (key, title, hint) => `<div style="margin-top:8px"><div class="row" style="justify-content:space-between"><b>${title}</b><select data-add="${key}" style="width:auto"><option value="">＋ 條件</option>${Object.entries(STRAT_K).map(([k, v]) => `<option value="${k}">${v[0]}</option>`).join('')}</select></div>
+      ${this.st[key].length ? this.st[key].map((c, i) => { const K = STRAT_K[c[0]]; return `<div class="row" style="gap:6px;margin-top:6px;align-items:flex-end"><div style="flex:1.3;font-size:13px">${K[0]}</div>
+        <div class="field" style="flex:1;margin:0"><label>${K[1]}</label><input type="number" step="any" data-c="${key}:${i}:1" value="${c[1]}"></div>${K[2] ? `<div class="field" style="flex:1;margin:0"><label>${K[2]}</label><input type="number" step="any" data-c="${key}:${i}:2" value="${c[2]}"></div>` : ''}
+        <button class="btn sm" data-del="${key}:${i}">✕</button></div>`; }).join('') : `<div class="small muted">${hint}</div>`}</div>`;
+    $('#sgE').innerHTML = ed('entry', '進場（全部成立）', '至少要有一個進場條件。') + ed('exit', '出場（任一成立）', '沒有出場條件時，只靠停損、停利或持有天數出場。');
+    $$('[data-add]').forEach((el) => el.onchange = () => { const k = el.value; if (!k) return; this.st[el.dataset.add].push([k, STRAT_K[k][3], STRAT_K[k][4]]); this.st.name = '自訂'; this.conds(); });
+    $$('[data-c]').forEach((el) => el.oninput = () => { const [k, i, j] = el.dataset.c.split(':'); this.st[k][+i][+j] = +el.value || 0; this.st.name = '自訂'; });
+    $$('[data-del]').forEach((el) => el.onclick = () => { const [k, i] = el.dataset.del.split(':'); this.st[k].splice(+i, 1); this.st.name = '自訂'; this.conds(); });
+  },
+  bind() {
+    this.conds();
+    $$('[data-sp]').forEach((b) => b.onclick = () => { this.preset(+b.dataset.sp); route(); });
+    $$('[data-sr]').forEach((b) => b.onclick = () => { this.range = b.dataset.sr; $$('[data-sr]').forEach((x) => x.classList.toggle('on', x === b)); });
+    bindSearch($('#sgS'), (sym) => { $('#sgS').value = sym; this.sym = sym; $('#sgN').textContent = D.name(sym) + ' · 還原權值日 K（含息）'; });
+    $('#sgGo').onclick = () => this.go();
+  },
+  async go() {
+    const sym = $('#sgS').value.trim().toUpperCase(); if (!sym) return toast('請輸入股票代號'); this.sym = sym;
+    this.st.sl = +$('#sgSl').value || 0; this.st.tp = +$('#sgTp').value || 0; this.st.hold = Math.trunc(+$('#sgH').value || 0); this.disc = Math.min(1, Math.max(0, +$('#sgD').value || 0.6));
+    if (!this.st.entry.length) return toast('至少要有一個進場條件');
+    $('#sgR').innerHTML = '<div class="card empty">下載歷史價格並回測中…</div>'; $('#sgGo').disabled = true;
+    try {
+      const r0 = await fetchYahoo(ysym(sym), this.range || '2y', '1d', 3600); if (!r0 || !r0.timestamp) throw new Error('查無 ' + sym + ' 的歷史價格');
+      const q = r0.indicators.quote[0]; const adj = ((r0.indicators.adjclose || [])[0] || {}).adjclose || [];
+      const bars = []; const seen = new Set();
+      r0.timestamp.forEach((t, i) => { const c0 = q.close[i]; if (!(c0 > 0)) return; const f = adj[i] > 0 ? adj[i] / c0 : 1; const dd = new Date((t + 8 * 3600) * 1000);
+        const d = dd.getUTCFullYear() + '/' + String(dd.getUTCMonth() + 1).padStart(2, '0') + '/' + String(dd.getUTCDate()).padStart(2, '0'); if (seen.has(d)) return; seen.add(d);
+        const c = c0 * f, o = (q.open[i] > 0 ? q.open[i] : c0) * f; bars.push({ d, o, h: (q.high[i] > 0 ? q.high[i] : Math.max(q.open[i] || c0, c0)) * f, l: (q.low[i] > 0 ? q.low[i] : Math.min(q.open[i] || c0, c0)) * f, c }); });
+      if (bars.length < 30) throw new Error('歷史資料不足');
+      const [bc, sc] = stratCosts(isUs(sym), D.isEtf(sym) || /^00/.test(sym), this.disc);
+      const r = stratRun(bars, this.st, bc, sc); if (!r) throw new Error('資料不足，無法回測');
+      if (S.route === 'strategy') this.show(sym, r, bars);
+    } catch (e) { $('#sgR').innerHTML = `<div class="notice err">${esc(e.message || '回測失敗')}</div>`; }
+    $('#sgGo').disabled = false;
+  },
+  show(sym, r, bars) {
+    const P = (v, d = 1) => (v == null ? '—' : fmtPct(v, d)); const d = r.total - r.bh;
+    $('#sgR').innerHTML = `<div class="card"><h2>${esc(D.name(sym))} ${esc(sym)} 回測結果<span class="r small muted">${esc(bars[0].d)}～${esc(bars[bars.length - 1].d)}</span></h2>
+      <div class="grid g2"><div class="tile"><div class="k">策略報酬</div><div class="v num ${cls(r.total)}">${P(r.total)}</div></div><div class="tile"><div class="k">買進持有</div><div class="v num ${cls(r.bh)}">${P(r.bh)}</div></div></div>
+      <div style="margin:6px 0;font-weight:700;color:${d >= 0 ? 'var(--primary)' : 'var(--text2)'}">${d >= 0 ? '勝過' : '落後'}買進持有 ${Math.abs(d).toFixed(1)} 個百分點</div>
+      <div class="chart-wrap" id="sgC"><canvas></canvas><div class="chart-tip"></div></div><div class="small muted">策略淨值與買進持有（起點 = 0%）</div>
+      <table class="tbl" style="margin-top:8px"><tbody>
+        <tr><td>年化報酬</td><td class="num">${r.cagr == null ? '—（期間未滿半年）' : P(r.cagr)}</td></tr><tr><td>最大回撤</td><td class="num up">−${r.mdd.toFixed(1)}%</td></tr>
+        <tr><td>交易次數／勝率</td><td class="num">${r.trades.length} 次 / ${r.win == null ? '—' : r.win.toFixed(0) + '%'}</td></tr><tr><td>平均獲利／平均虧損</td><td class="num">${P(r.avgWin)} / ${P(r.avgLoss)}</td></tr>
+        <tr><td>獲利因子</td><td class="num">${r.pf == null ? '—' : r.pf.toFixed(2)}</td></tr><tr><td>持有時間比例</td><td class="num">${r.exposure.toFixed(0)}%</td></tr></tbody></table>
+      ${r.open ? '<div class="small" style="color:var(--primary);margin-top:6px">目前仍持有部位（最後一筆以最新收盤價計算）</div>' : ''}</div>
+      ${r.trades.length ? `<div class="card" style="margin-top:12px"><h2>交易明細<span class="r small muted">${r.trades.length} 筆</span></h2><div class="scroll-x"><table class="tbl"><thead><tr><th style="text-align:left">進場</th><th>出場</th><th>進場價</th><th>出場價</th><th>天數</th><th>原因</th><th>報酬</th></tr></thead><tbody>
+        ${r.trades.slice().reverse().slice(0, 200).map((t) => `<tr><td class="num" style="text-align:left">${esc(t.ed)}</td><td class="num">${esc(t.xd)}</td><td class="num">${fmtPx(t.ep)}</td><td class="num">${fmtPx(t.xp)}</td><td class="num">${t.bars}</td><td>${esc(t.why)}</td><td class="num ${cls(t.ret)}">${P(t.ret)}</td></tr>`).join('')}</tbody></table></div></div>` : ''}
+      <div class="small muted" style="margin-top:8px">回測以歷史資料模擬，未含滑價；過去績效不代表未來，僅供研究參考。</div>`;
+    drawSeries($('#sgC'), bars.map((b) => b.d), [{ name: '策略', color: '#3b82f6', v: r.eq.map((v) => (v - 1) * 100) }, { name: '買進持有', color: '#94a3b8', v: r.hold.map((v) => (v - 1) * 100) }], { h: 220, fmt: (v) => (v > 0 ? '+' : '') + v.toFixed(1) + '%', zero: true });
+  },
+  fill() {}, syms() { return [this.sym]; },
+};
 
 // ───────── 年度報稅彙總（與 App ReportCalc／TaxSummary 相同算法） ─────────
 const TAXC = { credit: 0.085, cap: 80000, sep: 0.28, ovs: 1000000, amtEx: 7500000, amtRate: 0.2, rates: [0.05, 0.12, 0.2, 0.3, 0.4] };
