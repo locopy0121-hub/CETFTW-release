@@ -68,7 +68,7 @@ async function logout(msg) {
 
 // ───────── 主畫面 ─────────
 /** 網頁版本（發布時由 .github/public/sync.sh 填入） */
-const WEB_VER = /*WEBVER*/{"v":"","sha":"9bca579","at":"2026-11-22 23:54"};
+const WEB_VER = /*WEBVER*/{"v":"v1.1.391","sha":"be60ccf","at":"2026-11-23 00:00"};
 const verText = () => (WEB_VER ? (WEB_VER.v ? (/^v/i.test(WEB_VER.v) ? WEB_VER.v : 'v' + WEB_VER.v) + ' · ' : '') + WEB_VER.sha + (WEB_VER.at ? ' · ' + WEB_VER.at : '') : '開發版');
 const TABS = [['home', '總覽'], ['req', '申請'], ['trade', '交易'], ['msg', '訊息'], ['mem', '會員'], ['pol', '政策'], ['tier', '會員等級'], ['rel', '發布'], ['line', 'LINE'], ['forum', '討論區'], ['job', '工作紀錄']];
 /** 功能位元（與 App License.Feature 順序相同，不可調整） */
@@ -207,9 +207,8 @@ function render() {
           ${app.worker && app.worker.ready ? `<button class="btn" id="rdp" style="margin-top:10px">重新部署</button>` : ''}</div>
         <div class="card"><h2>最近申請</h2>${reqs.length ? reqs.slice(0, 5).map(reqRow).join('') : '<div class="small muted">沒有待處理的申請</div>'}</div>
         <div class="card"><h2>最近工作</h2>${d.jobs.slice(0, 6).map(jobRow).join('') || '<div class="small muted">尚無工作</div>'}</div>
-        ${d.d1 ? '<div class="card" id="skBox" style="grid-column:1/-1"><h2>統一金鑰</h2><div class="small muted">讀取中…</div></div>' : ''}
         <div class="card" id="hcBox" style="grid-column:1/-1"><h2>資料源健康檢查<span class="r"><button class="btn sm" id="hcRun">立即檢查</button></span></h2><div class="small muted">讀取中…</div></div></div>`;
-    healthBox($('#hcBox', v), false); if ($('#skBox', v)) skBox($('#skBox', v)); $('#hcRun', v).onclick = () => healthBox($('#hcBox', v), true);
+    healthBox($('#hcBox', v), false); $('#hcRun', v).onclick = () => healthBox($('#hcBox', v), true);
     $$('[data-go]', v).forEach((b) => b.onclick = () => { S.tab = b.dataset.go; renderTabs(); render(); });
     if ($('#rdp')) $('#rdp').onclick = () => job('redeploy', {}, '已送出重新部署');
     bindReq(v);
@@ -1037,23 +1036,4 @@ async function delBox(el, force) {
   if (!force && S.delAt && Date.now() - S.delAt < 30000) return;
   try { const r = await call('delAdmin', { act: 'list' }); if (!r.ok) throw new Error(r.err); S.delL = r; S.delAt = Date.now(); draw(r); }
   catch (e) { if (!S.delL) el.innerHTML = `<h2>刪除中帳號</h2><div class="small muted">讀取失敗：${esc(e.message)}${/未知|不支援/.test(e.message) ? '（請在管理員 App 重新部署轉送站）' : ''}</div>`; }
-}
-
-// ───────── 統一金鑰：管理員 App 上傳的 AI／FinMind 金鑰（網頁只看狀態、用量，調整次數上限與暫停） ─────────
-async function skBox(el, act) {
-  let r;
-  if (!act && S.skL && Date.now() - S.skAt < 30000) r = S.skL;
-  else try { r = await call('skAdmin', act || {}); if (!r.ok) throw new Error(r.err); S.skL = r; S.skAt = Date.now(); } catch (e) { el.innerHTML = `<h2>統一金鑰</h2><div class="small muted">讀取失敗：${esc(e.message)}${/未知|不支援/.test(e.message) ? '（請在管理員 App 重新部署轉送站）' : ''}</div>`; return; }
-  if (!el.isConnected) return;
-  const days = {}; (r.usage || []).forEach((u) => { (days[u.day] = days[u.day] || {})[u.kind] = u; });
-  const set = r.aiSet || r.finmindSet;
-  el.innerHTML = `<h2>統一金鑰${set ? `<span class="r"><label class="row small" style="gap:6px;cursor:pointer"><input type="checkbox" id="skOn" style="width:auto" ${r.on ? 'checked' : ''}> 提供給會員使用</label></span>` : ''}</h2>
-    <div class="small muted" style="margin-bottom:8px">會員沒有自己的金鑰時，由轉送站用管理員的金鑰代為呼叫；金鑰加密存在轉送站，不會傳到使用者的手機或瀏覽器。會員自己填的金鑰一律優先。金鑰請在管理員 App「會員 › 設定與備份 › 統一金鑰」設定。</div>
-    ${kv([['AI 服務', r.aiSet ? r.ai.join('、') || '（已暫停）' : '未設定'], ['FinMind', r.finmindSet ? (r.finmind ? '已提供' : '（已暫停）') : '未設定'], ['上傳時間', r.at ? new Date(r.at).toLocaleString('zh-TW', { hour12: false }) : '—'], ['今日 AI 使用', ((days[r.today] || {}).ai || {}).n ? days[r.today].ai.n + ' 次（' + days[r.today].ai.users + ' 人）' : '0 次']])}
-    <div class="row wrap" style="gap:8px;margin-top:10px;align-items:flex-end"><div class="field" style="margin:0"><label>正式會員每日 AI 次數</label><input id="skQm" type="number" min="0" max="500" value="${r.q.member}" style="width:110px"></div>
-      <div class="field" style="margin:0"><label>試用／其他每日次數</label><input id="skQo" type="number" min="0" max="500" value="${r.q.other}" style="width:110px"></div><button class="btn sm" id="skQs">儲存次數</button></div>
-    ${Object.keys(days).length ? `<table class="tbl" style="margin-top:10px"><thead><tr><th>日期</th><th style="text-align:right">AI 次數</th><th style="text-align:right">AI 人數</th><th style="text-align:right">FinMind 查詢</th></tr></thead><tbody>
-      ${Object.keys(days).sort().reverse().map((dd) => `<tr><td>${esc(dd)}</td><td style="text-align:right">${(days[dd].ai || {}).n || 0}</td><td style="text-align:right">${(days[dd].ai || {}).users || 0}</td><td style="text-align:right">${(days[dd].fm || {}).n || 0}</td></tr>`).join('')}</tbody></table>` : ''}`;
-  if ($('#skOn', el)) $('#skOn', el).onchange = (e) => { skBox(el, { act: 'toggle', on: e.target.checked }); toast(e.target.checked ? '已恢復提供' : '已暫停提供統一金鑰'); };
-  $('#skQs', el).onclick = () => { skBox(el, { act: 'quota', member: $('#skQm', el).value, other: $('#skQo', el).value }); toast('✓ 已儲存每日次數'); };
 }
