@@ -68,9 +68,9 @@ async function logout(msg) {
 
 // ───────── 主畫面 ─────────
 /** 網頁版本（發布時由 .github/public/sync.sh 填入） */
-const WEB_VER = /*WEBVER*/{"v":"v1.1.388","sha":"73ea7ec","at":"2026-11-22 22:50"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"5329c1b","at":"2026-11-22 23:01"};
 const verText = () => (WEB_VER ? (WEB_VER.v ? (/^v/i.test(WEB_VER.v) ? WEB_VER.v : 'v' + WEB_VER.v) + ' · ' : '') + WEB_VER.sha + (WEB_VER.at ? ' · ' + WEB_VER.at : '') : '開發版');
-const TABS = [['home', '總覽'], ['req', '申請'], ['mem', '會員'], ['pol', '政策'], ['tier', '會員等級'], ['rel', '發布'], ['line', 'LINE'], ['forum', '討論區'], ['job', '工作紀錄']];
+const TABS = [['home', '總覽'], ['req', '申請'], ['trade', '交易'], ['msg', '訊息'], ['mem', '會員'], ['pol', '政策'], ['tier', '會員等級'], ['rel', '發布'], ['line', 'LINE'], ['forum', '討論區'], ['job', '工作紀錄']];
 /** 功能位元（與 App License.Feature 順序相同，不可調整） */
 const FEATS = ['K 線分析與進場建議', 'AI 個股體檢', '提醒與進場鈴聲', '行情牆與熱度圖', '股息與稅務', '投資分析工具', '報告', '市場與排行', '群聊', '備份與設定檔', '盤中持股監控', '桌面小工具', '進階圖表', '新聞', '外觀自訂', '個股進階資料'];
 const featBoxes = (name, mask) => `<div class="grid g2" style="gap:4px 12px">${FEATS.map((f, i) => `<label class="row small" style="gap:6px;cursor:pointer"><input type="checkbox" data-${name}="${i}" style="width:auto" ${mask & (1 << i) ? 'checked' : ''}> ${esc(f)}</label>`).join('')}</div>`;
@@ -99,7 +99,7 @@ async function refresh() {
     const done = lineJobsDone();
     // LINE 頁：沒有在輸入、沒有開對話框時才重畫（輸入內容都保存在 S，重畫不會遺失）
     if (S.tab === 'line' && S.rendered === 'line') { if (!lineFocused() && !$('.modal-bg')) render(); else renderLineRes(); if (done) renderLineRes(); }
-    else if (!(['pol', 'tier', 'forum'].includes(S.tab) && S.rendered === S.tab)) render();
+    else if (!(['pol', 'tier', 'forum', 'trade', 'msg'].includes(S.tab) && S.rendered === S.tab)) render();
   }
   catch (e) { if (S.ses) { const el = $('#live'); if (el) el.querySelector('span').textContent = '讀取失敗：' + e.message; } }
 }
@@ -205,7 +205,9 @@ function render() {
         <div class="card"><h2>發佈站與 LINE</h2>${kv([['已部署版本', app.worker && app.worker.app ? 'v' + app.worker.app : '—'], ['部署時間', app.worker && app.worker.at ? new Date(app.worker.at).toLocaleString('zh-TW') : '—'], ['狀態', app.worker ? (app.worker.need ? '有新版可部署' : '最新') : '—']])}
           ${app.worker && app.worker.ready ? `<button class="btn" id="rdp" style="margin-top:10px">重新部署</button>` : ''}</div>
         <div class="card"><h2>最近申請</h2>${reqs.length ? reqs.slice(0, 5).map(reqRow).join('') : '<div class="small muted">沒有待處理的申請</div>'}</div>
-        <div class="card"><h2>最近工作</h2>${d.jobs.slice(0, 6).map(jobRow).join('') || '<div class="small muted">尚無工作</div>'}</div></div>`;
+        <div class="card"><h2>最近工作</h2>${d.jobs.slice(0, 6).map(jobRow).join('') || '<div class="small muted">尚無工作</div>'}</div>
+        <div class="card" id="hcBox" style="grid-column:1/-1"><h2>資料源健康檢查<span class="r"><button class="btn sm" id="hcRun">立即檢查</button></span></h2><div class="small muted">讀取中…</div></div></div>`;
+    healthBox($('#hcBox', v), false); $('#hcRun', v).onclick = () => healthBox($('#hcBox', v), true);
     $$('[data-go]', v).forEach((b) => b.onclick = () => { S.tab = b.dataset.go; renderTabs(); render(); });
     if ($('#rdp')) $('#rdp').onclick = () => job('redeploy', {}, '已送出重新部署');
     bindReq(v);
@@ -264,6 +266,10 @@ function render() {
       if (r.v === 'ok') { const g = (id) => $('#' + id, r.box).checked; job('release', { version: ver, notes: $('#rn', r.box).value.trim(), server: g('rS'), worker: g('rW'), promote: g('rP'), line: g('rP') && g('rL') }, '已送出一鍵發布及部署'); }
     });
     $('#rdp2').onclick = () => job('redeploy', {}, '已送出重新部署');
+  } else if (S.tab === 'trade') {
+    renderTrade(v);
+  } else if (S.tab === 'msg') {
+    renderMsg(v);
   } else if (S.tab === 'job') {
     v.innerHTML = `<div class="card"><h2>工作紀錄</h2><div class="small muted" style="margin-bottom:8px">網頁送出的動作由管理員 App 執行；${appOnline() ? '目前 App 已連線。' : '目前 App 沒有開著，開啟後自動執行。'}</div>${d.jobs.map(jobRow).join('') || '<div class="small muted">尚無工作</div>'}</div>`;
     $$('[data-cancel]', v).forEach((b) => b.onclick = async () => { await call('cancel', { id: b.dataset.cancel }).catch(() => {}); refresh(); });
@@ -282,12 +288,14 @@ function jobRow(j) {
 function reqRow(r, i) {
   return `<div class="tile" style="margin-top:8px"><div class="row wrap"><b style="flex:1">${kindN(r.kind)}　${esc(r.name || '（未填名稱）')}${r.no ? ' · ' + esc(r.no) : ''}</b><span class="small muted">${esc(typeof r.at === 'number' ? new Date(r.at).toLocaleString('zh-TW') : String(r.at).slice(0, 16))}</span></div>
     <div class="small text2">${r.contact ? '聯絡：' + esc(r.contact) + '　' : ''}${r.dev ? '裝置 ' + esc(r.dev) + '　' : '💻 網頁　'}${esc(r.msg || '')}</div>
-    <div class="row" style="gap:6px;margin-top:6px"><button class="btn sm primary" data-ri="${i}">開通</button>${r.key ? `<button class="btn sm" data-rd="${i}">標記已處理</button>` : '<span class="small muted">（管理員 App 同步後可標記）</span>'}</div></div>`;
+    <div class="row" style="gap:6px;margin-top:6px"><button class="btn sm primary" data-ri="${i}">開通</button>${S.d && S.d.d1 && r.no ? `<button class="btn sm" data-ro="${i}">建立訂單</button>` : ''}${r.key ? `<button class="btn sm" data-rd="${i}">標記已處理</button>` : '<span class="small muted">（管理員 App 同步後可標記）</span>'}</div></div>`;
 }
 function bindReq(v) {
   const reqs = pendingReqs();
   $$('[data-ri]', v).forEach((b) => b.onclick = () => { const r = reqs[+b.dataset.ri]; const m = (S.d.members || []).find((x) => r.no && x.no === r.no);
     issueDialog({ no: r.no, name: r.name, contact: r.contact, device: r.dev, request: r.key, renew: r.kind !== 'new' && !!m, note: '申請：' + (r.msg || '').slice(0, 60) }); });
+  $$('[data-ro]', v).forEach((b) => b.onclick = () => { const r = reqs[+b.dataset.ro]; const pm = /方案：(\S+ ?\S*?) NT\$/.exec(r.msg || '');
+    orderNew({ no: r.no, requestId: r.id || '', plan: pm ? pm[1] : '', note: '申請：' + (r.msg || '').slice(0, 60) }); });
   $$('[data-rd]', v).forEach((b) => b.onclick = async () => { const r = reqs[+b.dataset.rd]; const x = await dialog('處理申請', `<div class="field"><label>處理結果</label><input id="rres" value="已處理"></div>`, [['', '取消'], ['del', '刪除'], ['ok', '標記已處理', 'primary']]);
     if (x.v === 'ok') job('request', { key: r.key, result: $('#rres', x.box).value }, '已送出'); else if (x.v === 'del') job('request', { key: r.key, delete: true }, '已送出刪除'); });
 }
@@ -780,6 +788,18 @@ function priceEditor(box, p) {
   };
   draw();
 }
+/** 資料源健康檢查（轉送站每天收盤後檢查；異常時管理員 App 會通知） */
+async function healthBox(box, run) {
+  const body = () => box.querySelector('.hcb') || (box.insertAdjacentHTML('beforeend', '<div class="hcb"></div>'), box.querySelector('.hcb'));
+  box.querySelectorAll(':scope > .small.muted').forEach((e) => e.remove());
+  const b = body(); b.innerHTML = '<div class="small muted">' + (run ? '檢查中（約 20 秒）…' : '讀取中…') + '</div>';
+  try {
+    const r = await fetch('/api/health' + (run ? '?run=1' : ''), { cache: 'no-store' }); const h = await r.json();
+    if (!h.at) { b.innerHTML = '<div class="small muted">尚未檢查（每天 17:30 後自動執行；轉送站需重新部署才有此功能），可按「立即檢查」。</div>'; return; }
+    b.innerHTML = `<div class="small ${h.ok ? 'muted' : 'up'}" style="margin-bottom:6px">${h.ok ? '✓ 全部正常' : '⚠ ' + h.bad + ' 項異常'}・${new Date(h.at).toLocaleString('zh-TW')}</div>
+      <table class="tbl"><tbody>${h.items.map((x) => `<tr><td>${x.ok ? '✅' : '⛔'} ${esc(x.name)}</td><td class="num small muted">${x.ms} ms${x.n != null ? '・' + x.n + ' 筆' : ''}</td><td class="small ${x.ok ? 'muted' : 'up'}">${x.ok ? '正常' : esc(x.err)}</td></tr>`).join('')}</tbody></table>`;
+  } catch (e) { b.innerHTML = '<div class="small up">無法讀取：' + esc(e.message) + '</div>'; }
+}
 function tierEditor(box, p) {
   if (!S.tiers) S.tiers = JSON.parse(JSON.stringify(p.tiers || []));
   const T = S.tiers;
@@ -813,4 +833,174 @@ function tierEditor(box, p) {
     };
   };
   draw();
+}
+
+// ───────── 交易（訂單）與訊息：資料在會員資料庫 D1，由轉送站直接處理；開通交給管理員 App 簽章 ─────────
+const ORD_ST = { 0: ['待付款', '#f59e0b'], 1: ['已付款', '#3b82f6'], 2: ['已開通', '#16a34a'], 8: ['已取消', '#94a3b8'], 9: ['已退款', '#ef4444'] };
+const PAY_METHODS = ['轉帳', 'LINE Pay', '街口支付', '現金', '其他'];
+const CH_N = { auto: '自動（有 LINE 用 LINE，否則 Email）', line: 'LINE', email: 'Email', both: 'LINE 與 Email' };
+const MSG_ST = { 0: ['排隊', 'muted'], 1: ['已送出', ''], 2: ['失敗', 'up'], 3: ['略過', 'muted'] };
+const fmtN = (n) => Number(n || 0).toLocaleString('zh-TW');
+const tsText = (t) => (t ? new Date(t).toLocaleString('zh-TW', { hour12: false }).replace(/:\d\d$/, '') : '');
+const ordBadge = (s) => { const [n, c] = ORD_ST[s] || ['?', '#94a3b8']; return `<span class="badge" style="color:${c};border-color:${c}">${n}</span>`; };
+const monthsToDays = (m) => ({ 1: 30, 3: 90, 6: 182, 12: 365 }[m] || Math.round(m * 30.42));
+function tradePlans() {
+  const p = (S.d.app && S.d.app.policy) || {};
+  const plans = (p.prices && p.prices.length ? p.prices : [{ n: '1 個月', m: 1, p: 199, t: 0 }, { n: '3 個月', m: 3, p: 499, t: 0 }, { n: '6 個月', m: 6, p: 799, t: 0 }, { n: '1 年', m: 12, p: 1099, t: 0 }]);
+  const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10).replace(/-/g, '/');
+  const disc = p.disc > 0 && (!p.discUntil || today <= String(p.discUntil).replace(/-/g, '/')) ? p.disc : 0;
+  return { plans, disc, label: p.discLabel || '' };
+}
+async function tcall(act, extra = {}) { const r = await call('trade', { act, ...extra }); if (!r.ok) throw new Error(r.err || '失敗'); return r; }
+async function renderTrade(v) {
+  if (!S.d.d1) { v.innerHTML = '<div class="card empty">交易紀錄需要會員資料庫（D1）：請先在管理員 App「會員 › 設定與備份 › 會員資料庫」完成搬移。</div>'; return; }
+  S.tf = S.tf || { status: '', q: '' };
+  v.innerHTML = '<div class="card empty">讀取中…</div>';
+  let r; try { r = await tcall('list', { status: S.tf.status, q: S.tf.q }); } catch (e) { v.innerHTML = `<div class="card empty">讀取失敗：${esc(e.message)}${/未知/.test(e.message) ? '（請在管理員 App 重新部署轉送站）' : ''}</div>`; return; }
+  if (S.tab !== 'trade') return;
+  S.tr = r; const s = r.sum;
+  v.innerHTML = `<div class="grid g4" style="gap:10px">${[['本月營收', 'NT$' + fmtN(s.monthRev)], ['本月付款筆數', s.monthN], ['待付款', 'NT$' + fmtN(s.pending)], ['待付款筆數', s.pendingN]].map(([k, x]) => `<div class="tile"><div class="k">${k}</div><div class="v">${x}</div></div>`).join('')}</div>
+    <div class="card" style="margin-top:12px"><h2>訂單<span class="r"><button class="btn sm" id="tPay">付款與通知設定</button> <button class="btn sm primary" id="tNew">＋ 新增訂單</button></span></h2>
+      <div class="row wrap" style="gap:6px;margin-bottom:8px">${[['', '全部'], ['0', '待付款'], ['1', '已付款'], ['2', '已開通'], ['8', '已取消'], ['9', '已退款']].map(([k, n]) => `<button class="btn sm ${S.tf.status === k ? 'primary' : ''}" data-tst="${k}">${n}</button>`).join('')}
+        <input id="tQ" placeholder="訂單編號或會員代號" value="${esc(S.tf.q)}" style="max-width:200px"></div>
+      ${r.orders.length ? `<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>訂單</th><th>會員</th><th>方案</th><th style="text-align:right">金額</th><th>狀態</th><th>建立</th></tr></thead><tbody>
+        ${r.orders.map((o) => `<tr data-oid="${esc(o.id)}" style="cursor:pointer"><td class="num">${esc(o.no)}</td><td>${esc(o.memberNo || '—')}</td><td>${esc(o.plan)}</td><td style="text-align:right">NT$${fmtN(o.amount)}${o.disc ? `<div class="small muted">原價 ${fmtN(o.listPrice)}</div>` : ''}</td><td>${ordBadge(o.status)}</td><td class="small muted">${tsText(o.createdAt)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="small muted">沒有訂單。可從「申請」頁按「建立訂單」，或按右上「新增訂單」。</div>'}</div>
+    ${s.months.length ? `<div class="card" style="margin-top:12px"><h2>每月營收</h2><table class="tbl"><tbody>${s.months.map((m) => `<tr><td>${esc(m.ym)}</td><td style="text-align:right">NT$${fmtN(m.rev)}</td><td class="small muted" style="text-align:right">${m.n} 筆</td></tr>`).join('')}</tbody></table></div>` : ''}`;
+  $$('[data-tst]', v).forEach((b) => b.onclick = () => { S.tf.status = b.dataset.tst; renderTrade(v); });
+  $('#tQ', v).onchange = (e) => { S.tf.q = e.target.value.trim(); renderTrade(v); };
+  $('#tNew', v).onclick = () => orderNew({});
+  $('#tPay', v).onclick = () => payCfgDialog();
+  $$('[data-oid]', v).forEach((tr) => tr.onclick = () => orderDialog(tr.dataset.oid));
+}
+/** 新增訂單（可由申請帶入會員與申請編號） */
+async function orderNew(pre) {
+  const { plans, disc, label } = tradePlans(); const ms = S.d.members || [];
+  const x = await dialog('新增訂單', `<div class="field"><label>會員代號</label><input id="oNo" list="oNoL" value="${esc(pre.no || '')}" placeholder="例 U0001"><datalist id="oNoL">${ms.map((m) => `<option value="${esc(m.no)}">${esc(m.name || '')}</option>`).join('')}</datalist></div>
+    <div class="field"><label>方案</label><select id="oPl">${plans.map((p, i) => `<option value="${i}" ${pre.plan === p.n ? 'selected' : ''}>${esc(p.n)}（原價 NT$${fmtN(p.p)}）</option>`).join('')}</select></div>
+    <div class="grid g2" style="gap:8px"><div class="field"><label>折扣 %${disc ? '（' + esc(label || '活動') + '）' : ''}</label><input id="oDs" type="number" min="0" max="90" value="${disc}"></div><div class="field"><label>應收金額</label><input id="oAm" type="number" min="0"></div></div>
+    <div class="field"><label>付款方式</label><select id="oPm">${PAY_METHODS.map((m) => `<option>${m}</option>`).join('')}</select></div>
+    <div class="field"><label>備註（選填）</label><input id="oNt" maxlength="300" value="${esc(pre.note || '')}"></div>
+    <label class="row small" style="gap:6px;cursor:pointer"><input type="checkbox" id="oSend" style="width:auto" checked> 建立後發送付款資訊</label>
+    <div class="field"><label>發送管道</label><select id="oCh">${Object.entries(CH_N).map(([k, n]) => `<option value="${k}">${n}</option>`).join('')}</select></div><div id="derr" class="small up"></div>`,
+    [['', '取消'], ['ok', '建立訂單', 'primary']], (bg) => {
+      const calc = () => { const p = plans[+$('#oPl', bg).value]; $('#oAm', bg).value = Math.round(p.p * (100 - (+$('#oDs', bg).value || 0)) / 100); };
+      $('#oPl', bg).onchange = calc; $('#oDs', bg).oninput = calc; calc();
+      return () => (!$('#oNo', bg).value.trim() ? '請輸入會員代號' : null);
+    });
+  if (x.v !== 'ok') return;
+  const p = plans[+$('#oPl', x.box).value];
+  try {
+    const r = await tcall('create', { memberNo: $('#oNo', x.box).value.trim().toUpperCase(), requestId: pre.requestId || '', plan: { name: p.n, months: p.m, price: p.p, tier: p.t || 0 },
+      disc: +$('#oDs', x.box).value || 0, amount: $('#oAm', x.box).value, payMethod: $('#oPm', x.box).value, note: $('#oNt', x.box).value, sendPayinfo: $('#oSend', x.box).checked, channel: $('#oCh', x.box).value });
+    toast('✓ 已建立訂單 ' + r.order.no + (r.sent ? '，' + sentText(r.sent) : '')); S.tab = 'trade'; store.set('tab', 'trade'); renderTabs(); render();
+  } catch (e) { toast('建立失敗：' + e.message, 6000); }
+}
+const sentText = (l) => (l || []).map((x) => (x.channel === 'line' ? 'LINE' : 'Email') + (x.status === 1 ? '已送出' : x.status === 3 ? '略過（' + x.err + '）' : '失敗（' + x.err + '）')).join('、');
+/** 訂單詳情：付款、開通、通知、取消／退款、事件與訊息紀錄 */
+async function orderDialog(id) {
+  let r; try { r = await tcall('get', { id }); } catch (e) { return toast(e.message); }
+  const o = r.order, m = r.member;
+  const acts = [];
+  if (o.status === 0) acts.push(['paid', '標記已付款', 'primary'], ['payinfo', '發送付款資訊'], ['payremind', '付款提醒'], ['cancel', '取消訂單', 'danger']);
+  if (o.status === 1) acts.push(['issue', '開通會員', 'primary'], ['refund', '退款', 'danger']);
+  if (o.status === 2) acts.push(['issued', '重發開通通知'], ['refund', '退款', 'danger']);
+  acts.push(['msg', '自訂訊息'], ['note', '備註'], ['', '關閉']);
+  const x = await dialog('訂單 ' + o.no, `<div class="row" style="gap:8px;margin-bottom:8px">${ordBadge(o.status)}<b>${esc(o.plan)}</b><span>NT$${fmtN(o.amount)}${o.disc ? `<span class="small muted">（原價 ${fmtN(o.listPrice)}，${o.disc}% 折扣）</span>` : ''}</span></div>
+    ${kv([['會員', m ? m.no + ' ' + (m.name || '') : o.memberNo || '—'], ['通知管道', m ? (m.line ? 'LINE ✓ ' : 'LINE ✗ ') + (m.email ? 'Email ✓' : 'Email ✗') : '—'], ['付款方式', o.payMethod + (o.payRef ? '（' + o.payRef + '）' : '')], ['建立', tsText(o.createdAt) + ' · ' + o.src],
+      ['付款', tsText(o.paidAt) || '—'], ['開通', o.license || '—']])}
+    ${o.note ? `<div class="small text2" style="margin-top:6px">備註：${esc(o.note)}</div>` : ''}
+    <h4 style="margin:12px 0 4px">事件</h4>${r.events.map((e) => `<div class="small"><span class="muted">${tsText(e.at)}</span> ${esc(e.action)} <span class="muted">${esc(e.src)}</span>${e.detail ? '<div class="small text2" style="margin-left:12px">' + esc(e.detail) + '</div>' : ''}</div>`).join('')}
+    ${r.messages.length ? `<h4 style="margin:12px 0 4px">訊息</h4>${r.messages.map((x2) => `<div class="small"><span class="muted">${tsText(x2.at)}</span> ${x2.channel === 'line' ? 'LINE' : 'Email'}・${esc(x2.subject || x2.template)} <span class="${MSG_ST[x2.status][1]}">${MSG_ST[x2.status][0]}</span>${x2.err ? ' <span class="small muted">' + esc(x2.err) + '</span>' : ''}</div>`).join('')}` : ''}`, acts);
+  const v = x.v; if (!v) return;
+  try {
+    if (v === 'paid') {
+      const y = await dialog('標記已付款', `<div class="field"><label>付款方式</label><select id="pM">${PAY_METHODS.map((n) => `<option ${n === o.payMethod ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+        <div class="field"><label>付款參考（帳號後五碼、交易序號）</label><input id="pR" maxlength="60"></div><div class="field"><label>實收金額</label><input id="pA" type="number" value="${o.amount}"></div>
+        <label class="row small" style="gap:6px;cursor:pointer"><input type="checkbox" id="pI" style="width:auto" checked> 標記後立即開通（交給管理員 App 簽發授權碼）</label>`, [['', '取消'], ['ok', '確認已付款', 'primary']]);
+      if (y.v !== 'ok') return;
+      await tcall('paid', { id: o.id, payMethod: $('#pM', y.box).value, payRef: $('#pR', y.box).value.trim(), amount: $('#pA', y.box).value });
+      toast('✓ 已標記付款');
+      if ($('#pI', y.box).checked) await orderIssue(o, m); else refresh();
+    } else if (v === 'issue') await orderIssue(o, m);
+    else if (v === 'cancel' || v === 'refund') {
+      const y = await dialog(v === 'cancel' ? '取消訂單' : '退款', `<div class="field"><label>原因</label><input id="cR" maxlength="200"></div>${v === 'refund' ? '<div class="small muted">退款只記錄狀態；如需停用授權，請在「會員」頁停用該會員的授權。</div>' : ''}`, [['', '返回'], ['ok', '確定', 'danger']]);
+      if (y.v !== 'ok') return; await tcall(v, { id: o.id, reason: $('#cR', y.box).value }); toast('✓ 已' + (v === 'cancel' ? '取消' : '標記退款'));
+    } else if (v === 'note') {
+      const y = await dialog('備註', `<textarea id="nT" rows="3" maxlength="300">${esc(o.note || '')}</textarea>`, [['', '取消'], ['ok', '儲存', 'primary']]);
+      if (y.v !== 'ok') return; await tcall('note', { id: o.id, note: $('#nT', y.box).value }); toast('✓ 已儲存備註');
+    } else {
+      const y = await msgDialog(v === 'msg' ? '自訂訊息' : '發送通知', v === 'msg');
+      if (!y) return; const r2 = await tcall('send', { id: o.id, template: v === 'msg' ? 'custom' : v, channel: y.channel, subject: y.subject, text: y.text });
+      toast(sentText(r2.sent) || '已送出', 6000);
+    }
+  } catch (e) { toast('失敗：' + e.message, 6000); }
+  if (S.tab === 'trade') render();
+}
+/** 開通：交給管理員 App 簽發授權碼；完成後轉送站把訂單改為已開通並依設定發開通通知 */
+async function orderIssue(o, m) {
+  if (!o.memberNo) return toast('訂單沒有會員代號，無法開通');
+  const tiers = (((S.d.app && S.d.app.policy) || {}).tiers || []);
+  const def = o.tier || (tiers.find((t) => !t.hidden) || tiers[0] || {}).id || 0;
+  const x = await dialog('開通 ' + o.memberNo, `<div class="field"><label>會員等級</label><select id="iT">${tiers.map((t) => `<option value="${t.id}" ${t.id === def ? 'selected' : ''}>${esc(t.name)}${t.hidden ? '（隱藏）' : ''}</option>`).join('')}</select></div>
+    <div class="field"><label>天數</label><input id="iD" type="number" min="1" value="${monthsToDays(o.months)}"></div>
+    <div class="small muted">${m && m.expiry ? '會員目前到期 ' + esc(m.expiry) + '，將從原到期日往後延長。' : '從今天起算。'}由管理員 App 簽發授權碼；完成後訂單自動改為已開通${'並依設定通知會員'}。</div><div id="derr" class="small up"></div>`,
+    [['', '取消'], ['ok', '開通', 'primary']], (bg) => () => (!tiers.length ? '尚未設定會員等級' : !(+$('#iD', bg).value > 0) ? '請輸入天數' : null));
+  if (x.v !== 'ok') return;
+  const ok = await job('issue', { no: o.memberNo, tier: +$('#iT', x.box).value, days: +$('#iD', x.box).value, renew: !!(m && m.expiry), request: o.requestId || '', order: o.id, note: '訂單 ' + o.no + '（NT$' + o.amount + '）' }, '開通 ' + o.memberNo + ' · ' + o.plan);
+  if (ok) toast('已送出開通：管理員 App 完成後訂單自動改為已開通', 6000);
+}
+async function msgDialog(title, custom) {
+  const x = await dialog(title, `<div class="field"><label>發送管道</label><select id="mC">${Object.entries(CH_N).map(([k, n]) => `<option value="${k}">${n}</option>`).join('')}</select></div>
+    ${custom ? '<div class="field"><label>標題（Email 主旨；LINE 會顯示在第一行）</label><input id="mS" maxlength="60"></div><div class="field"><label>內容</label><textarea id="mT" rows="5" maxlength="4000"></textarea></div><div id="derr" class="small up"></div>' : '<div class="small muted">使用「付款與通知設定」中的範本內容。</div>'}`,
+    [['', '取消'], ['ok', '發送', 'primary']], (bg) => () => (custom && !$('#mT', bg).value.trim() ? '請輸入內容' : null));
+  if (x.v !== 'ok') return null;
+  return { channel: $('#mC', x.box).value, subject: custom ? $('#mS', x.box).value.trim() : '', text: custom ? $('#mT', x.box).value.trim() : '' };
+}
+/** 付款與通知設定：銀行帳戶（台灣金融機構代碼）、其他付款方式、期限、自動通知、訊息範本 */
+async function payCfgDialog() {
+  let r; try { r = await tcall('cfgGet'); } catch (e) { return toast(e.message); }
+  const c = r.cfg || {}; const banks = (c.banks && c.banks.length ? c.banks : [{}]).concat([]); const others = (c.others && c.others.length ? c.others : [{ name: 'LINE Pay', text: '' }]);
+  const bankOpts = (sel) => `<option value="">選擇銀行</option>${r.banks.map(([k, n]) => `<option value="${k}" ${sel === k ? 'selected' : ''}>${k} ${esc(n)}</option>`).join('')}<option value="custom" ${sel && !r.banks.some(([k]) => k === sel) ? 'selected' : ''}>其他（自行輸入代碼）</option>`;
+  const bankRow = (b, i) => `<div class="tile" style="margin-top:6px" data-bk="${i}"><div class="grid g2" style="gap:6px"><div class="field" style="margin:0"><label>銀行（金融機構代碼）</label><select data-bf="code">${bankOpts(b.code)}</select></div>
+    <div class="field" style="margin:0"><label>自訂代碼／名稱</label><input data-bf="custom" value="${esc(b.code && !r.banks.some(([k]) => k === b.code) ? b.code + ' ' + (b.name || '') : '')}" placeholder="例 999 某某銀行"></div>
+    <div class="field" style="margin:0"><label>分行（選填）</label><input data-bf="branch" value="${esc(b.branch || '')}" maxlength="20"></div><div class="field" style="margin:0"><label>帳號</label><input data-bf="account" value="${esc(b.account || '')}" maxlength="20" inputmode="numeric"></div>
+    <div class="field" style="margin:0"><label>戶名</label><input data-bf="holder" value="${esc(b.holder || '')}" maxlength="30"></div></div></div>`;
+  const tplKeys = [['payinfo', '付款資訊'], ['payremind', '付款提醒'], ['issued', '開通通知'], ['remind', '到期提醒'], ['promo', '續約優惠']];
+  const x = await dialog('付款與通知設定', `<h4 style="margin:0 0 4px">轉帳帳戶（最多 5 個）</h4><div id="bkBox">${banks.map(bankRow).join('')}</div><button class="btn sm" id="bkAdd" style="margin-top:6px">＋ 新增帳戶</button>
+    <h4 style="margin:12px 0 4px">其他付款方式</h4>${[0, 1, 2].map((i) => `<div class="grid g2" style="gap:6px;margin-top:4px"><input data-on="${i}" placeholder="名稱（例 LINE Pay、街口支付）" value="${esc((others[i] || {}).name || '')}"><input data-ot="${i}" placeholder="說明（例 付款連結、ID）" value="${esc((others[i] || {}).text || '')}"></div>`).join('')}
+    <div class="grid g2" style="gap:8px;margin-top:8px"><div class="field"><label>付款期限（天，0＝不顯示）</label><input id="cDays" type="number" min="0" max="30" value="${c.days || 0}"></div><div class="field"><label>付款備註</label><input id="cNote" maxlength="200" value="${esc(c.note || '')}" placeholder="例 轉帳後請回覆後五碼"></div></div>
+    <label class="row small" style="gap:6px;cursor:pointer"><input type="checkbox" id="cAI" style="width:auto" ${c.autoIssued !== false ? 'checked' : ''}> 開通完成後自動發開通通知</label>
+    <h4 style="margin:12px 0 4px">訊息範本</h4><div class="small muted">可用變數：{暱稱} {訂單編號} {方案} {金額} {付款資訊} {開通資訊} {到期日}</div>
+    ${tplKeys.map(([k, n]) => `<details style="margin-top:6px"><summary>${n}</summary><input data-ts="${k}" value="${esc(r.tpl[k].subject)}" maxlength="60" style="margin:6px 0"><textarea data-tb="${k}" rows="5" maxlength="2000">${esc(r.tpl[k].body)}</textarea></details>`).join('')}
+    <h4 style="margin:12px 0 4px">付款資訊預覽</h4><pre class="small" style="white-space:pre-wrap;background:var(--bg);padding:8px;border-radius:8px">${esc(r.payText)}</pre>`,
+    [['', '取消'], ['ok', '儲存', 'primary']], (bg) => { $('#bkAdd', bg).onclick = () => { if ($$('[data-bk]', bg).length >= 5) return; $('#bkBox', bg).insertAdjacentHTML('beforeend', bankRow({}, $$('[data-bk]', bg).length)); }; return null; });
+  if (x.v !== 'ok') return;
+  const bx = x.box; const names = Object.fromEntries(r.banks);
+  const nb = $$('[data-bk]', bx).map((el) => { const g = (f) => $(`[data-bf="${f}"]`, el).value.trim(); let code = g('code'), name = names[code] || '';
+    if (code === 'custom' || (!code && g('custom'))) { const mm = /^(\d{3})\s*(.*)$/.exec(g('custom')); code = mm ? mm[1] : ''; name = mm ? mm[2] : ''; }
+    return { code, name, branch: g('branch'), account: g('account'), holder: g('holder') }; }).filter((b) => b.code && b.account);
+  const no = [0, 1, 2].map((i) => ({ name: $(`[data-on="${i}"]`, bx).value.trim(), text: $(`[data-ot="${i}"]`, bx).value.trim() })).filter((o) => o.name && o.text);
+  const tpl = {}; tplKeys.forEach(([k]) => { tpl[k] = { subject: $(`[data-ts="${k}"]`, bx).value, body: $(`[data-tb="${k}"]`, bx).value }; });
+  try { await tcall('cfgSet', { cfg: { banks: nb, others: no, days: $('#cDays', bx).value, note: $('#cNote', bx).value, autoIssued: $('#cAI', bx).checked }, tpl }); toast('✓ 已儲存付款與通知設定'); }
+  catch (e) { toast('儲存失敗：' + e.message, 6000); }
+}
+/** 訊息紀錄與對會員發訊 */
+async function renderMsg(v) {
+  if (!S.d.d1) { v.innerHTML = '<div class="card empty">訊息功能需要會員資料庫（D1）。</div>'; return; }
+  v.innerHTML = '<div class="card empty">讀取中…</div>';
+  let r; try { r = await call('msgList', { limit: 150 }); if (!r.ok) throw new Error(r.err); } catch (e) { v.innerHTML = `<div class="card empty">讀取失敗：${esc(e.message)}</div>`; return; }
+  if (S.tab !== 'msg') return;
+  v.innerHTML = `<div class="card"><h2>訊息紀錄<span class="r"><button class="btn sm primary" id="mNew">＋ 發送訊息給會員</button></span></h2>
+    <div class="small muted" style="margin-bottom:8px">LINE 發給已綁定官方帳號的會員；Email 由管理員 Gmail（Apps Script）寄出，個人 Gmail 每天最多 100 位收件者。</div>
+    ${r.messages.length ? `<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>時間</th><th>會員</th><th>管道</th><th>內容</th><th>狀態</th></tr></thead><tbody>${r.messages.map((x) => `<tr><td class="small muted">${tsText(x.at)}</td><td>${esc(x.no)} ${esc(x.name)}</td><td>${x.channel === 'line' ? 'LINE' : 'Email'}</td><td>${esc(x.subject || x.template)}</td><td class="${MSG_ST[x.status][1]}">${MSG_ST[x.status][0]}${x.err ? '<div class="small muted">' + esc(x.err) + '</div>' : ''}</td></tr>`).join('')}</tbody></table></div>` : '<div class="small muted">尚無訊息。</div>'}</div>`;
+  $('#mNew', v).onclick = async () => {
+    const ms = S.d.members || [];
+    const x = await dialog('發送訊息給會員', `<div class="field"><label>會員代號</label><input id="gNo" list="gNoL"><datalist id="gNoL">${ms.map((m) => `<option value="${esc(m.no)}">${esc(m.name || '')}</option>`).join('')}</datalist></div>
+      <div class="field"><label>發送管道</label><select id="gC">${Object.entries(CH_N).map(([k, n]) => `<option value="${k}">${n}</option>`).join('')}</select></div>
+      <div class="field"><label>標題</label><input id="gS" maxlength="60"></div><div class="field"><label>內容</label><textarea id="gT" rows="5" maxlength="4000"></textarea></div><div id="derr" class="small up"></div>`,
+      [['', '取消'], ['ok', '發送', 'primary']], (bg) => () => (!$('#gNo', bg).value.trim() ? '請輸入會員代號' : !$('#gT', bg).value.trim() ? '請輸入內容' : null));
+    if (x.v !== 'ok') return;
+    try { const r2 = await call('msgMember', { no: $('#gNo', x.box).value.trim().toUpperCase(), channel: $('#gC', x.box).value, subject: $('#gS', x.box).value.trim(), text: $('#gT', x.box).value.trim() });
+      if (!r2.ok) throw new Error(r2.err); toast(sentText(r2.sent), 6000); renderMsg(v); } catch (e) { toast('發送失敗：' + e.message, 6000); }
+  };
 }
