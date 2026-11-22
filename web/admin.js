@@ -68,7 +68,7 @@ async function logout(msg) {
 
 // ───────── 主畫面 ─────────
 /** 網頁版本（發布時由 .github/public/sync.sh 填入） */
-const WEB_VER = /*WEBVER*/{"v":"","sha":"00c7878","at":"2026-11-23 02:46"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"71436c3","at":"2026-11-23 02:52"};
 const verText = () => (WEB_VER ? (WEB_VER.v ? (/^v/i.test(WEB_VER.v) ? WEB_VER.v : 'v' + WEB_VER.v) + ' · ' : '') + WEB_VER.sha + (WEB_VER.at ? ' · ' + WEB_VER.at : '') : '開發版');
 const TABS = [['home', '總覽'], ['req', '申請'], ['trade', '交易'], ['msg', '訊息'], ['mem', '會員'], ['pol', '政策'], ['tier', '會員等級'], ['rel', '發布'], ['line', 'LINE'], ['forum', '討論區'], ['job', '工作紀錄']];
 /** 功能位元（與 App License.Feature 順序相同，不可調整） */
@@ -207,9 +207,10 @@ function render() {
           ${app.worker && app.worker.ready ? `<button class="btn" id="rdp" style="margin-top:10px">重新部署</button>` : ''}</div>
         <div class="card"><h2>最近申請</h2>${reqs.length ? reqs.slice(0, 5).map(reqRow).join('') : '<div class="small muted">沒有待處理的申請</div>'}</div>
         <div class="card"><h2>最近工作</h2>${d.jobs.slice(0, 6).map(jobRow).join('') || '<div class="small muted">尚無工作</div>'}</div>
+        ${d.d1 ? '<div class="card" id="useBox" style="grid-column:1/-1"><h2>用量與成本</h2><div class="small muted">讀取中…</div></div>' : ''}
         ${d.d1 ? '<div class="card" id="skBox" style="grid-column:1/-1"><h2>統一金鑰</h2><div class="small muted">讀取中…</div></div>' : ''}
         <div class="card" id="hcBox" style="grid-column:1/-1"><h2>資料源健康檢查<span class="r"><button class="btn sm" id="hcRun">立即檢查</button></span></h2><div class="small muted">讀取中…</div></div></div>`;
-    healthBox($('#hcBox', v), false); if ($('#skBox', v)) skBox($('#skBox', v)); $('#hcRun', v).onclick = () => healthBox($('#hcBox', v), true);
+    healthBox($('#hcBox', v), false); if ($('#skBox', v)) skBox($('#skBox', v)); if ($('#useBox', v)) useBox($('#useBox', v)); $('#hcRun', v).onclick = () => healthBox($('#hcBox', v), true);
     $$('[data-go]', v).forEach((b) => b.onclick = () => { S.tab = b.dataset.go; renderTabs(); render(); });
     if ($('#rdp')) $('#rdp').onclick = () => job('redeploy', {}, '已送出重新部署');
     bindReq(v);
@@ -1059,4 +1060,24 @@ async function skBox(el, act) {
       ${Object.keys(days).sort().reverse().map((dd) => `<tr><td>${esc(dd)}</td><td style="text-align:right">${(days[dd].ai || {}).n || 0}</td><td style="text-align:right">${(days[dd].ai || {}).users || 0}</td><td style="text-align:right">${(days[dd].fm || {}).n || 0}</td></tr>`).join('')}</tbody></table>` : ''}`;
   if ($('#skOn', el)) $('#skOn', el).onchange = (e) => { skBox(el, { act: 'toggle', on: e.target.checked }); toast(e.target.checked ? '已恢復提供' : '已暫停提供統一金鑰'); };
   $('#skQs', el).onclick = () => { skBox(el, { act: 'quota', member: $('#skQm', el).value, other: $('#skQo', el).value }); toast('✓ 已儲存每日次數'); };
+}
+
+// ───────── 用量與成本：每日請求、API、LINE 推播、Email、AI；接近免費額度時提醒 ─────────
+const USE_N = { req: '總請求', page: '頁面', web: '網頁檔案', api_m: '會員', api_fm: 'FinMind', api_q: '行情代理', api_f: '討論區', api_stock: '個股資料', line_in: 'LINE 訊息', push: 'LINE 推播', mail: 'Email', ai: 'AI 代呼叫', cron: '排程' };
+async function useBox(el) {
+  let r;
+  if (S.useL && Date.now() - S.useAt < 60000) r = S.useL;
+  else try { r = await call('usage'); if (!r.ok) throw new Error(r.err); S.useL = r; S.useAt = Date.now(); } catch (e) { el.innerHTML = `<h2>用量與成本</h2><div class="small muted">讀取失敗：${esc(e.message)}${/未知|不支援/.test(e.message) ? '（請在管理員 App 重新部署轉送站）' : ''}</div>`; return; }
+  if (!el.isConnected) return;
+  const t = r.days[r.today] || {}; const pct = (v, l) => Math.min(100, Math.round(v / l * 100));
+  const bar = (name, v, l) => `<div style="margin-top:6px"><div class="row small" style="justify-content:space-between"><span>${esc(name)}</span><span class="${v >= l * 0.8 ? 'up' : 'muted'}">${fmtN(v)} / ${fmtN(l)}（${pct(v, l)}%）</span></div>
+    <div class="bar" style="height:6px;background:var(--bg);border-radius:4px;overflow:hidden;margin-top:3px"><div style="width:${Math.max(1, pct(v, l))}%;height:100%;background:${v >= l * 0.8 ? '#ef4444' : '#3b82f6'}"></div></div></div>`;
+  const kinds = Object.keys(USE_N).filter((k) => k !== 'req' && Object.values(r.days).some((d) => d[k]));
+  el.innerHTML = `<h2>用量與成本</h2>
+    ${r.warn.length ? `<div class="notice" style="margin-bottom:8px">⚠ ${r.warn.map(esc).join('；')}</div>` : ''}
+    ${bar('今日 Workers 請求', t.req || 0, r.limits.req[0])}${bar('今日 Email 收件者', t.mail || 0, r.limits.mail[0])}${r.line && r.line.limit ? bar('本月 LINE 推播', r.line.used, r.line.limit) : ''}
+    <div class="small text2" style="margin-top:8px">近 7 天平均每日 ${fmtN(r.avgReq)} 次請求，推估每月 ${fmtN(r.monthReq)} 次 · 會員 ${fmtN(r.members)} 位 · ${esc(r.plan)}</div>
+    <div class="scroll-x" style="margin-top:8px"><table class="tbl"><thead><tr><th>日期</th><th style="text-align:right">總請求</th>${kinds.map((k) => `<th style="text-align:right">${USE_N[k]}</th>`).join('')}</tr></thead><tbody>
+      ${Object.keys(r.days).sort().reverse().map((dd) => `<tr><td>${esc(dd)}</td><td style="text-align:right">${fmtN(r.days[dd].req || 0)}</td>${kinds.map((k) => `<td style="text-align:right">${fmtN(r.days[dd][k] || 0)}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="9" class="small muted">部署新版轉送站後開始記錄</td></tr>`}</tbody></table></div>
+    <div class="small muted" style="margin-top:6px">免費額度以 Cloudflare、LINE、Google 公告為準；用量每分鐘彙總一次。</div>`;
 }
