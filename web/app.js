@@ -823,7 +823,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"v1.1.376","sha":"a3100b0","at":"2026-11-22 19:47"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"60c4866","at":"2026-11-22 20:05"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -846,14 +846,14 @@ function rtStatusText() {
   return tw + '\n' + us + (S.lastTick ? '\n最近更新：' + hm(S.lastTick) + (document.hidden && S.pref.bgRefresh !== '1' ? '（背景暫停中）' : '') : '');
 }
 // ───────── 版面 ─────────
-const NAV = [['', '總覽', '🏠'], ['watch', '行情', '📈'], ['hold', '持股', '💼'], ['trades', '交易', '🧾'], ['div', '股息', '💰'], ['analysis', '分析', '📊'], ['compare', '比較', '⚖️'], ['calendar', '行事曆', '📅'], ['sim', '模擬交易', '🎮'], ['tools', '工具', '🧮'],
+const NAV = [['', '總覽', '🏠'], ['watch', '行情', '📈'], ['hold', '持股', '💼'], ['trades', '交易', '🧾'], ['div', '股息', '💰'], ['analysis', '分析', '📊'], ['compare', '比較', '⚖️'], ['screener', '選股器', '🔎'], ['calendar', '行事曆', '📅'], ['sim', '模擬交易', '🎮'], ['tools', '工具', '🧮'],
   ['alerts', '提醒', '🔔'], ['market', '市場', '🌐'], ['news', '新聞', '📰'], ['cash', '現金與帳戶', '🏦'], ['member', '會員', '👤'], ['settings', '設定', '⚙️']];
 const BOTTOM = ['', 'watch', 'hold', 'market', 'more'];
 // 功能分類（側欄、更多頁）：依使用情境分四群
-const NAV_GROUPS = [['資產', ['', 'hold', 'trades', 'div', 'cash']], ['行情與研究', ['watch', 'market', 'news', 'calendar', 'compare']],
+const NAV_GROUPS = [['資產', ['', 'hold', 'trades', 'div', 'cash']], ['行情與研究', ['watch', 'market', 'screener', 'news', 'calendar', 'compare']],
   ['分析與工具', ['analysis', 'alerts', 'sim', 'tools']], ['帳號', ['member', 'settings']]];
 const NAV_DESC = { '': '資產總覽、今日損益、指數與漲跌停', hold: '持股明細、成本、報酬與占比', trades: '交易紀錄、篩選、匯入匯出', div: '股息日曆、歷年股息、預估年股息', cash: '現金流紀錄與證券帳戶',
-  watch: '自選行情、行情牆、熱度圖', market: '大盤、類股、排行、美股與 ETF', news: '財經新聞與關鍵字搜尋', calendar: '除權息、股利發放、總經事件', compare: '多檔走勢與報酬相關係數',
+  watch: '自選行情、行情牆、熱度圖', market: '大盤、類股、排行、美股與 ETF', news: '財經新聞與關鍵字搜尋', calendar: '除權息、股利發放、總經事件', compare: '多檔走勢與報酬相關係數', screener: '全市場條件選股：殖利率、本益比、營收、法人',
   analysis: '每年報酬、近 12 個月與投資組合分析', alerts: '到價與事件提醒', sim: '模擬持股與下單練習', tools: '交易成本、漲跌停價、定期定額複利試算',
   member: '會員方案、帳號同步、LINE 綁定', settings: '外觀、版面、即時行情、資料' };
 const navItem = (r) => NAV.find((x) => x[0] === r);
@@ -1993,6 +1993,84 @@ VIEWS.calendar = {
 
 // ───────── 個股比較 ─────────
 const CMP_COLORS = ['#3b82f6', '#f59e0b', '#a855f7', '#22c55e', '#ef4444'];
+
+// ───────── 全市場選股器（與 App Screener 同資料源與條件） ─────────
+const SCR_F = [['price', '股價', '元'], ['chg', '漲跌幅', '%'], ['lots', '成交量', '張'], ['val', '成交金額', '億'], ['pe', '本益比', '倍'], ['y', '殖利率', '%'], ['pb', '股價淨值比', '倍'],
+  ['yoy', '月營收年增', '%'], ['ytd', '累計營收年增', '%'], ['fi', '外資買賣超', '張'], ['ti', '投信買賣超', '張'], ['ii', '三大法人合計', '張']];
+const SCR_P = [['高殖利率低本益比', [['y', 5, null], ['pe', 0.01, 15], ['lots', 200, null]], 'y', 1], ['營收成長', [['yoy', 20, null], ['ytd', 10, null], ['lots', 200, null]], 'yoy', 1],
+  ['投信買超', [['ti', 100, null]], 'ti', 1], ['外資大買', [['fi', 1000, null]], 'fi', 1], ['低股價淨值比', [['pb', 0.01, 1], ['lots', 100, null]], 'pb', 0], ['強勢量增', [['chg', 3, null], ['lots', 2000, null]], 'chg', 1]];
+const scrCommon = (c) => /^[1-9]\d{3}$/.test(c);
+const kf = (o, inc, exc = []) => { const k = Object.keys(o).find((x) => inc.every((i) => x.toLowerCase().includes(i.toLowerCase())) && !exc.some((e) => x.includes(e))); return k == null ? null : o[k]; };
+const nn = (v) => { const x = parseFloat(String(v == null ? '' : v).replace(/[,%+\s]/g, '')); return isNaN(x) ? null : x; };
+let SCR_U = null;
+async function scrUniverse(force) {
+  if (SCR_U && !force && Date.now() - SCR_U.at < 1800000) return SCR_U;
+  const g = (u, t) => px(u, t).catch(() => null); const A = (x) => (Array.isArray(x) && x.length ? x : null);
+  const [tw, bw, rv, op, ope, orv, oin] = await Promise.all([g('https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL', 1800), g('https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL', 1800),
+    g('https://openapi.twse.com.tw/v1/opendata/t187ap05_L', 21600), g('https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes', 1800), g('https://www.tpex.org.tw/openapi/v1/tpex_mainboard_peratio_analysis', 1800),
+    g('https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O', 21600), g('https://www.tpex.org.tw/openapi/v1/t187ap07_O', 3600)]).then((l) => l.map(A));
+  // 證交所 T86：往回找最近一個有資料的交易日
+  let t86 = null; for (let i = 0; i < 6 && !t86; i++) { const d = new Date(Date.now() + 8 * 3600000 - i * 86400000); if (d.getUTCDay() % 6 === 0) continue; if (i === 0 && d.getUTCHours() < 16) continue;
+    const j = await g('https://www.twse.com.tw/rwd/zh/fund/T86?date=' + d.toISOString().slice(0, 10).replace(/-/g, '') + '&selectType=ALLBUT0999&response=json', 3600); if (j && j.stat === 'OK' && Array.isArray(j.data) && Array.isArray(j.fields)) t86 = j; }
+  const V = {}, R = {}, I = {};
+  (bw || []).forEach((o) => { V[String(o.Code || '').trim()] = [nn(o.PEratio), nn(o.DividendYield), nn(o.PBratio)]; });
+  (ope || []).forEach((o) => { const c = String(o.SecuritiesCompanyCode || '').trim(); V[c] = [nn(o.PriceEarningRatio), nn(o.YieldRatio), nn(o.PriceBookRatio)]; });
+  (rv || []).forEach((o) => { const c = String(kf(o, ['公司代號']) || '').trim(); R[c] = [nn(kf(o, ['去年同月增減'])), nn(kf(o, ['累計', '前期比較增減'])), kf(o, ['資料年月'])]; });
+  (orv || []).forEach((o) => { const c = String(kf(o, ['公司代號']) || o.SecuritiesCompanyCode || '').trim(); if (c) R[c] = [nn(kf(o, ['去年同月增減']) || o.YoYRate), nn(kf(o, ['累計', '前期比較增減']) || o.CumulativeYoYRate), kf(o, ['資料年月'])]; });
+  if (t86) { const f = t86.fields; const ix = (p) => f.findIndex(p); const ic = ix((x) => x.includes('代號')), iF = ix((x) => x.includes('外陸資買賣超') || (x.includes('外資') && x.includes('買賣超') && !x.includes('自營'))), iFd = ix((x) => x.includes('外資自營商買賣超')), iT = ix((x) => x.includes('投信買賣超')), iA = ix((x) => x.includes('三大法人買賣超'));
+    t86.data.forEach((r) => { I[String(r[ic]).trim()] = [((nn(r[iF]) || 0) + (iFd >= 0 ? nn(r[iFd]) || 0 : 0)) / 1000, (nn(r[iT]) || 0) / 1000, (nn(r[iA]) || 0) / 1000]; }); }
+  (oin || []).forEach((o) => { const c = String(o.SecuritiesCompanyCode || '').trim(); if (!c) return; const f = nn(o.ForeignInvestorsDifference ?? kf(o, ['Foreign', 'Difference'], ['Dealer'])), t = nn(o.InvestmentTrustDifference ?? kf(o, ['Trust', 'Difference'])), a = nn(o.TotalDifference ?? kf(o, ['Total', 'Difference'], ['Foreign', 'Dealer', 'Trust']));
+    I[c] = [(f || 0) / 1000, (t || 0) / 1000, (a != null ? a : (f || 0) + (t || 0)) / 1000]; });
+  const rows = []; let asOf = '';
+  const add = (c, name, otc, close, chg, vol, val, date) => { c = String(c || '').trim(); if (!scrCommon(c) || !(close > 0)) return; const v = V[c] || [], r = R[c] || [], i = I[c] || [];
+    rows.push({ s: c, n: String(name || '').trim(), otc, price: close, chg: chg != null && close - chg > 0 ? chg / (close - chg) * 100 : null, lots: vol != null ? vol / 1000 : null, val: val != null ? val / 1e8 : null,
+      pe: v[0] > 0 ? v[0] : null, y: v[1], pb: v[2] > 0 ? v[2] : null, yoy: r[0], ytd: r[1], fi: i[0] ?? null, ti: i[1] ?? null, ii: i[2] ?? null }); if (date) asOf = date; };
+  (tw || []).forEach((o) => add(o.Code, o.Name, false, nn(o.ClosingPrice), nn(o.Change), nn(o.TradeVolume), nn(o.TradeValue), o.Date));
+  (op || []).forEach((o) => add(o.SecuritiesCompanyCode, o.CompanyName, true, nn(o.Close), nn(o.Change), nn(o.TradingShares), nn(o.TransactionAmount), o.Date));
+  if (!rows.length) throw new Error('取不到全市場行情');
+  SCR_U = { at: Date.now(), rows, asOf: asOf ? (String(asOf).length === 7 ? (+String(asOf).slice(0, 3) + 1911) + '/' + String(asOf).slice(3, 5) + '/' + String(asOf).slice(5) : asOf) : '', miss: [!bw && '本益比', !rv && '月營收', !t86 && '三大法人'].filter(Boolean) };
+  return SCR_U;
+}
+VIEWS.screener = {
+  title: '選股器',
+  render() {
+    if (!S.pref.scr) S.pref.scr = { c: SCR_P[0][1], s: SCR_P[0][2], d: SCR_P[0][3], p: SCR_P[0][0] };
+    return head('選股器', '<button class="btn" id="scrR">重新整理</button>') + '<div id="dyn"><div class="card empty">讀取全市場資料中（上市＋上櫃約 1,800 檔）…</div></div>';
+  },
+  bind() { $('#scrR').onclick = () => { SCR_U = null; this.fill(); }; },
+  syms() { return []; },
+  async fill() {
+    if (!can('STOCKPRO')) { $('#dyn').innerHTML = lockCard('STOCKPRO', '選股器'); return; }
+    let U; try { U = await scrUniverse(); } catch (e) { $('#dyn').innerHTML = `<div class="card">${sapiErr(e)}</div>`; return; }
+    if (S.route !== 'screener') return;
+    const st = S.pref.scr; const mine = S.pref.scrMine || [];
+    const fl = (k) => SCR_F.find((x) => x[0] === k) || SCR_F[0];
+    const res = U.rows.filter((r) => st.c.every(([k, a, b]) => { const v = r[k]; return v != null && (a == null || v >= a) && (b == null || v <= b); }));
+    const withV = res.filter((r) => r[st.s] != null).sort((a, b) => (st.d ? b[st.s] - a[st.s] : a[st.s] - b[st.s])); const out = withV.concat(res.filter((r) => r[st.s] == null));
+    const signed = ['chg', 'yoy', 'ytd', 'fi', 'ti', 'ii'].includes(st.s);
+    $('#dyn').innerHTML = `<div class="chips" style="flex-wrap:wrap;margin-bottom:10px">${SCR_P.concat(mine).map((p, i) => `<span class="chip ${st.p === p[0] ? 'on' : ''}" data-sp="${i}">${esc(p[0])}</span>`).join('')}</div>
+      <div class="card"><h2>條件<span class="r"><select id="scrAdd" style="width:auto"><option value="">＋ 新增條件</option>${SCR_F.filter((f) => !st.c.some((c) => c[0] === f[0])).map((f) => `<option value="${f[0]}">${f[1]}（${f[2]}）</option>`).join('')}</select></span></h2>
+        ${st.c.length ? st.c.map(([k, a, b], i) => `<div class="row" style="gap:8px;margin-top:6px"><span style="width:110px">${fl(k)[1]}</span><input type="number" step="any" data-cmin="${i}" placeholder="最小" value="${a ?? ''}" style="width:110px"><input type="number" step="any" data-cmax="${i}" placeholder="最大" value="${b ?? ''}" style="width:110px"><span class="muted small">${fl(k)[2]}</span><a href="javascript:void 0" data-cdel="${i}" class="muted">✕</a></div>`).join('') : '<div class="small muted">沒有條件：列出全部普通股。</div>'}
+        <div class="row wrap" style="gap:8px;margin-top:10px"><span class="small muted">排序</span><select id="scrS" style="width:auto">${SCR_F.map((f) => `<option value="${f[0]}" ${f[0] === st.s ? 'selected' : ''}>${f[1]}</option>`).join('')}</select>
+          <select id="scrD" style="width:auto"><option value="1" ${st.d ? 'selected' : ''}>由大到小</option><option value="0" ${st.d ? '' : 'selected'}>由小到大</option></select><span class="sp"></span>
+          <button class="btn sm" id="scrSave">儲存條件</button>${mine.some((m) => m[0] === st.p) ? '<button class="btn sm" id="scrDel">刪除</button>' : ''}</div></div>
+      <div class="small muted" style="margin:10px 0">符合 ${out.length} 檔${out.length > 100 ? '，顯示前 100 檔' : ''} · 資料日期 ${esc(U.asOf)}${U.miss.length ? '（' + U.miss.join('、') + '取不到）' : ''}</div>
+      <div class="card scroll-x" style="padding:6px 8px"><table class="tbl"><thead><tr><th style="text-align:left">股票</th><th>股價</th><th>漲跌幅</th><th>成交量</th><th>本益比</th><th>殖利率</th><th>淨值比</th><th>營收年增</th><th>投信</th><th>外資</th></tr></thead><tbody>
+      ${out.slice(0, 100).map((r) => `<tr class="click" data-go="#/s/${r.s}"><td class="nm" style="text-align:left">${esc(r.n)} <span class="muted small num">${r.s}${r.otc ? ' 櫃' : ''}</span></td><td class="num">${fmtPrice(r.price)}</td><td class="num ${cls(r.chg)}">${fmtPct(r.chg)}</td><td class="num">${r.lots != null ? fmtInt(r.lots) : '—'}</td>
+        <td class="num">${r.pe != null ? fmt(r.pe, 1) : '—'}</td><td class="num">${r.y != null ? fmt(r.y, 2) + '%' : '—'}</td><td class="num">${r.pb != null ? fmt(r.pb, 2) : '—'}</td><td class="num ${cls(r.yoy)}">${fmtPct(r.yoy, 1)}</td><td class="num ${cls(r.ti)}">${r.ti != null ? fmtSigned(Math.round(r.ti)) : '—'}</td><td class="num ${cls(r.fi)}">${r.fi != null ? fmtSigned(Math.round(r.fi)) : '—'}</td></tr>`).join('')}</tbody></table></div>
+      <div class="small muted" style="margin-top:6px">資料來源：證交所、櫃買中心每日開放資料（收盤後更新）。只列普通股，不含 ETF、權證與特別股。法人單位為張；選股結果僅供研究參考，非投資建議。</div>`;
+    const save = () => { st.p = ''; savePref(); this.fill(); };
+    $$('[data-sp]').forEach((x) => x.onclick = () => { const p = SCR_P.concat(mine)[+x.dataset.sp]; S.pref.scr = { c: JSON.parse(JSON.stringify(p[1])), s: p[2], d: p[3], p: p[0] }; savePref(); this.fill(); });
+    $('#scrAdd').onchange = (e) => { if (e.target.value) { st.c.push([e.target.value, null, null]); save(); } };
+    $$('[data-cmin]').forEach((x) => x.onchange = () => { st.c[+x.dataset.cmin][1] = x.value === '' ? null : +x.value; save(); });
+    $$('[data-cmax]').forEach((x) => x.onchange = () => { st.c[+x.dataset.cmax][2] = x.value === '' ? null : +x.value; save(); });
+    $$('[data-cdel]').forEach((x) => x.onclick = () => { st.c.splice(+x.dataset.cdel, 1); save(); });
+    $('#scrS').onchange = (e) => { st.s = e.target.value; savePref(); this.fill(); }; $('#scrD').onchange = (e) => { st.d = +e.target.value; savePref(); this.fill(); };
+    $('#scrSave').onclick = async () => { let n = ''; const ok = await dialog('儲存條件', `<div class="field"><label>名稱</label><input id="scrN" value="${esc(st.p || '我的條件')}" maxlength="12"></div><div id="merr" class="small up"></div>`, [['', '取消'], ['ok', '儲存', 'primary']], (root) => () => { n = $('#scrN', root).value.trim(); return !n ? '請輸入名稱' : SCR_P.some((p) => p[0] === n) ? '不可與預設條件同名' : null; }); if (ok !== 'ok') return; if (!n || SCR_P.some((p) => p[0] === n)) return; S.pref.scrMine = mine.filter((m) => m[0] !== n).concat([[n, JSON.parse(JSON.stringify(st.c)), st.s, st.d]]); st.p = n; savePref(); this.fill(); };
+    if ($('#scrDel')) $('#scrDel').onclick = () => { S.pref.scrMine = mine.filter((m) => m[0] !== st.p); st.p = ''; savePref(); this.fill(); };
+    $$('[data-go]', $('#dyn')).forEach((x) => x.onclick = () => { location.hash = x.dataset.go; });
+  },
+};
 VIEWS.compare = {
   title: '個股比較',
   render(arg) {
@@ -3143,9 +3221,21 @@ function fmBandHtml(name, b, price, d = 1) {
       <tr><td class="muted">比值</td>${[b.min, b.p25, b.med, b.p75, b.max].map((v) => `<td class="num">${fmt(v, d)}</td>`).join('')}</tr>
       ${price > 0 ? `<tr><td class="muted">對應股價</td>${[b.min, b.p25, b.med, b.p75, b.max].map((v, i) => `<td class="num ${i < 2 ? 'down' : i > 2 ? 'up' : ''}">${px(v)}</td>`).join('')}</tr>` : ''}</tbody></table></div></div>`;
 }
+
+/** 資產負債、現金流（與 App FinMindParse 同算法；現金流量表為累計數，換算單季） */
+function fmPick(m, exact, contains = [], not = []) { for (const k of exact) if (m[k] != null) return m[k]; const ks = Object.keys(m).filter((k) => !/_per$/.test(k) && contains.some((c) => k.includes(c)) && !not.some((c) => k.includes(c))).sort((a, b) => a.length - b.length); return ks.length ? m[ks[0]] : null; }
+function fmByDate(rows) { const by = {}; rows.forEach((o) => { const v = +o.value; if (!isNaN(v)) (by[o.date] = by[o.date] || {})[o.type] = v; }); return by; }
+const fmQl = (d) => { const t = new Date(d); return t.getFullYear() + 'Q' + (Math.floor(t.getMonth() / 3) + 1); };
+function fmBalance(rows) { const by = fmByDate(rows); return Object.keys(by).sort().reverse().map((d) => { const m = by[d];
+  const ta = fmPick(m, ['TotalAssets'], ['TotalAssets']), tl = fmPick(m, ['Liabilities', 'TotalLiabilities'], ['Liabilities'], ['Current', 'NonCurrent', 'Equity']), ca = fmPick(m, ['CurrentAssets'], ['CurrentAssets'], ['NonCurrent']), cl = fmPick(m, ['CurrentLiabilities'], ['CurrentLiabilities'], ['NonCurrent']);
+  return { d, ql: fmQl(d), debt: ta && tl != null ? tl / ta * 100 : null, cur: ca != null && cl ? ca / cl * 100 : null, cash: fmPick(m, ['CashAndCashEquivalents'], ['CashAndCashEquivalents']) }; }).filter((x) => x.debt != null || x.cur != null); }
+function fmCashFlow(rows) { const by = fmByDate(rows); const cum = Object.keys(by).sort().map((d) => { const m = by[d];
+  return { d, o: fmPick(m, ['CashFlowsFromOperatingActivities', 'NetCashInflowFromOperatingActivities'], ['OperatingActivities']), c: fmPick(m, ['PropertyAndPlantAndEquipment', 'AcquisitionOfPropertyPlantAndEquipment'], ['PropertyPlantAndEquipment', 'PropertyAndPlantAndEquipment'], ['Disposal', 'Proceeds']) }; });
+  return cum.map((x, i) => { const mo = new Date(x.d).getMonth() + 1, p = cum[i - 1]; if (mo <= 3) return x; if (!p || new Date(p.d).getFullYear() !== new Date(x.d).getFullYear() || x.o == null || p.o == null) return null;
+    return { d: x.d, o: x.o - p.o, c: x.c != null && p.c != null ? x.c - p.c : null }; }).filter((x) => x && x.o != null).map((x) => ({ ...x, ql: fmQl(x.d), f: x.o + (x.c || 0) })).reverse(); }
 async function fmFinCards(el, sym, isCur) {
   const price = (S.q[sym] || {}).price || 0;
-  const [rv, inc, val] = await Promise.allSettled([fmGet('TaiwanStockMonthRevenue', sym, 1500), fmGet('TaiwanStockFinancialStatements', sym, 1280), fmGet('TaiwanStockPER', sym, 1830)]);
+  const [rv, inc, val, bsr, cfr] = await Promise.allSettled([fmGet('TaiwanStockMonthRevenue', sym, 1500), fmGet('TaiwanStockFinancialStatements', sym, 1280), fmGet('TaiwanStockPER', sym, 1830), fmGet('TaiwanStockBalanceSheet', sym, 900), fmGet('TaiwanStockCashFlowsStatement', sym, 1200)]);
   if (!isCur()) return;
   let h = '';
   if (rv.status === 'rejected') h += fmErr('月營收', rv.reason);
@@ -3167,6 +3257,17 @@ async function fmFinCards(el, sym, isCur) {
       <div class="scroll-x"><table class="tbl"><thead><tr><th>季度</th><th>營收</th><th>毛利率</th><th>營益率</th><th>淨利率</th><th>EPS</th></tr></thead><tbody>
         ${qs.slice(0, 12).map((q) => `<tr><td class="num">${q.label}</td><td class="num">${q.rev != null ? fmYi(q.rev) : '—'}</td><td class="num">${q.gm != null ? q.gm.toFixed(1) + '%' : '—'}</td><td class="num">${q.om != null ? q.om.toFixed(1) + '%' : '—'}</td><td class="num">${q.nm != null ? q.nm.toFixed(1) + '%' : '—'}</td><td class="num ${cls(q.eps)}">${q.eps != null ? fmt(q.eps, 2) : '—'}</td></tr>`).join('')}</tbody></table></div>${fmFoot('（財報為單季數字）')}</div>`;
     el._fmMg = last; } }
+  { const bs = bsr.status === 'fulfilled' ? fmBalance(bsr.value) : [], cf = cfr.status === 'fulfilled' ? fmCashFlow(cfr.value) : [];
+    if (bs.length || cf.length) { const b0 = bs[0] || {}; const c4 = cf.slice(0, 4); const ocf = c4.length === 4 ? c4.reduce((a, x) => a + x.o, 0) : null, fcf = c4.length === 4 ? c4.reduce((a, x) => a + x.f, 0) : null;
+      const qs = inc.status === 'fulfilled' ? fmQuarters(inc.value) : []; const n4 = qs.slice(0, 4).map((q) => (q.nm != null && q.rev ? q.nm / 100 * q.rev : null)).filter((x) => x != null); const net = n4.length === 4 ? n4.reduce((a, b) => a + b, 0) : null;
+      const last = cf.slice(0, 8).reverse(); const qsAll = Array.from(new Set(bs.map((x) => x.d).concat(cf.map((x) => x.d)))).sort().reverse().slice(0, 6);
+      h += `<div class="card"><h2>資產負債與現金流<span class="r small muted">金額單位：億</span></h2>
+        <div class="grid g3"><div class="tile"><div class="k">負債比率</div><div class="v num ${b0.debt >= 60 ? 'up' : ''}">${b0.debt != null ? b0.debt.toFixed(1) + '%' : '—'}</div></div><div class="tile"><div class="k">流動比率</div><div class="v num ${b0.cur != null && b0.cur < 100 ? 'up' : ''}">${b0.cur != null ? b0.cur.toFixed(0) + '%' : '—'}</div></div><div class="tile"><div class="k">現金</div><div class="v num">${b0.cash != null ? fmYi(b0.cash) : '—'}</div></div></div>
+        <div style="margin-top:10px">${kvRows([['近四季營業現金流', ocf != null ? fmYi(ocf) : null], ['近四季自由現金流', fcf != null ? fmYi(fcf) : null], ['營業現金流／淨利', ocf != null && net > 0 ? (ocf / net * 100).toFixed(0) + '%' : null]])}</div>
+        ${last.length >= 2 ? `<div class="small muted" style="margin-top:8px">單季自由現金流（近 ${last.length} 季）</div>${fmBars(last.map((x) => x.f), (v) => fmUpDn(v))}` : ''}
+        <div class="scroll-x"><table class="tbl"><thead><tr><th>季度</th><th>負債比</th><th>流動比</th><th>營業現金流</th><th>自由現金流</th></tr></thead><tbody>
+        ${qsAll.map((d) => { const b = bs.find((x) => x.d === d) || {}, c = cf.find((x) => x.d === d); return `<tr><td class="num">${fmQl(d)}</td><td class="num">${b.debt != null ? b.debt.toFixed(1) + '%' : '—'}</td><td class="num">${b.cur != null ? b.cur.toFixed(0) + '%' : '—'}</td><td class="num ${c ? cls(c.o) : ''}">${c ? fmYi(c.o) : '—'}</td><td class="num ${c ? cls(c.f) : ''}">${c ? fmYi(c.f) : '—'}</td></tr>`; }).join('')}</tbody></table></div>
+        <div class="small muted" style="margin-top:6px">自由現金流＝營業現金流＋資本支出；現金流量表由累計數換算為單季。</div>${fmFoot()}</div>`; } }
   if (val.status === 'rejected') h += fmErr('本益比・淨值比區間', val.reason);
   else { const vs = val.value.slice().sort((a, b) => (a.date < b.date ? 1 : -1)); const per = fmBand(vs.map((x) => +x.PER)), pbr = fmBand(vs.map((x) => +x.PBR)), yl = fmBand(vs.map((x) => +x.dividend_yield));
     if (vs.length >= 20) h += `<div class="card"><h2>本益比・淨值比區間<span class="r small muted">近 5 年 · ${esc(vs[0].date)}</span></h2>
@@ -3598,7 +3699,15 @@ Object.assign(VIEWS.s, {
   // ── 新聞 ──
   async t_news() {
     const sym = this.sym; const si = $('#si');
-    si.innerHTML = '<div class="card" id="news"><h2>新聞</h2><div class="muted small">載入中…</div></div><div class="card" id="gnews"><h2>相關新聞</h2><div class="muted small">載入中…</div></div>';
+    const mops = !isUs(sym) && !etfLike(sym);
+    si.innerHTML = (mops ? '<div class="card" id="mops" style="grid-column:1/-1"><h2>重大訊息<span class="r small muted">公開資訊觀測站</span></h2><div class="muted small">載入中…</div></div>' : '') + '<div class="card" id="news"><h2>新聞</h2><div class="muted small">載入中…</div></div><div class="card" id="gnews"><h2>相關新聞</h2><div class="muted small">載入中…</div></div>';
+    if (mops) fetch('/api/mops?id=' + encodeURIComponent(sym)).then((r) => r.json()).then((j) => {
+      const el = $('#mops'); if (!el || this.sym !== sym) return; const l = j.data || [];
+      el.innerHTML = `<h2>重大訊息<span class="r small muted">公開資訊觀測站</span></h2>${j.err ? `<div class="small muted">${esc(j.err)}</div>` : !l.length ? '<div class="small muted">近期沒有重大訊息（開放資料只提供當日訊息，本站從啟用後開始累積，保留 90 天）。</div>'
+        : `<div class="list">${l.slice(0, 10).map((x, i) => `<div class="it" data-mops="${i}" style="display:block"><div class="small muted num">${esc(x.d)} ${esc(x.t || '')}</div><div class="t1" style="white-space:normal">${esc(x.subject)}</div>
+          <div class="small text2 hide" style="margin-top:6px;white-space:pre-wrap">${x.rule ? '符合條款：' + esc(x.rule) + (x.fact ? '　事實發生日：' + esc(x.fact) : '') + '\n' : ''}${esc(x.body || '')}</div></div>`).join('')}</div><div class="small muted" style="margin-top:6px">點標題展開說明。</div>`}`;
+      $$('[data-mops]', el).forEach((it) => it.onclick = () => it.lastElementChild.classList.toggle('hide'));
+    }).catch(() => { const el = $('#mops'); if (el) el.innerHTML = '<h2>重大訊息</h2><div class="small muted">暫時無法取得（轉送站需重新部署才有此功能）。</div>'; });
     this.news();
     if (!can('NEWS')) { $('#gnews').remove(); return; }
     let items = [], fail = false; try { items = await kwNews((isUs(sym) ? sym + ' ' : '') + D.name(sym) + (isUs(sym) ? ' stock' : ' ' + sym + ' 股'), 15); } catch (e) { fail = true; }
