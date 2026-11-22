@@ -349,7 +349,11 @@ async function e2eeModal() {
   await e2eeSet(pass); if (!phoneMaster()) { S.dirty = true; store.set('dirty', true); }
   await syncNow(); toast(phoneMaster() ? '已儲存同步密碼（手機為主：請在手機也開啟端對端加密）' : '已開啟端對端加密並上傳'); route();
 }
-function snapshot() { return JSON.stringify({ app: 'ClaudeETF', format: 1, ...(S.cloudDir ? { dir: S.cloudDir } : {}), keys: S.keys }); }
+// 資料格式版本（與 App DataFormat 相同）：1 基本、2 含融資 mg／mi、3 含放空 sh；讀到比本版新的格式就不套用
+const DATA_FMT_MAX = 3;
+function dataFmt(json) { const t = String(json || ''); return /"sh"\s*:/.test(t) ? 3 : /"m[gi]"\s*:/.test(t) ? 2 : 1; }
+function snapshot() { const k = S.keys || {}; const fmt = Math.max(dataFmt((k.trades || {}).v), dataFmt((k['sim:trades'] || {}).v));
+  return JSON.stringify({ app: 'ClaudeETF', format: fmt, fmtMax: DATA_FMT_MAX, ...(S.cloudDir ? { dir: S.cloudDir } : {}), keys: S.keys }); }
 /** 交易變更後，連帶更新持股與現金（與 App 一致） */
 function recalc() {
   const r = ledger(); if (r.err) return r.err;
@@ -400,6 +404,7 @@ async function pull(force = false) {
   }
   let txt; try { txt = await openSync(r.data); } catch (e) { S.syncMsg = e.message; renderSync(); if (S.route === 'member') route(); return 'locked'; }
   const o = JSON.parse(txt);
+  if ((o.format || 1) > DATA_FMT_MAX) { S.syncMsg = '雲端資料含較新版本的記帳欄位，請重新整理網頁（Ctrl＋F5）取得最新版再同步'; renderSync(); return 'locked'; }
   // 沒有方向（舊資料）且尚未綁定手機：視為網頁為主
   const dir = o.dir || (S.me && S.me.phone === false ? 'w2p' : '');
   if (dir !== S.cloudDir) { S.cloudDir = dir; store.set('cdir', S.cloudDir); }
@@ -889,7 +894,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"73ea7ec","at":"2026-11-22 22:31"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"268d923","at":"2026-11-22 22:39"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -6086,7 +6091,7 @@ function loginView(msg, mode) {
     ${msg ? `<div class="notice err" style="margin-top:14px">${esc(msg)}</div>` : ''}
     ${mode === 'reg' ? `<div class="text2" style="margin-top:12px">${tr}，用 Google 帳號一鍵建立會員（不需手機 App）</div>
       <div class="steps" style="text-align:left;margin:14px auto 0;max-width:330px">${[['1', '同意使用條款', '勾選下方同意事項'], ['2', 'Google 帳號驗證', '不需另設密碼，帳號即會員身分'], ['3', '填寫暱稱與聯絡方式', '方便管理員開通與聯繫'], ['4', '開始使用', '不需要手機也能使用；之後下載 App 用同一帳號登入即可綁定同步']].map(([n, t, d]) => `<div class="row" style="gap:10px;margin-bottom:8px;align-items:flex-start"><span class="badge" style="min-width:22px;text-align:center">${n}</span><div><b>${t}</b><div class="small muted">${d}</div></div></div>`).join('')}</div>
-      <label class="row small" style="justify-content:center;margin-top:10px;cursor:pointer"><input type="checkbox" id="agree" style="width:auto" ${store.get('agree', false) ? 'checked' : ''}> 我同意以 Google 帳號識別會員身分，並了解本服務內容僅供參考、不構成投資建議</label>`
+      <label class="row small" style="justify-content:center;margin-top:10px;cursor:pointer"><input type="checkbox" id="agree" style="width:auto" ${store.get('agree', false) ? 'checked' : ''}> 我已閱讀並同意<a href="/web/privacy.html" target="_blank" rel="noopener">隱私權政策</a>（含個人資料蒐集目的與境外儲存），同意以 Google 帳號識別會員身分，並了解本服務內容僅供參考、不構成投資建議</label>`
     : `<div class="text2" style="margin-top:12px">用註冊時的 Google 帳號登入（與手機 App 相同帳號）</div>
       <div class="feat"><div>📈 自選行情牆、指數、今日漲跌停</div><div>💼 持股損益、資產配置、交易記帳</div><div>📊 個股 K 線、進場建議、籌碼與財務</div><div>🔄 與手機 App 自動同步</div></div>`}
     ${QR_HINT ? `<div class="notice" style="margin-top:14px;text-align:left">這是電腦登入用的 QR Code：請打開手機「台美股資產」App › 會員 › 帳號與同步 ›「掃描登入網頁版」來掃描，不是用相機開啟。</div>` : ''}
