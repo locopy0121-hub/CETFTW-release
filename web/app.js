@@ -814,7 +814,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"965c9e7","at":"2026-11-22 15:44"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"b5b8ebd","at":"2026-11-22 15:55"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -1981,6 +1981,24 @@ VIEWS.compare = {
       $('#dyn').insertAdjacentHTML('beforeend', `<div class="card" style="margin-top:12px"><h2>報酬相關係數（日報酬）</h2><div class="scroll-x"><table class="tbl"><thead><tr><th></th>${ok.map((r) => `<th><span style="color:${CMP_COLORS[r.i]}">●</span> ${esc(r.s)}</th>`).join('')}</tr></thead><tbody>
         ${ok.map((a) => `<tr><td class="nm"><span style="color:${CMP_COLORS[a.i]}">●</span> ${esc(D.name(a.s))}</td>${ok.map((b) => { const v = a === b ? 1 : corr(a, b); return `<td class="num" style="background:${col(v)}">${v == null ? '—' : v.toFixed(2)}</td>`; }).join('')}</tr>`).join('')}</tbody></table></div>
         <div class="small muted" style="margin-top:6px">1 代表走勢完全同步、0 代表無關、負值代表反向；相關係數低的標的放在一起較能分散風險。台美股交易日不同，只比對同一天都有收盤的日子。</div></div>`);
+    }
+    // 基本面比較（台股個股，FinMind）
+    const tw = syms.map((s, i) => [s, i]).filter(([s]) => !isUs(s) && !etfLike(s));
+    if (tw.length && can('STOCKPRO')) {
+      $('#dyn').insertAdjacentHTML('beforeend', '<div class="card" id="fmCmp" style="margin-top:12px"><h2>基本面比較<span class="r small muted">台股個股 · FinMind</span></h2><div class="small muted">讀取中…</div></div>');
+      const got = await Promise.all(tw.map(async ([s, i]) => { const [rv, inc, val, fh] = await Promise.allSettled([fmGet('TaiwanStockMonthRevenue', s, 1500), fmGet('TaiwanStockFinancialStatements', s, 1280), fmGet('TaiwanStockPER', s, 1830), fmGet('TaiwanStockShareholding', s, 200)]);
+        const qs = inc.status === 'fulfilled' ? fmQuarters(inc.value) : []; const e4 = qs.slice(0, 4).map((q) => q.eps).filter((x) => x != null);
+        const vs = val.status === 'fulfilled' ? val.value.slice().sort((a, b) => (a.date < b.date ? 1 : -1)) : []; const hs = fh.status === 'fulfilled' ? fh.value.filter((o) => o.ForeignInvestmentSharesRatio != null).sort((a, b) => (a.date < b.date ? 1 : -1)) : [];
+        return { s, i, m: rv.status === 'fulfilled' ? fmMonthRev(rv.value)[0] : null, ttm: e4.length === 4 ? e4.reduce((a, b) => a + b, 0) : null, q0: qs[0], v0: vs[0], band: fmBand(vs.map((x) => +x.PER)), fh: hs[0] ? +hs[0].ForeignInvestmentSharesRatio : null }; }));
+      const el = $('#fmCmp'); if (!el || S.route !== 'compare') return;
+      const p1 = (v, d = 1) => v == null || isNaN(v) ? '—' : (+v).toFixed(d) + '%';
+      const R = [['月營收年增', (r) => [fmtPct(r.m && r.m.yoy, 1), cls(r.m && r.m.yoy)]], ['累計營收年增', (r) => [fmtPct(r.m && r.m.ytdYoy, 1), cls(r.m && r.m.ytdYoy)]], ['近四季 EPS', (r) => [r.ttm != null ? fmt(r.ttm, 2) : '—', '']],
+        ['毛利率（最近一季）', (r) => [p1(r.q0 && r.q0.gm), '']], ['營益率（最近一季）', (r) => [p1(r.q0 && r.q0.om), '']], ['本益比', (r) => [r.v0 && +r.v0.PER > 0 ? fmt(+r.v0.PER, 1) : '—', '']],
+        ['本益比 5 年位階', (r) => [r.band ? r.band.pct.toFixed(0) + '%' : '—', r.band ? (r.band.pct <= 25 ? 'down' : r.band.pct >= 75 ? 'up' : '') : '']], ['股價淨值比', (r) => [r.v0 && +r.v0.PBR > 0 ? fmt(+r.v0.PBR, 2) : '—', '']],
+        ['外資持股', (r) => [p1(r.fh), '']]];
+      el.innerHTML = `<h2>基本面比較<span class="r small muted">台股個股 · FinMind</span></h2><div class="scroll-x"><table class="tbl"><thead><tr><th></th>${got.map((r) => `<th><span style="color:${CMP_COLORS[r.i]}">●</span> ${esc(D.name(r.s))}</th>`).join('')}</tr></thead><tbody>
+        ${R.map(([n, f]) => `<tr><td class="muted">${n}</td>${got.map((r) => { const [t, c] = f(r); return `<td class="num ${c}">${t}</td>`; }).join('')}</tr>`).join('')}</tbody></table></div>
+        <div class="small muted" style="margin-top:6px">本益比位階越低代表相對自身過去 5 年越便宜。ETF 與美股不列入。</div>`;
     }
   },
   fill() {}, syms() { return S.pref.cmp || []; },
