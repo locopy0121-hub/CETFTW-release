@@ -339,3 +339,5 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--primary); o
 .nav { flex: 0 0 auto; }
 :root[data-density="compact"] .nav a { padding: 7px 12px; }
 @media (min-width: 901px) { :root[data-side="mini"] .nav-g { justify-content: center; margin: 8px 0 2px; padding: 0; height: 1px; background: var(--border); font-size: 0; } :root[data-side="mini"] .nav-g i { display: none; } :root[data-side="mini"] .nav-g.fold + .nav-gl a:not(.on) { display: flex; } }
+
+.mg-warn{color:var(--warn)}
