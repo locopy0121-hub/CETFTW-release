@@ -80,6 +80,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--primary); o
 .seg button { border: 0; background: none; padding: 6px 12px; border-radius: 8px; font-size: 13px; color: var(--text2); }
 .seg button.on { background: var(--card2); color: var(--text); font-weight: 600; }
 .tag { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 6px; border: 1px solid; line-height: 1.5; white-space: nowrap; }
+.tag.ok { color: #16a34a; }
 .mkt { font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 4px; background: #3a2f12; color: #fbbf24; }
 .mkt.us { background: #2a2346; color: #a78bfa; }
 .badge { display: inline-block; font-weight: 700; padding: 2px 9px; border-radius: 7px; border: 1px solid; font-size: 13px; }
@@ -138,7 +139,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--primary); o
 .modal-bg { position: fixed; inset: 0; background: rgba(0, 0, 0, .55); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 16px; }
 .modal { background: var(--card); border-radius: 16px; width: 100%; max-width: 460px; max-height: 92vh; overflow: auto; padding: 18px; border: 1px solid var(--border); }
 .modal h3 { margin: 0 0 12px; font-size: 18px; }
-.modal .acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.modal .acts { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 .field { margin-top: 10px; }
 .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
 .toast { position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%); background: #111827; border: 1px solid var(--border); padding: 10px 16px; border-radius: 10px; z-index: 60; font-size: 14px; }

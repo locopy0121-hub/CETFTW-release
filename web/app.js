@@ -44,7 +44,7 @@ function toast(msg, ms = 2600) {
 async function api(a, payload = {}) {
   const r = await fetch('/api/m', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ a, payload: JSON.stringify(payload) }) });
   const j = await r.json().catch(() => ({ ok: false, err: '伺服器回應格式錯誤' }));
-  if (!j.ok) throw new Error(j.err || '伺服器錯誤');
+  if (!j.ok) { const e = new Error(j.err || '伺服器錯誤'); e.data = j; throw e; }
   return j;
 }
 /** 經發佈站代理取得外部行情（ttl 秒） */
@@ -894,7 +894,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"v1.1.389","sha":"268d923","at":"2026-11-22 23:17"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"be60ccf","at":"2026-11-22 23:41"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -4448,12 +4448,13 @@ VIEWS.member = {
       <div class="card"><div class="row">${badge(m)}<b style="font-size:19px">${esc(m.desc)}</b></div>
         <div class="${m.locked || m.status === 'GRACE' ? 'up' : 'text2'}" style="margin-top:8px">${esc(stateLine(m))}</div>
         ${prog != null ? `<div class="bar" style="margin-top:10px"><div style="width:${Math.min(100, Math.max(2, prog * 100))}%;background:${argb(m.color)}"></div></div>` : ''}
+        ${termHtml(m, me)}
         ${S.code ? `<div class="small muted" style="margin-top:8px">授權編號 ${S.code.idText}${S.code.rel ? '　（網頁以簽發日起算；實際以手機啟用日為準）' : ''}</div>` : ''}
         ${p.notice ? `<div class="notice" style="margin-top:10px">📢 ${esc(p.notice)}</div>` : ''}
         <div class="row wrap" style="margin-top:12px"><button class="btn primary" id="apBtn">${m.status === 'MEMBER' ? '升級／變更方案' : m.status === 'EXPIRED' || m.status === 'GRACE' ? '申請續約' : '申請開通會員'}</button><span class="small muted">也可以在手機 App「會員與授權」申請；開通後網頁自動套用。</span></div>
         ${lineOaId() ? `<div class="tile" style="margin-top:12px"><div class="row" style="gap:12px;align-items:center"><img class="line-qr" src="https://qr-official.line.me/sid/L/${encodeURIComponent(lineOaId().slice(1))}.png" alt="LINE QR Code" data-linejoin style="cursor:pointer" onerror="this.remove()">
           <div class="sp"><b>LINE 官方帳號</b><div class="small text2" style="margin-top:2px">開通、續約或方案問題可直接在 LINE 詢問管理員，也能接收每日盤後報告。</div><div style="margin-top:6px">${lineJoinHtml()}</div></div></div></div>` : ''}
-        ${(me.requests || []).length ? `<div class="list" style="margin-top:10px">${me.requests.slice().reverse().map((r) => `<div class="it" style="cursor:default"><div class="l"><div class="t1">${esc({ new: '開通', renew: '續約', change: '變更方案' }[r.kind] || r.kind)} <span class="tag ${r.state === '待處理' ? '' : 'up'}">${esc(r.state === '已匯入' ? '管理員處理中' : r.state)}</span></div><div class="t2">${esc(r.at)}　${esc(String(r.message || '').replace(/^［網頁］\S*\s?/, ''))}</div></div></div>`).join('')}</div>` : ''}</div>
+        ${(me.requests || []).length ? `<div class="list" style="margin-top:10px">${me.requests.slice().reverse().map((r) => `<div class="it" style="cursor:default"><div class="l"><div class="t1">${esc({ new: '開通', renew: '續約', change: '變更方案' }[r.kind] || r.kind)} ${reqStateTag(r)}</div><div class="t2">${esc(r.at)}　${esc(String(r.message || '').replace(/^［網頁］\S*\s?/, ''))}</div></div></div>`).join('')}</div>` : ''}</div>
       <div class="card"><h2>會員帳號</h2><div class="row"><div class="logo" style="width:42px;height:42px;font-size:20px;border-radius:50%">${esc((me.name || me.email || '?').slice(0, 1).toUpperCase())}</div>
         <div class="sp"><div><b>${esc(me.name || '會員')}</b>${me.no ? ' <span class="muted">（' + esc(me.no) + '）</span>' : ''}</div><div class="small muted">${esc(me.email || '')}</div></div>
         <button class="btn" id="pfE">編輯</button><button class="btn" id="lo">登出</button></div>
@@ -6182,7 +6183,9 @@ async function onCredential(resp, reg) {
     const r = await api('login', { idToken: resp.credential, web: true, version: 'web', trialStart: dayNum(), register: !!reg });
     if (!r.session) throw new Error('伺服器未回傳登入資訊（請管理員更新雲端伺服器程式為第 4 版）');
     await loginWith(r, reg);
-  } catch (e) { $('#lerr').textContent = e.message === '裝置碼錯誤' ? '雲端會員伺服器版本過舊（需第 4 版），請管理員更新 Apps Script 程式碼後重新部署。' : e.message; }
+  } catch (e) {
+    if (e.data && e.data.pendingDelete) { $('#lerr').textContent = ''; return restoreModal(e.data); }
+    $('#lerr').textContent = e.message === '裝置碼錯誤' ? '雲端會員伺服器版本過舊（需第 4 版），請管理員更新 Apps Script 程式碼後重新部署。' : e.message; }
 }
 /** 取得網頁工作階段後（Google 登入或 App 掃描登入）：保存並進入 */
 async function loginWith(r, reg) {
@@ -6198,22 +6201,59 @@ async function loginWith(r, reg) {
 }
 
 /** 會員自助刪除帳號：輸入會員代號確認 → 伺服器清除個資與雲端資料 → 本機登出 */
+/** 會員中心「使用期限」：等級、起算日、到期日、剩餘天數 */
+function termHtml(m, me) {
+  const c = S.code; const rows = [];
+  if (m.status === 'TRIAL') { const st = Number(me.trialStart || 0); rows.push(['方案', (m.name || '試用') + '（試用）'], ['開始日', st ? dayDate(st) : '—'], ['到期日', dayDate(dayNum() + m.left)], ['剩餘', m.left + ' 天']); }
+  else if (m.status === 'MEMBER' || m.status === 'GRACE') {
+    rows.push(['方案', m.name], ['開始日', c ? dayDate(c.issued) : '—'], ['到期日', m.perm ? '永久有效' : dayDate(m.exp)], ['剩餘', m.perm ? '—' : m.grace ? '已過期（寬限 ' + Math.max(0, (S.policy.grace || 0) + m.left) + ' 天）' : m.left + ' 天']);
+  } else if (m.status === 'EXPIRED' || m.status === 'FREE') rows.push(['方案', m.desc], ['到期日', c && c.expiry !== 0xFFFF ? dayDate(c.rel ? c.issued + c.expiry : c.expiry) : '—'], ['剩餘', '0 天']);
+  if (!rows.length) return '';
+  const warn = (m.status === 'MEMBER' && !m.perm && m.left <= (S.policy.remind || 7)) || m.status === 'GRACE' || m.status === 'TRIAL' && m.left <= 3;
+  return `<div class="tile" style="margin-top:12px"><div class="row" style="justify-content:space-between"><b>使用期限</b>${warn ? '<span class="tag up">即將到期，請記得續約</span>' : ''}</div>
+    <div class="grid g4" style="gap:8px;margin-top:6px">${rows.map(([k, v]) => `<div><div class="small muted">${k}</div><div class="num" style="font-weight:600">${esc(v)}</div></div>`).join('')}</div></div>`;
+}
+/** 申請狀態：伺服器狀態＋本機授權判斷（舊資料可能停在「已匯入」，授權已在申請之後簽發就視為已完成） */
+function reqStateTag(r) {
+  let st = r.state;
+  if ((st === '已匯入' || st === '待處理') && S.code && r.at) { const d = String(r.at).slice(0, 10).split('/'); const day = Math.round((Date.UTC(+d[0], +d[1] - 1, +d[2]) - Date.UTC(2024, 0, 1)) / 86400000); if (S.code.issued >= day) st = '已完成'; }
+  const [t, c] = st === '待處理' ? ['待處理', ''] : st === '已匯入' ? ['管理員處理中', ''] : st === '已完成' || st === '已處理' ? ['✓ 已完成', 'ok'] : st === '已結案' ? ['已結案', 'muted'] : [st, ''];
+  return `<span class="tag ${c}">${esc(t)}</span>`;
+}
+/** 會員自助刪除帳號（兩道確認）：①輸入會員代號 ②確認保留期並輸入「確定刪除」 */
 async function deleteAccountModal(me) {
   const no = String(me.no || '');
-  const html = `<div class="small text2" style="line-height:1.7">刪除後無法復原，以下資料會從雲端刪除：<br>・名稱、Email、聯絡方式、Google 綁定<br>・手機⇄網頁同步的雲端資料<br>・LINE 綁定與到價提醒<br>・討論區留言與暱稱<br>・剩餘的會員期限（不退費）</div>
+  const html = `<div class="small muted" style="margin-bottom:6px">第 1 步（共 2 步）</div><div class="small text2" style="line-height:1.7">刪除後以下資料會從雲端移除：<br>・名稱、Email、聯絡方式、Google 綁定<br>・手機⇄網頁同步的雲端資料<br>・LINE 綁定與到價提醒<br>・討論區留言與暱稱<br>・剩餘的會員期限（不退費）</div>
     <div class="small muted" style="margin-top:6px">手機 App 內的持股與交易紀錄不受影響；需要保留請先在「設定 › 資料」匯出備份。</div>
     <div class="field" style="margin-top:10px"><label>輸入會員代號 ${esc(no)} 確認</label><input id="dac" autocomplete="off"></div><div id="merr" class="small up" style="margin-top:6px"></div>`;
-  const r = await dialog('刪除帳號', html, [['', '取消'], ['ok', '永久刪除', 'danger']], (root) => () => {
-    const v = $('#dac', root).value.trim().toUpperCase(); if (!no || v !== no.toUpperCase()) return '請輸入正確的會員代號 ' + no; root._v = v; return null; });
+  const r = await dialog('刪除帳號', html, [['', '取消'], ['ok', '下一步', 'danger']], (root) => () => {
+    const v = $('#dac', root).value.trim().toUpperCase(); if (!no || v !== no.toUpperCase()) return '請輸入正確的會員代號 ' + no; return null; });
   if (r !== 'ok') return;
+  let s1; try { s1 = await api('deleteMe', { session: S.session, step: 1, confirm: no, web: true }); } catch (e) { await dialog('無法刪除', `<div class="small">${esc(e.message)}</div>`, [['ok', '確定', 'primary']]); return; }
+  const keep = s1.days > 0;
+  const r2 = await dialog('確認刪除帳號', `<div class="small muted" style="margin-bottom:6px">第 2 步（共 2 步）</div>
+    <div class="small text2" style="line-height:1.7">${keep ? `帳號會先保留 <b>${s1.days} 天</b>（至 ${esc(s1.purgeDate)}），期間立即登出、停止 LINE 到價提醒，其他人看不到你的資料。<br>保留期間如果反悔，用同一個 Google 帳號登入後可「申請恢復帳號」，管理員確認後即恢復；期滿後永久刪除，無法復原。` : '確認後立即永久刪除，無法復原。'}</div>
+    <div class="field" style="margin-top:10px"><label>請輸入「確定刪除」</label><input id="dac2" autocomplete="off"></div><div id="merr" class="small up" style="margin-top:6px"></div>`,
+    [['', '取消'], ['ok', keep ? '刪除帳號' : '永久刪除', 'danger']], (root) => () => ($('#dac2', root).value.replace(/\s/g, '') !== '確定刪除' ? '請輸入「確定刪除」' : null));
+  if (r2 !== 'ok') return;
   try {
-    const o = await api('deleteMe', { session: S.session, confirm: no });
-    if (!o.ok) { await dialog('無法刪除', `<div class="small">${esc(o.err || '刪除失敗')}</div>`, [['ok', '確定', 'primary']]); return; }
+    const o = await api('deleteMe', { session: S.session, token: s1.token, confirm2: '確定刪除', web: true });
     S.session = ''; store.del('session'); store.del('keys'); store.set('rev', 0); store.set('dirty', false); store.del('no'); store.del('aik'); store.del('aic');
     S.keys = {}; S.rev = 0; S.dirty = false; S.me = null; S.code = null; S.timers.forEach(clearInterval); S.timers = [];
     try { if (window.google && google.accounts) google.accounts.id.disableAutoSelect(); } catch (e) {}
-    loginView('帳號已刪除，雲端的會員資料與同步資料都已清除。');
-  } catch (e) { toast('刪除失敗：' + (e.message || e), 4000); }
+    loginView(o.pending ? `帳號已申請刪除，將於 ${o.purgeDate} 永久刪除；在那之前用同一個 Google 帳號登入可申請恢復。` : '帳號已刪除，雲端的會員資料與同步資料都已清除。');
+  } catch (e) { await dialog('無法刪除', `<div class="small">${esc(e.message)}</div>`, [['ok', '確定', 'primary']]); }
+}
+/** 登入時帳號在刪除保留期：可申請恢復 */
+async function restoreModal(d) {
+  let note = '';
+  const r = await dialog('帳號刪除中', `<div class="small text2" style="line-height:1.7">會員 ${esc(d.no)} 已於 ${esc(d.delDate)} 申請刪除，將於 <b>${esc(d.purgeDate)}</b> 永久刪除。</div>
+    ${d.restoreAsked ? '<div class="small" style="margin-top:8px">已收到你的恢復申請，管理員確認後會以 LINE 或 Email 通知你，屆時重新登入即可。</div>'
+      : '<div class="small text2" style="margin-top:8px">想拿回帳號嗎？送出申請後，管理員確認即可恢復，原有的會員期限與同步資料都會保留。</div><div class="field" style="margin-top:8px"><label>說明（選填）</label><textarea id="rsn" rows="2" maxlength="300"></textarea></div>'}`,
+    d.restoreAsked ? [['', '確定']] : [['', '取消'], ['ok', '申請恢復帳號', 'primary']], (root) => () => { const x = $('#rsn', root); note = x ? x.value.trim() : ''; return null; });
+  if (r !== 'ok') return;
+  try { const o = await api('restoreReq', { ticket: d.ticket, note }); toast('已送出恢復申請，管理員確認後會通知你（' + o.no + '）', 6000); }
+  catch (e) { toast('申請失敗：' + e.message, 5000); }
 }
 async function logout(msg) {
   const ses = S.session;
