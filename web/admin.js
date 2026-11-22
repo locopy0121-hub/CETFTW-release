@@ -68,7 +68,7 @@ async function logout(msg) {
 
 // ───────── 主畫面 ─────────
 /** 網頁版本（發布時由 .github/public/sync.sh 填入） */
-const WEB_VER = /*WEBVER*/{"v":"v1.1.392","sha":"9bca579","at":"2026-11-23 00:11"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"db38935","at":"2026-11-23 00:17"};
 const verText = () => (WEB_VER ? (WEB_VER.v ? (/^v/i.test(WEB_VER.v) ? WEB_VER.v : 'v' + WEB_VER.v) + ' · ' : '') + WEB_VER.sha + (WEB_VER.at ? ' · ' + WEB_VER.at : '') : '開發版');
 const TABS = [['home', '總覽'], ['req', '申請'], ['trade', '交易'], ['msg', '訊息'], ['mem', '會員'], ['pol', '政策'], ['tier', '會員等級'], ['rel', '發布'], ['line', 'LINE'], ['forum', '討論區'], ['job', '工作紀錄']];
 /** 功能位元（與 App License.Feature 順序相同，不可調整） */
@@ -973,6 +973,9 @@ async function payCfgDialog() {
     <h4 style="margin:12px 0 4px">其他付款方式</h4>${[0, 1, 2].map((i) => `<div class="grid g2" style="gap:6px;margin-top:4px"><input data-on="${i}" placeholder="名稱（例 LINE Pay、街口支付）" value="${esc((others[i] || {}).name || '')}"><input data-ot="${i}" placeholder="說明（例 付款連結、ID）" value="${esc((others[i] || {}).text || '')}"></div>`).join('')}
     <div class="grid g2" style="gap:8px;margin-top:8px"><div class="field"><label>付款期限（天，0＝不顯示）</label><input id="cDays" type="number" min="0" max="30" value="${c.days || 0}"></div><div class="field"><label>付款備註</label><input id="cNote" maxlength="200" value="${esc(c.note || '')}" placeholder="例 轉帳後請回覆後五碼"></div></div>
     <label class="row small" style="gap:6px;cursor:pointer"><input type="checkbox" id="cAI" style="width:auto" ${c.autoIssued !== false ? 'checked' : ''}> 開通完成後自動發開通通知</label>
+    <div class="row small" style="gap:6px;margin-top:6px;align-items:center"><label class="row" style="gap:6px;cursor:pointer"><input type="checkbox" id="cAR" style="width:auto" ${c.autoRemind === true ? 'checked' : ''}> 自動到期提醒：到期前</label>
+      <input id="cRD" type="number" min="1" max="30" value="${c.remindDays || 7}" style="width:60px;padding:4px 6px"> 天以 LINE／Email 通知（每天 10:00 後，同一次到期只發一次）</div>
+    ${r.rmdLog ? `<div class="small muted" style="margin-top:2px">上次：${esc(r.rmdLog)}</div>` : ''}
     <h4 style="margin:12px 0 4px">訊息範本</h4><div class="small muted">可用變數：{暱稱} {訂單編號} {方案} {金額} {付款資訊} {開通資訊} {到期日}</div>
     ${tplKeys.map(([k, n]) => `<details style="margin-top:6px"><summary>${n}</summary><input data-ts="${k}" value="${esc(r.tpl[k].subject)}" maxlength="60" style="margin:6px 0"><textarea data-tb="${k}" rows="5" maxlength="2000">${esc(r.tpl[k].body)}</textarea></details>`).join('')}
     <h4 style="margin:12px 0 4px">付款資訊預覽</h4><pre class="small" style="white-space:pre-wrap;background:var(--bg);padding:8px;border-radius:8px">${esc(r.payText)}</pre>`,
@@ -984,7 +987,7 @@ async function payCfgDialog() {
     return { code, name, branch: g('branch'), account: g('account'), holder: g('holder') }; }).filter((b) => b.code && b.account);
   const no = [0, 1, 2].map((i) => ({ name: $(`[data-on="${i}"]`, bx).value.trim(), text: $(`[data-ot="${i}"]`, bx).value.trim() })).filter((o) => o.name && o.text);
   const tpl = {}; tplKeys.forEach(([k]) => { tpl[k] = { subject: $(`[data-ts="${k}"]`, bx).value, body: $(`[data-tb="${k}"]`, bx).value }; });
-  try { await tcall('cfgSet', { cfg: { banks: nb, others: no, days: $('#cDays', bx).value, note: $('#cNote', bx).value, autoIssued: $('#cAI', bx).checked }, tpl }); toast('✓ 已儲存付款與通知設定'); }
+  try { await tcall('cfgSet', { cfg: { banks: nb, others: no, days: $('#cDays', bx).value, note: $('#cNote', bx).value, autoIssued: $('#cAI', bx).checked, autoRemind: $('#cAR', bx).checked, remindDays: $('#cRD', bx).value }, tpl }); toast('✓ 已儲存付款與通知設定'); }
   catch (e) { toast('儲存失敗：' + e.message, 6000); }
 }
 /** 訊息紀錄與對會員發訊 */
