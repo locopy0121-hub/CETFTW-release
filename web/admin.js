@@ -68,7 +68,7 @@ async function logout(msg) {
 
 // ───────── 主畫面 ─────────
 /** 網頁版本（發布時由 .github/public/sync.sh 填入） */
-const WEB_VER = /*WEBVER*/{"v":"","sha":"268d923","at":"2026-11-22 22:39"};
+const WEB_VER = /*WEBVER*/{"v":"v1.1.388","sha":"73ea7ec","at":"2026-11-22 22:50"};
 const verText = () => (WEB_VER ? (WEB_VER.v ? (/^v/i.test(WEB_VER.v) ? WEB_VER.v : 'v' + WEB_VER.v) + ' · ' : '') + WEB_VER.sha + (WEB_VER.at ? ' · ' + WEB_VER.at : '') : '開發版');
 const TABS = [['home', '總覽'], ['req', '申請'], ['mem', '會員'], ['pol', '政策'], ['tier', '會員等級'], ['rel', '發布'], ['line', 'LINE'], ['forum', '討論區'], ['job', '工作紀錄']];
 /** 功能位元（與 App License.Feature 順序相同，不可調整） */
@@ -205,9 +205,7 @@ function render() {
         <div class="card"><h2>發佈站與 LINE</h2>${kv([['已部署版本', app.worker && app.worker.app ? 'v' + app.worker.app : '—'], ['部署時間', app.worker && app.worker.at ? new Date(app.worker.at).toLocaleString('zh-TW') : '—'], ['狀態', app.worker ? (app.worker.need ? '有新版可部署' : '最新') : '—']])}
           ${app.worker && app.worker.ready ? `<button class="btn" id="rdp" style="margin-top:10px">重新部署</button>` : ''}</div>
         <div class="card"><h2>最近申請</h2>${reqs.length ? reqs.slice(0, 5).map(reqRow).join('') : '<div class="small muted">沒有待處理的申請</div>'}</div>
-        <div class="card"><h2>最近工作</h2>${d.jobs.slice(0, 6).map(jobRow).join('') || '<div class="small muted">尚無工作</div>'}</div>
-        <div class="card" id="hcBox" style="grid-column:1/-1"><h2>資料源健康檢查<span class="r"><button class="btn sm" id="hcRun">立即檢查</button></span></h2><div class="small muted">讀取中…</div></div></div>`;
-    healthBox($('#hcBox', v), false); $('#hcRun', v).onclick = () => healthBox($('#hcBox', v), true);
+        <div class="card"><h2>最近工作</h2>${d.jobs.slice(0, 6).map(jobRow).join('') || '<div class="small muted">尚無工作</div>'}</div></div>`;
     $$('[data-go]', v).forEach((b) => b.onclick = () => { S.tab = b.dataset.go; renderTabs(); render(); });
     if ($('#rdp')) $('#rdp').onclick = () => job('redeploy', {}, '已送出重新部署');
     bindReq(v);
@@ -781,18 +779,6 @@ function priceEditor(box, p) {
     };
   };
   draw();
-}
-/** 資料源健康檢查（轉送站每天收盤後檢查；異常時管理員 App 會通知） */
-async function healthBox(box, run) {
-  const body = () => box.querySelector('.hcb') || (box.insertAdjacentHTML('beforeend', '<div class="hcb"></div>'), box.querySelector('.hcb'));
-  box.querySelectorAll(':scope > .small.muted').forEach((e) => e.remove());
-  const b = body(); b.innerHTML = '<div class="small muted">' + (run ? '檢查中（約 20 秒）…' : '讀取中…') + '</div>';
-  try {
-    const r = await fetch('/api/health' + (run ? '?run=1' : ''), { cache: 'no-store' }); const h = await r.json();
-    if (!h.at) { b.innerHTML = '<div class="small muted">尚未檢查（每天 17:30 後自動執行；轉送站需重新部署才有此功能），可按「立即檢查」。</div>'; return; }
-    b.innerHTML = `<div class="small ${h.ok ? 'muted' : 'up'}" style="margin-bottom:6px">${h.ok ? '✓ 全部正常' : '⚠ ' + h.bad + ' 項異常'}・${new Date(h.at).toLocaleString('zh-TW')}</div>
-      <table class="tbl"><tbody>${h.items.map((x) => `<tr><td>${x.ok ? '✅' : '⛔'} ${esc(x.name)}</td><td class="num small muted">${x.ms} ms${x.n != null ? '・' + x.n + ' 筆' : ''}</td><td class="small ${x.ok ? 'muted' : 'up'}">${x.ok ? '正常' : esc(x.err)}</td></tr>`).join('')}</tbody></table>`;
-  } catch (e) { b.innerHTML = '<div class="small up">無法讀取：' + esc(e.message) + '</div>'; }
 }
 function tierEditor(box, p) {
   if (!S.tiers) S.tiers = JSON.parse(JSON.stringify(p.tiers || []));
