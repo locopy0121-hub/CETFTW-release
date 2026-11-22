@@ -846,7 +846,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"7429f9b","at":"2026-11-22 20:54"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"4542542","at":"2026-11-22 21:05"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -4484,7 +4484,7 @@ VIEWS.div = {
 // ───────── 投資分析 ─────────
 VIEWS.analysis = {
   title: '投資分析',
-  render() { return head('投資分析') + `<div class="chips" style="margin-bottom:12px">${[['perf', '已實現損益'], ['review', '績效回顧'], ['alloc', '配置分析'], ['rev', '持股營收'], ['rebal', '再平衡'], ['health', '健康檢查'], ['cost', '交易成本'], ['goal', '目標規劃']].map(([k, n]) => `<button class="chip ${(S.pref.an || 'perf') === k ? 'on' : ''}" data-an="${k}">${n}</button>`).join('')}</div><div id="dyn"></div>`; },
+  render() { return head('投資分析') + `<div class="chips" style="margin-bottom:12px">${[['perf', '已實現損益'], ['review', '績效回顧'], ['alloc', '配置分析'], ['rev', '持股營收'], ['rebal', '再平衡'], ['health', '組合診斷'], ['cost', '交易成本'], ['goal', '目標規劃']].map(([k, n]) => `<button class="chip ${(S.pref.an || 'perf') === k ? 'on' : ''}" data-an="${k}">${n}</button>`).join('')}</div><div id="dyn"></div>`; },
   bind() { $$('[data-an]').forEach((b) => b.onclick = () => { S.pref.an = b.dataset.an; savePref(); route(); }); },
   fill() {
     if (!can('ANALYSIS')) { $('#dyn').innerHTML = lockCard('ANALYSIS'); return; }
@@ -4521,22 +4521,33 @@ VIEWS.analysis = {
   },
   /** 健康檢查：集中度、虧損部位、現金比例、配置偏離 */
   health() {
-    const P = portfolio(); const total = P.mv + P.cash - P.debt; const rows = P.rows.slice().sort((a, b) => b.weight - a.weight); const tg = kjson('targets', {});
-    const items = []; let score = 100;
-    const add = (ok, title, detail, pen) => { items.push([ok, title, detail]); if (!ok) score -= pen; };
-    if (!rows.length) { $('#dyn').innerHTML = '<div class="card empty">尚無持股。</div>'; return; }
-    const top = rows[0]; add(top.weight <= 30, '單一持股集中度', `最大持股 ${top.name} 占 ${top.weight.toFixed(1)}%（建議 ≤ 30%）`, 15);
-    const top3 = rows.slice(0, 3).reduce((a, r) => a + r.weight, 0); add(top3 <= 70 || rows.length <= 3, '前三大持股', `合計 ${top3.toFixed(1)}%（建議 ≤ 70%）`, 10);
-    const stocks = rows.filter((r) => !D.isEtf(r.symbol)).reduce((a, r) => a + r.weight, 0); add(stocks <= 80 || rows.length < 3, '個股與 ETF', `個股占 ${stocks.toFixed(1)}%、ETF 占 ${(100 - stocks).toFixed(1)}%`, 5);
-    const cashPct = total ? P.cash / total * 100 : 0; add(cashPct >= 3 && cashPct <= 50, '現金比例', `現金占總資產 ${cashPct.toFixed(1)}%（建議 3%～50%）`, 10);
-    const losers = rows.filter((r) => r.plPct <= -20); add(!losers.length, '大幅虧損部位', losers.length ? losers.map((r) => `${r.name} ${fmtPct(r.plPct, 1)}`).join('、') : '沒有虧損超過 20% 的持股', 10);
-    const us = rows.filter((r) => r.us).reduce((a, r) => a + r.weight, 0); add(true, '台美配置', `台股 ${(100 - us).toFixed(1)}%、美股 ${us.toFixed(1)}%`, 0);
-    const dev = Object.keys(tg).length ? rows.map((r) => Math.abs(r.weight - (tg[r.symbol] || 0))).reduce((a, v) => Math.max(a, v), 0) : null;
-    add(dev == null || dev <= 5, '目標配置偏離', dev == null ? '尚未設定目標占比（分析 › 再平衡）' : `最大偏離 ${dev.toFixed(1)} 個百分點（建議 ≤ 5）`, dev == null ? 0 : 10);
-    add(rows.length >= 3, '分散程度', `持有 ${rows.length} 檔`, 5);
-    score = Math.max(0, score); const grade = score >= 85 ? ['良好', 'var(--down)'] : score >= 65 ? ['普通', 'var(--warn)'] : ['需注意', 'var(--up)'];
-    $('#dyn').innerHTML = `<div class="card" style="margin-bottom:12px"><div class="row"><div style="font-size:44px;font-weight:800;color:${grade[1]}" class="num">${score}</div><div><b style="color:${grade[1]}">${grade[0]}</b><div class="small muted">依集中度、現金、虧損部位、目標偏離等項目評分（滿分 100）</div></div></div></div>
-      <div class="card"><div class="list">${items.map(([ok, t, d]) => `<div class="it" style="cursor:default"><span style="font-size:18px">${ok ? '✅' : '⚠️'}</span><div class="l"><div class="t1">${esc(t)}</div><div class="t2" style="white-space:normal">${esc(d)}</div></div></div>`).join('')}</div></div>`;
+    const P = portfolio(); const tg = kjson('targets', {}); const ind = kjson('industries', {});
+    if (!P.rows.length) { $('#dyn').innerHTML = '<div class="card empty">尚無持股。</div>'; return; }
+    const g = P.mv + Math.max(0, P.cash) || 1; const lev = (n) => /正2|反1|反向|槓桿|2X|-1X|ULTRA|PROSHARES/i.test(n);
+    const input = { positions: P.rows.map((r) => { const etf = D.isEtf(r.symbol) || /^00/.test(r.symbol);
+        return { symbol: r.symbol, name: r.name, type: etf ? (r.us ? '美國 ETF' : '台股 ETF') : r.us ? '美股個股' : '台股個股', industry: etf ? null : ind[r.symbol] || null, weight: r.mv / g * 100, plPct: r.plPct, yieldPct: null, broadEtf: etf && !lev(r.name), us: r.us }; }),
+      cashPct: P.cash / g * 100, marginPct: (P.margin || 0) / g * 100, shortPct: (P.shorts || []).reduce((a, x) => a + x.n * x.px, 0) / g * 100 };
+    const r = pfDiag(input); const m = r.metrics;
+    const dev = Object.keys(tg).length ? P.rows.map((x) => Math.abs(x.weight - (tg[x.symbol] || 0))).reduce((a, v) => Math.max(a, v), 0) : null;
+    if (dev != null) r.findings.push({ level: dev <= 5 ? 0 : 1, title: '目標配置偏離', detail: `最大偏離 ${dev.toFixed(1)} 個百分點（建議 ≤ 5，見「再平衡」）` });
+    const col = r.score >= 70 ? 'var(--down)' : r.score >= 55 ? 'var(--warn)' : 'var(--up)'; const ic = ['✅', '⚠️', '⛔'];
+    const key = 'pf:' + ymd() + ':' + hashStr(JSON.stringify(pfDiagJson(input, r))); const cached = aiCacheGet(key);
+    $('#dyn').innerHTML = `<div class="card" style="margin-bottom:12px"><div class="row" style="gap:14px"><div style="font-size:44px;font-weight:800;color:${col}" class="num">${r.score}</div><div><b style="color:${col}">${r.grade}</b><div class="small muted">${m.count} 檔 · 等效分散 ${m.effectiveN.toFixed(1)} 檔 · 最大持股 ${m.top1.toFixed(1)}% · 前三大 ${m.top3.toFixed(1)}% · ETF ${m.etfPct.toFixed(0)}% · 現金 ${Math.max(0, input.cashPct).toFixed(1)}%</div></div></div></div>
+      <div class="grid g2 stack"><div class="card"><h2>本地診斷</h2><div class="list">${r.findings.map((f) => `<div class="it" style="cursor:default"><span style="font-size:18px">${ic[f.level]}</span><div class="l"><div class="t1">${esc(f.title)}</div><div class="t2" style="white-space:normal">${esc(f.detail)}</div></div></div>`).join('')}</div>
+        <div class="small muted" style="margin-top:8px">評分依集中度、產業、槓桿、現金、匯率與套牢部位估算（與手機 App 相同規則）。</div></div>
+        <div class="card"><h2>AI 綜合解讀<span class="r"><button class="btn sm" id="pfAi">${cached ? '重新分析' : 'AI 解讀'}</button></span></h2><div id="pfOut">${cached ? pfAiHtml(cached) : `<div class="small muted">${aiChain().length ? '按「AI 解讀」把上方百分比資料交給 AI 綜合解讀。' : '在 設定 › AI 個股體檢 設定任一家 AI 服務金鑰後可使用。'}</div>`}</div>
+        <div class="small muted" style="margin-top:8px">送給 AI 的只有權重、報酬率等百分比，不含金額與交易紀錄；金鑰只存在這個瀏覽器。</div></div></div>`;
+    $('#pfAi').onclick = async () => {
+      if (!can('AI')) { toast('AI 解讀為會員功能'); return; } const chain = aiChain(); if (!chain.length) { toast('請先設定 AI 金鑰'); return; }
+      $('#pfAi').disabled = true; $('#pfOut').innerHTML = '<div class="small muted">AI 分析中…</div>'; let err = '';
+      const sys = await fetch('/web/pfskill.json?v=' + Math.floor(Date.now() / 3600000)).then((x) => x.json()).then((o) => o.prompt).catch(() => '你是投資組合顧問，只根據輸入 JSON 解讀，輸出 JSON：style, summary, strengths, risks, actions。');
+      for (const p of chain) {
+        try { const { text, model } = await aiCall(p, sys, JSON.stringify(pfDiagJson(input, r)), 1200, 0.2); const o = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
+          if (!o.summary) throw new Error('回應不是有效 JSON'); o.by = model; o.date = ymd(); o._at = Date.now(); aiCachePut(key, o); if (S.route === 'analysis') $('#pfOut').innerHTML = pfAiHtml(o); $('#pfAi').disabled = false; $('#pfAi').textContent = '重新分析'; return; }
+        catch (e) { err = e.message; }
+      }
+      $('#pfOut').innerHTML = `<div class="notice err">${esc(err || 'AI 分析失敗')}</div>`; $('#pfAi').disabled = false;
+    };
   },
   /** 交易成本：手續費與交易稅 */
   cost() {
@@ -4674,6 +4685,49 @@ async function alertModal(sym) {
 
 // ───────── 現金與帳戶 ─────────
 const FLOW_C = ['入金', '出金', '利息', '費用', '其他'];
+// ───────── 投資組合診斷（與 App PortfolioDiag 相同規則；只用百分比） ─────────
+function pfDiag(i) {
+  const ps = i.positions.filter((p) => p.weight > 0).sort((a, b) => b.weight - a.weight); const f1 = (v) => v.toFixed(1);
+  const inv = ps.reduce((a, p) => a + p.weight, 0); const w = ps.map((p) => p.weight / inv * 100);
+  const top1 = w[0], top3 = w.slice(0, 3).reduce((a, v) => a + v, 0); const hhi = w.reduce((a, v) => a + (v / 100) ** 2, 0); const effN = hhi > 0 ? 1 / hhi : 0;
+  const stocks = ps.filter((p) => !p.broadEtf); const ts = stocks[0]; const tsp = ts ? ts.weight / inv * 100 : 0;
+  const im = {}; stocks.filter((p) => p.industry).forEach((p) => { im[p.industry] = (im[p.industry] || 0) + p.weight / inv * 100; }); const ind = Object.entries(im).sort((a, b) => b[1] - a[1])[0];
+  const etfPct = ps.filter((p) => p.broadEtf).reduce((a, p) => a + p.weight, 0) / inv * 100; const usdPct = ps.filter((p) => p.us).reduce((a, p) => a + p.weight, 0) / Math.max(1e-9, inv + i.cashPct) * 100;
+  const deep = ps.filter((p) => p.plPct <= -20); const deepPct = deep.reduce((a, p) => a + p.weight, 0) / inv * 100;
+  const yw = ps.filter((p) => p.yieldPct != null); const ywS = yw.reduce((a, p) => a + p.weight, 0); const yieldPct = ywS >= inv * 0.5 ? yw.reduce((a, p) => a + p.weight * p.yieldPct, 0) / ywS : null;
+  let score = 100; const out = []; const F = (level, title, detail) => out.push({ level, title, detail });
+  if (ts && tsp >= 40) { score -= 25; F(2, '單一個股過度集中', `「${ts.name}」占持股 ${f1(tsp)}%，個股出狀況時整體受傷大。`); }
+  else if (ts && tsp >= 25) { score -= 12; F(1, '單一個股比重偏高', `「${ts.name}」占持股 ${f1(tsp)}%，可設定停損或分散。`); }
+  if (ps.length >= 4 && effN < 3 && etfPct < 50) { score -= 8; F(1, '權重集中', `等效分散檔數約 ${f1(effN)} 檔，前三大合計 ${f1(top3)}%。`); }
+  if (ps.length <= 3 && etfPct < 50) { score -= 10; F(1, '持股檔數少', `只有 ${ps.length} 檔且以個股為主，分散不足。`); }
+  if (ind && ind[1] >= 50 && stocks.length >= 2) { score -= 10; F(1, '產業集中', `「${ind[0]}」占持股 ${f1(ind[1])}%，產業循環時同漲同跌。`); }
+  if (effN >= 8 || etfPct >= 50) F(0, '分散度良好', etfPct >= 50 ? `分散型 ETF 占持股 ${f1(etfPct)}%，核心部位穩健。` : `等效分散 ${f1(effN)} 檔。`);
+  if (i.marginPct >= 30) { score -= 18; F(2, '融資槓桿高', `融資占總資產 ${f1(i.marginPct)}%，股價下跌時虧損放大並可能被追繳。`); }
+  else if (i.marginPct >= 10) { score -= 6; F(1, '使用融資', `融資占總資產 ${f1(i.marginPct)}%，留意維持率。`); }
+  if (i.shortPct >= 10) { score -= 6; F(1, '放空部位', `放空市值占總資產 ${f1(i.shortPct)}%，上漲風險理論上無上限。`); }
+  if (i.cashPct < 3) { score -= 5; F(1, '現金偏低', `現金只占總資產 ${f1(Math.max(0, i.cashPct))}%，建議保留緊急預備金。`); }
+  else if (i.cashPct > 50) { score -= 3; F(1, '現金比重高', `現金占總資產 ${f1(i.cashPct)}%，長期可能跑輸通膨。`); }
+  else if (i.cashPct >= 5 && i.cashPct <= 30) F(0, '現金水位適中', `現金占總資產 ${f1(i.cashPct)}%。`);
+  if (usdPct >= 60) { score -= 4; F(1, '美元資產比重高', `美股占總資產 ${f1(usdPct)}%，台幣升值時有匯損。`); }
+  if (deepPct >= 20) { score -= 10; F(2, '深度套牢部位', `虧損超過 20% 的持股占 ${f1(deepPct)}%：${deep.slice(0, 3).map((p) => p.name).join('、')}，請檢視原本買進理由是否還成立。`); }
+  else if (deep.length) F(1, '個別虧損持股', deep.slice(0, 3).map((p) => p.name + ' ' + f1(p.plPct) + '%').join('、') + '。');
+  if (i.maxDrawdownPct != null) { if (i.maxDrawdownPct >= 35) { score -= 8; F(2, '回撤幅度大', `近一年最大回撤 ${f1(i.maxDrawdownPct)}%，需確認能承受同樣跌幅。`); } else if (i.maxDrawdownPct <= 15) F(0, '回撤可控', `近一年最大回撤 ${f1(i.maxDrawdownPct)}%。`); }
+  if (i.volPct != null && i.volPct >= 35) { score -= 4; F(1, '波動度高', `年化波動 ${f1(i.volPct)}%。`); }
+  if (i.ret1y != null && i.bench1y != null) { const d = i.ret1y - i.bench1y; if (d >= 0) F(0, '績效優於大盤', `近一年 ${f1(i.ret1y)}%，台灣 50 為 ${f1(i.bench1y)}%。`); else F(1, '績效落後大盤', `近一年 ${f1(i.ret1y)}%，落後台灣 50（${f1(i.bench1y)}%）${f1(-d)} 個百分點，可考慮以市值型 ETF 為核心。`); }
+  if (yieldPct != null && yieldPct >= 4) F(0, '現金流穩定', `加權殖利率約 ${f1(yieldPct)}%。`);
+  const sc = Math.round(Math.min(100, Math.max(0, score))); const grade = sc >= 85 ? '穩健' : sc >= 70 ? '良好' : sc >= 55 ? '普通' : sc >= 40 ? '偏高風險' : '高風險';
+  return { score: sc, grade, metrics: { count: ps.length, top1, top1Name: ps[0].name, top3, effectiveN: effN, topIndustry: ind ? ind[0] : null, topIndustryPct: ind ? ind[1] : 0, etfPct, usdPct, lossDeepPct: deepPct, yieldPct, investedPct: inv },
+    findings: out.map((f, k) => [f, k]).sort((a, b) => b[0].level - a[0].level || a[1] - b[1]).map((x) => x[0]) };
+}
+function hashStr(t) { let h = 0; for (let k = 0; k < t.length; k++) h = (h * 31 + t.charCodeAt(k)) | 0; return (h >>> 0).toString(36); }
+function pfDiagJson(i, r) { const d = (v) => Math.round(v * 10) / 10; const m = r.metrics;
+  const o = { score: r.score, grade: r.grade, positions: i.positions.slice().sort((a, b) => b.weight - a.weight).slice(0, 30).map((p) => ({ symbol: p.symbol, name: p.name, type: p.type, industry: p.industry, weightPct: d(p.weight), plPct: d(p.plPct), yieldPct: p.yieldPct == null ? null : d(p.yieldPct), broadEtf: p.broadEtf })),
+    cashPct: d(i.cashPct), marginPct: d(i.marginPct), shortPct: d(i.shortPct), usdPct: d(m.usdPct), top1Pct: d(m.top1), top3Pct: d(m.top3), effectiveN: d(m.effectiveN), topIndustry: m.topIndustry, topIndustryPct: d(m.topIndustryPct), etfPct: d(m.etfPct), lossDeepPct: d(m.lossDeepPct), yieldPct: m.yieldPct == null ? null : d(m.yieldPct),
+    findings: r.findings.map((f) => ({ level: f.level, title: f.title, detail: f.detail })) };
+  ['maxDrawdownPct', 'volPct'].forEach((k) => { if (i[k] != null) o[k] = d(i[k]); }); if (i.ret1y != null) o.ret1yPct = d(i.ret1y); if (i.bench1y != null) o.bench1yPct = d(i.bench1y); return o; }
+function pfAiHtml(o) { const L = (k, l) => (l && l.length ? `<div style="margin-top:8px"><b>${k}</b>${l.map((x) => `<div class="small">・${esc(x)}</div>`).join('')}</div>` : '');
+  return `${o.style ? `<span class="tag">${esc(o.style)}</span>` : ''}<div style="margin-top:6px">${esc(o.summary || '')}</div>${L('優點', o.strengths)}${L('風險', o.risks)}${L('調整方向', o.actions)}<div class="small muted" style="margin-top:8px">${esc(o.by || '')} · ${esc(o.date || '')} · 僅供參考，非投資建議</div>`; }
+
 // ───────── 年度報稅彙總（與 App ReportCalc／TaxSummary 相同算法） ─────────
 const TAXC = { credit: 0.085, cap: 80000, sep: 0.28, ovs: 1000000, amtEx: 7500000, amtRate: 0.2, rates: [0.05, 0.12, 0.2, 0.3, 0.4] };
 function taxCompare(taxable, rate) { const t = Math.max(0, taxable); const credit = Math.min(t * TAXC.credit, TAXC.cap); const combined = t * rate - credit, separate = t * TAXC.sep;
