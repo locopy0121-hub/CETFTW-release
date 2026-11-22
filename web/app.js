@@ -894,7 +894,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"286bb46","at":"2026-11-23 01:39"};
+const WEB_VER = /*WEBVER*/{"v":"v1.1.395","sha":"e24930e","at":"2026-11-23 01:46"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -2699,29 +2699,16 @@ const AI_P = [
 ];
 // 金鑰：以瀏覽器產生、不可匯出的 AES-GCM 金鑰（存於 IndexedDB）加密後才放進 localStorage；不上傳、不同步
 function idb() { return new Promise((res, rej) => { const r = indexedDB.open('cetf', 1); r.onupgradeneeded = () => r.result.createObjectStore('k'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
-async function idbGet(k) { const db = await idb(); return new Promise((res, rej) => { const t = db.transaction('k').objectStore('k').get(k); t.onsuccess = () => res(t.result); t.onerror = () => rej(t.error || new Error('IndexedDB 讀取失敗')); }); }
+async function idbGet(k) { const db = await idb(); return new Promise((res) => { const t = db.transaction('k').objectStore('k').get(k); t.onsuccess = () => res(t.result); t.onerror = () => res(null); }); }
 async function idbPut(k, v) { const db = await idb(); return new Promise((res) => { const t = db.transaction('k', 'readwrite'); t.objectStore('k').put(v, k); t.oncomplete = () => res(); t.onerror = () => res(); }); }
-/** 瀏覽器金鑰：只在確定不存在時才建立；讀取失敗不可另建新金鑰覆蓋（否則已儲存的 API 金鑰全部無法解密）。同一時間只建立一次 */
-let AI_CK = null;
-function aiCk() {
-  if (!AI_CK) AI_CK = (async () => {
-    let k = await idbGet('ai');
-    if (k === undefined) { k = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']); await idbPut('ai', k); const k2 = await idbGet('ai'); if (k2) k = k2; }
-    if (!k) throw new Error('瀏覽器金鑰無法讀取');
-    try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
-    return k;
-  })().catch((e) => { AI_CK = null; throw e; });
-  return AI_CK;
-}
+async function aiCk() { let k = await idbGet('ai'); if (!k) { k = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']); await idbPut('ai', k); } return k; }
 const b64of = (u8) => btoa(String.fromCharCode(...u8));
 function aiHas(id) { return !!(store.get('aik', {})[id]); }
 async function aiKeySet(id, val) {
   const all = store.get('aik', {});
   if (!val) delete all[id];
-  else {
-    let ck; try { ck = await aiCk(); } catch (e) { toast('無法儲存金鑰：瀏覽器的加密儲存區無法使用（' + e.message + '），請關閉無痕模式或允許網站資料後再試', 6000); return false; }
-    const iv = crypto.getRandomValues(new Uint8Array(12)); const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, ck, new TextEncoder().encode(val)); all[id] = b64of(iv) + '.' + b64of(new Uint8Array(ct)); }
-  store.set('aik', all); if (S.me && S.me.no) store.set('aikNo', S.me.no);
+  else { const iv = crypto.getRandomValues(new Uint8Array(12)); const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await aiCk(), new TextEncoder().encode(val)); all[id] = b64of(iv) + '.' + b64of(new Uint8Array(ct)); }
+  store.set('aik', all);
 }
 async function aiKeyGet(id) {
   const e = store.get('aik', {})[id]; if (!e) return '';
@@ -2925,31 +2912,9 @@ function aiSettingsHtml() {
       <button class="btn sm" data-aisave="${p[0]}">儲存</button>${aiHas(p[0]) ? `<button class="btn sm" data-aitest="${p[0]}">測試</button><button class="btn sm" data-aidel="${p[0]}">清除</button>` : ''}</div>`).join('')}
       ${aiShared() ? `<div class="it" style="cursor:default;flex-wrap:wrap;gap:8px;padding:8px 2px"><input type="checkbox" data-aion="shared" ${off.has('shared') ? '' : 'checked'} style="width:auto"><div class="l" style="min-width:150px"><div class="t1">管理員提供的 AI</div>
         <div class="t2">${esc(S.sk.ai.join('、'))} · 今日剩 ${S.sk.aiLeft} / ${S.sk.aiLimit} 次</div></div><span class="small muted sp">免設定金鑰；沒有自己的金鑰或自己的金鑰失敗時才使用，金鑰由管理員保管、不會傳到瀏覽器。</span></div>` : ''}</div>
-    <div class="small muted" style="margin-top:6px">網頁直連：Claude、OpenAI、Gemini 支援；Agnes、DeepSeek 若瀏覽器擋下會自動改用下一家。</div>
-    <div class="row wrap" style="gap:8px;margin-top:10px"><button class="btn sm" id="akBak">備份金鑰（加密檔）</button><button class="btn sm" id="akRes">還原金鑰</button><input type="file" id="akFile" accept=".aes,.json,application/octet-stream" class="hide">
-      <span class="small muted sp">金鑰只存在這個瀏覽器；網頁更新與自動登出都會保留。換電腦、換瀏覽器或清除瀏覽資料前，可先備份成以匯出密碼加密的檔案，之後一鍵還原（含富果、FinMind）。</span></div></div>`;
-}
-/** 金鑰備份：所有 API 金鑰（AI、富果、FinMind）以匯出密碼 AES-256 加密成檔案 */
-async function aiKeysBackup() {
-  const out = {}; for (const id of Object.keys(store.get('aik', {}))) { const v = await aiKeyGet(id); if (v) out[id] = v; }
-  if (!Object.keys(out).length) return toast('沒有可備份的金鑰');
-  const pwd = await expPassword(); if (!pwd) return;
-  const enc = await expEncrypt(JSON.stringify({ app: 'ClaudeETF', type: 'apiKeys', at: ymd(), keys: out }), pwd, 'keys');
-  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([enc], { type: 'application/octet-stream' })); a.download = 'ClaudeETF-API金鑰-' + ymd().replace(/\//g, '-') + '.aes'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-  toast('已備份 ' + Object.keys(out).length + ' 組金鑰（加密）');
-}
-async function aiKeysRestore(file) {
-  const t = await expOpen(await file.text()); if (t == null) return;
-  let o; try { o = JSON.parse(t); } catch (e) { return toast('檔案格式錯誤'); }
-  if (o.type !== 'apiKeys' || !o.keys) return toast('這不是金鑰備份檔');
-  let n = 0; for (const [id, v] of Object.entries(o.keys)) { if (typeof v === 'string' && v) { await aiKeySet(id, v); n++; } }
-  Object.keys(FMC).forEach((k) => delete FMC[k]); toast('已還原 ' + n + ' 組金鑰'); route();
+    <div class="small muted" style="margin-top:6px">網頁直連：Claude、OpenAI、Gemini 支援；Agnes、DeepSeek 若瀏覽器擋下會自動改用下一家。</div></div>`;
 }
 function aiSettingsBind() {
-  if ($('#akBak')) { $('#akBak').onclick = () => aiKeysBackup().catch((e) => toast('備份失敗：' + e.message)); $('#akRes').onclick = () => $('#akFile').click();
-    $('#akFile').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) aiKeysRestore(f).catch((x) => toast('還原失敗：' + x.message)); }; }
-  // 已儲存但無法解密（瀏覽器資料被清除）：標示出來，請重新輸入或還原備份
-  AI_P.forEach(async (p) => { if (!aiHas(p[0])) return; if (!(await aiKeyGet(p[0]))) { const el = $(`[data-aik="${p[0]}"]`); const row = el && el.closest('.it'); const t2 = row && $('.t2', row); if (t2) t2.innerHTML = '<span class="up">無法讀取，請重新輸入或還原備份</span>'; } });
   $$('[data-aion]').forEach((c) => c.onchange = () => { const o = new Set(S.pref.aiOff || []); if (c.checked) o.delete(c.dataset.aion); else o.add(c.dataset.aion); S.pref.aiOff = Array.from(o); savePref(); });
   $$('[data-aim]').forEach((s) => s.onchange = () => { S.pref.aiModel = { ...(S.pref.aiModel || {}), [s.dataset.aim]: s.value }; savePref(); });
   $$('[data-aisave]').forEach((b) => b.onclick = async () => { const id = b.dataset.aisave; const v = $(`[data-aik="${id}"]`).value.trim(); if (!v) return toast('請先貼上金鑰'); await aiKeySet(id, v); toast('已儲存'); route(); });
@@ -4524,9 +4489,7 @@ VIEWS.member = {
     $('#sAuto').onchange = (e) => { S.pref.syncAuto = e.target.checked; savePref(); toast(e.target.checked ? '已改為自動同步' : '已改為手動同步：按「立即同步」才會上傳／下載'); renderSync(); };
     $('#apBtn').onclick = () => applyModal();
     $$('[data-plan]').forEach((el) => el.onclick = () => applyModal(el.dataset.plan));
-    $('#lo').onclick = async () => { let ck = false;
-      if ((await dialog('登出', '登出後這個瀏覽器的投資資料會清除（雲端資料保留），重新登入即可恢復。<label class="row small" style="gap:6px;margin-top:10px;cursor:pointer;justify-content:flex-start"><input type="checkbox" id="loK" style="width:auto"> 同時清除這個瀏覽器保存的 API 金鑰（共用電腦建議勾選）</label>',
-        [['', '取消'], ['ok', '登出', 'primary']], (b) => () => { ck = $('#loK', b).checked; return null; })) === 'ok') logout(undefined, ck); };
+    $('#lo').onclick = async () => { if ((await dialog('登出', '登出後這個瀏覽器的資料會清除（雲端資料保留），重新登入即可恢復。', [['', '取消'], ['ok', '登出', 'primary']])) === 'ok') logout(); };
     $('#pfE').closest('.card').insertAdjacentHTML('beforeend', '<div class="row" style="margin-top:12px;gap:16px"><a href="/web/privacy.html" target="_blank" rel="noopener" class="small">隱私權政策</a><a href="javascript:void 0" id="delAcc" class="small muted">刪除帳號</a></div>');
     $('#delAcc').onclick = () => deleteAccountModal(me);
     $('#syn').onclick = async () => { await syncNow(); this.fill(); };
@@ -6242,9 +6205,6 @@ async function loginWith(r, reg) {
     S.session = r.session; store.set('session', r.session);
     // 換帳號登入：清除上一個帳號的本機資料
     if (store.get('no', '') !== r.no) { S.keys = {}; S.rev = 0; S.dirty = false; store.del('keys'); store.set('rev', 0); store.set('dirty', false); }
-    // 換成別的帳號：上一個帳號留在這個瀏覽器的 API 金鑰不沿用
-    const kno = store.get('aikNo', ''); if (kno && kno !== r.no) { store.del('aik'); store.del('aic'); store.del('aikNo'); }
-    if (!kno && Object.keys(store.get('aik', {})).length) store.set('aikNo', r.no);
     store.set('no', r.no); store.set('lmode', 'login');
     if (reg && !r.isNew && r.serverVersion) toast('這個 Google 帳號已經註冊過，已直接登入', 4000);
     await start(r);
@@ -6307,11 +6267,9 @@ async function restoreModal(d) {
   try { const o = await api('restoreReq', { ticket: d.ticket, note }); toast('已送出恢復申請，管理員確認後會通知你（' + o.no + '）', 6000); }
   catch (e) { toast('申請失敗：' + e.message, 5000); }
 }
-/** 登出：自動登出（逾時、其他瀏覽器登入、伺服器更新）一律保留這個瀏覽器的 API 金鑰；只有使用者勾選清除才刪除 */
-async function logout(msg, clearKeys) {
+async function logout(msg) {
   const ses = S.session;
-  S.session = ''; store.del('session'); store.del('keys'); store.set('rev', 0); store.set('dirty', false); store.del('no');
-  if (clearKeys) { store.del('aik'); store.del('aic'); store.del('aikNo'); }
+  S.session = ''; store.del('session'); store.del('keys'); store.set('rev', 0); store.set('dirty', false); store.del('no'); store.del('aik'); store.del('aic');
   S.keys = {}; S.rev = 0; S.dirty = false; S.me = null; S.code = null;
   S.timers.forEach(clearInterval); S.timers = [];
   if (ses) api('logout', { session: ses }).catch(() => {});
