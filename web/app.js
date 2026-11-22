@@ -846,7 +846,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"684d907","at":"2026-11-22 21:18"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"102a0a8","at":"2026-11-22 21:31"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -3518,7 +3518,9 @@ Object.assign(VIEWS.s, {
     t.push([TAX_KINDS[taxKindOf(sym)][0], 'var(--text2)']);
     const p = plans && plans[sym]; const today = ymd();
     el.innerHTML = t.filter(([x], i) => t.findIndex(([y]) => y === x) === i).map(([x, c]) => `<span class="tag" style="color:${c};border-color:${c}">${esc(x)}</span>`).join(' ') +
+      (can('KLINE') ? ` <span class="tag" id="advTag" style="color:var(--muted);border-color:var(--line)">進場建議 計算中…</span>` : '') +
       (p && p.ex >= today ? ` <span class="tag" style="color:#f59e0b;border-color:#f59e0b">除息 ${esc(p.ex.slice(5))}${p.lb ? '・最後買進 ' + esc(p.lb.slice(5)) : ''}${p.cash ? '・' + fmt(p.cash, 4) + ' 元' : ''}${p.pay ? '・發放 ' + esc(p.pay.slice(5)) : ''}</span>` : '');
+    if (can('KLINE')) entryAdviceCached(sym).then((a) => { if (this.sym === sym) setAdvTag(sym, a); }).catch(() => setAdvTag(sym, null));
   },
   /** 五檔 */
   book() {
@@ -4233,12 +4235,31 @@ async function entryAdvice(sym) {
     stop: Math.min(px0 - atr14, m20 && m20 < px0 ? Math.max(m20 - atr14 * 0.5, px0 - atr14 * 3) : px0 - atr14 * 2) };
 }
 const ADV_COL = { 2: '#dc2626', 1: '#f97316', 0: '#64748b', '-1': '#16a34a', '-2': '#15803d' };
+/** 進場建議快取（個股頁標籤列與綜合進場建議卡共用，2 分鐘內不重算；同時只算一次） */
+const ADV_CACHE = {};
+function entryAdviceCached(sym, maxAge = 120000) {
+  const c = ADV_CACHE[sym]; if (c && Date.now() - c.at < maxAge) return c.p;
+  const p = entryAdvice(sym).catch(() => null); ADV_CACHE[sym] = { at: Date.now(), p }; return p;
+}
+function advColor(level) { return S.pref.color === 'us' ? { 2: '#16a34a', 1: '#22c55e', 0: '#64748b', '-1': '#f97316', '-2': '#dc2626' }[level] : ADV_COL[level]; }
+/** 個股標籤列的進場建議標籤：建議＋先投比例（已持有顯示加減碼建議）、分數與信心度；點一下捲到綜合進場建議卡 */
+function setAdvTag(sym, a) {
+  const t = $('#advTag'); if (!t) return;
+  if (!a) { t.textContent = '進場建議 資料不足'; return; }
+  const col = advColor(a.level); const held = holdings().some((x) => x.symbol === sym);
+  const px = (S.q[sym] || {}).price;
+  t.style.color = col; t.style.borderColor = col; t.style.fontWeight = '700'; t.style.cursor = 'pointer';
+  t.innerHTML = `${a.level >= 1 ? '▲' : a.level <= -1 ? '▼' : '●'} ${esc(a.label)}${held ? '・' + esc(a.tip.replace('已持有：', '')) : '・先投 ' + a.ratio + '%'} <span style="font-weight:400;opacity:.8">${a.score} 分・信心 ${a.confidence}%</span>`;
+  t.title = `綜合進場建議：${a.label}（綜合分數 ${a.score}／100、信心度 ${a.confidence}%、${a.src.length} 項指標）` + (px ? `\n參考停損 ${fmtPrice(a.stop)}（${fmtPct((a.stop / px - 1) * 100, 1)}）` : '') +
+    (a.pros.length ? '\n利多：' + a.pros.map((x) => x.name).join('、') : '') + (a.cons.length ? '\n利空：' + a.cons.map((x) => x.name).join('、') : '') + (a.guards.length ? '\n' + a.guards.join('；') : '') + '\n點一下看完整分析（僅供參考）';
+  t.onclick = () => { const el = $('#adv'); if (el && el.firstElementChild) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); else { const b = $('[data-st="ov"]'); if (b) { b.click(); setTimeout(() => { const e2 = $('#adv'); if (e2) e2.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 900); } } };
+}
 async function advCard(el, sym) {
   if (!el) return; if (!can('KLINE')) { el.innerHTML = lockCard('KLINE'); return; }
   el.innerHTML = '<div class="card"><h2>綜合進場建議</h2><div class="small muted">計算中…</div></div>';
-  const a = await entryAdvice(sym).catch(() => null); if (!el.isConnected) return;
+  const a = await entryAdviceCached(sym); if (!el.isConnected) return; setAdvTag(sym, a);
   if (!a) { el.innerHTML = '<div class="card"><h2>綜合進場建議</h2><div class="small muted">資料不足，無法計算。</div></div>'; return; }
-  const col = S.pref.color === 'us' ? { 2: '#16a34a', 1: '#22c55e', 0: '#64748b', '-1': '#f97316', '-2': '#dc2626' }[a.level] : ADV_COL[a.level];
+  const col = advColor(a.level);
   const h = holdings().find((x) => x.symbol === sym);
   el.innerHTML = `<div class="card"><h2>綜合進場建議<span class="r small muted">${a.src.length} 項指標 · 信心度 ${a.confidence}%</span></h2>
     <div class="row wrap" style="gap:16px;align-items:center">
@@ -4252,7 +4273,6 @@ async function advCard(el, sym) {
     <details style="margin-top:8px"><summary class="small muted" style="cursor:pointer">全部指標與權重</summary><table class="tbl" style="margin-top:6px"><thead><tr><th>指標</th><th>類別</th><th>分數</th><th>影響</th><th>說明</th></tr></thead><tbody>
       ${a.src.map((s) => `<tr><td>${esc(s.name)}</td><td class="small">${esc(s.group)}</td><td class="num ${cls(s.score)}">${s.score > 0 ? '+' : ''}${s.score.toFixed(1)}</td><td class="num">${(s.share * 100).toFixed(0)}%</td><td class="small text2" style="text-align:left">${s.note}</td></tr>`).join('')}</tbody></table></details>
     <div class="small muted" style="margin-top:6px">每項指標換算成 −2～+2 再加權（單項上限 18%），信心度看各指標方向是否一致；僅供參考，非投資建議。</div></div>`;
-  const t = $('#stags'); if (t && !$('#advTag')) t.insertAdjacentHTML('afterbegin', `<span class="tag" id="advTag" style="color:${col};border-color:${col};font-weight:700">${esc(a.label)}${h ? '' : '・先投 ' + a.ratio + '%'}</span> `);
 }
 
 // ───────── 指令面板（Ctrl＋K）：跳頁、找個股、常用動作 ─────────
