@@ -823,7 +823,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"c4320c3","at":"2026-11-22 19:33"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"6e6a2d4","at":"2026-11-22 19:41"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -3143,9 +3143,21 @@ function fmBandHtml(name, b, price, d = 1) {
       <tr><td class="muted">比值</td>${[b.min, b.p25, b.med, b.p75, b.max].map((v) => `<td class="num">${fmt(v, d)}</td>`).join('')}</tr>
       ${price > 0 ? `<tr><td class="muted">對應股價</td>${[b.min, b.p25, b.med, b.p75, b.max].map((v, i) => `<td class="num ${i < 2 ? 'down' : i > 2 ? 'up' : ''}">${px(v)}</td>`).join('')}</tr>` : ''}</tbody></table></div></div>`;
 }
+
+/** 資產負債、現金流（與 App FinMindParse 同算法；現金流量表為累計數，換算單季） */
+function fmPick(m, exact, contains = [], not = []) { for (const k of exact) if (m[k] != null) return m[k]; const ks = Object.keys(m).filter((k) => !/_per$/.test(k) && contains.some((c) => k.includes(c)) && !not.some((c) => k.includes(c))).sort((a, b) => a.length - b.length); return ks.length ? m[ks[0]] : null; }
+function fmByDate(rows) { const by = {}; rows.forEach((o) => { const v = +o.value; if (!isNaN(v)) (by[o.date] = by[o.date] || {})[o.type] = v; }); return by; }
+const fmQl = (d) => { const t = new Date(d); return t.getFullYear() + 'Q' + (Math.floor(t.getMonth() / 3) + 1); };
+function fmBalance(rows) { const by = fmByDate(rows); return Object.keys(by).sort().reverse().map((d) => { const m = by[d];
+  const ta = fmPick(m, ['TotalAssets'], ['TotalAssets']), tl = fmPick(m, ['Liabilities', 'TotalLiabilities'], ['Liabilities'], ['Current', 'NonCurrent', 'Equity']), ca = fmPick(m, ['CurrentAssets'], ['CurrentAssets'], ['NonCurrent']), cl = fmPick(m, ['CurrentLiabilities'], ['CurrentLiabilities'], ['NonCurrent']);
+  return { d, ql: fmQl(d), debt: ta && tl != null ? tl / ta * 100 : null, cur: ca != null && cl ? ca / cl * 100 : null, cash: fmPick(m, ['CashAndCashEquivalents'], ['CashAndCashEquivalents']) }; }).filter((x) => x.debt != null || x.cur != null); }
+function fmCashFlow(rows) { const by = fmByDate(rows); const cum = Object.keys(by).sort().map((d) => { const m = by[d];
+  return { d, o: fmPick(m, ['CashFlowsFromOperatingActivities', 'NetCashInflowFromOperatingActivities'], ['OperatingActivities']), c: fmPick(m, ['PropertyAndPlantAndEquipment', 'AcquisitionOfPropertyPlantAndEquipment'], ['PropertyPlantAndEquipment', 'PropertyAndPlantAndEquipment'], ['Disposal', 'Proceeds']) }; });
+  return cum.map((x, i) => { const mo = new Date(x.d).getMonth() + 1, p = cum[i - 1]; if (mo <= 3) return x; if (!p || new Date(p.d).getFullYear() !== new Date(x.d).getFullYear() || x.o == null || p.o == null) return null;
+    return { d: x.d, o: x.o - p.o, c: x.c != null && p.c != null ? x.c - p.c : null }; }).filter((x) => x && x.o != null).map((x) => ({ ...x, ql: fmQl(x.d), f: x.o + (x.c || 0) })).reverse(); }
 async function fmFinCards(el, sym, isCur) {
   const price = (S.q[sym] || {}).price || 0;
-  const [rv, inc, val] = await Promise.allSettled([fmGet('TaiwanStockMonthRevenue', sym, 1500), fmGet('TaiwanStockFinancialStatements', sym, 1280), fmGet('TaiwanStockPER', sym, 1830)]);
+  const [rv, inc, val, bsr, cfr] = await Promise.allSettled([fmGet('TaiwanStockMonthRevenue', sym, 1500), fmGet('TaiwanStockFinancialStatements', sym, 1280), fmGet('TaiwanStockPER', sym, 1830), fmGet('TaiwanStockBalanceSheet', sym, 900), fmGet('TaiwanStockCashFlowsStatement', sym, 1200)]);
   if (!isCur()) return;
   let h = '';
   if (rv.status === 'rejected') h += fmErr('月營收', rv.reason);
@@ -3167,6 +3179,17 @@ async function fmFinCards(el, sym, isCur) {
       <div class="scroll-x"><table class="tbl"><thead><tr><th>季度</th><th>營收</th><th>毛利率</th><th>營益率</th><th>淨利率</th><th>EPS</th></tr></thead><tbody>
         ${qs.slice(0, 12).map((q) => `<tr><td class="num">${q.label}</td><td class="num">${q.rev != null ? fmYi(q.rev) : '—'}</td><td class="num">${q.gm != null ? q.gm.toFixed(1) + '%' : '—'}</td><td class="num">${q.om != null ? q.om.toFixed(1) + '%' : '—'}</td><td class="num">${q.nm != null ? q.nm.toFixed(1) + '%' : '—'}</td><td class="num ${cls(q.eps)}">${q.eps != null ? fmt(q.eps, 2) : '—'}</td></tr>`).join('')}</tbody></table></div>${fmFoot('（財報為單季數字）')}</div>`;
     el._fmMg = last; } }
+  { const bs = bsr.status === 'fulfilled' ? fmBalance(bsr.value) : [], cf = cfr.status === 'fulfilled' ? fmCashFlow(cfr.value) : [];
+    if (bs.length || cf.length) { const b0 = bs[0] || {}; const c4 = cf.slice(0, 4); const ocf = c4.length === 4 ? c4.reduce((a, x) => a + x.o, 0) : null, fcf = c4.length === 4 ? c4.reduce((a, x) => a + x.f, 0) : null;
+      const qs = inc.status === 'fulfilled' ? fmQuarters(inc.value) : []; const n4 = qs.slice(0, 4).map((q) => (q.nm != null && q.rev ? q.nm / 100 * q.rev : null)).filter((x) => x != null); const net = n4.length === 4 ? n4.reduce((a, b) => a + b, 0) : null;
+      const last = cf.slice(0, 8).reverse(); const qsAll = Array.from(new Set(bs.map((x) => x.d).concat(cf.map((x) => x.d)))).sort().reverse().slice(0, 6);
+      h += `<div class="card"><h2>資產負債與現金流<span class="r small muted">金額單位：億</span></h2>
+        <div class="grid g3"><div class="tile"><div class="k">負債比率</div><div class="v num ${b0.debt >= 60 ? 'up' : ''}">${b0.debt != null ? b0.debt.toFixed(1) + '%' : '—'}</div></div><div class="tile"><div class="k">流動比率</div><div class="v num ${b0.cur != null && b0.cur < 100 ? 'up' : ''}">${b0.cur != null ? b0.cur.toFixed(0) + '%' : '—'}</div></div><div class="tile"><div class="k">現金</div><div class="v num">${b0.cash != null ? fmYi(b0.cash) : '—'}</div></div></div>
+        <div style="margin-top:10px">${kvRows([['近四季營業現金流', ocf != null ? fmYi(ocf) : null], ['近四季自由現金流', fcf != null ? fmYi(fcf) : null], ['營業現金流／淨利', ocf != null && net > 0 ? (ocf / net * 100).toFixed(0) + '%' : null]])}</div>
+        ${last.length >= 2 ? `<div class="small muted" style="margin-top:8px">單季自由現金流（近 ${last.length} 季）</div>${fmBars(last.map((x) => x.f), (v) => fmUpDn(v))}` : ''}
+        <div class="scroll-x"><table class="tbl"><thead><tr><th>季度</th><th>負債比</th><th>流動比</th><th>營業現金流</th><th>自由現金流</th></tr></thead><tbody>
+        ${qsAll.map((d) => { const b = bs.find((x) => x.d === d) || {}, c = cf.find((x) => x.d === d); return `<tr><td class="num">${fmQl(d)}</td><td class="num">${b.debt != null ? b.debt.toFixed(1) + '%' : '—'}</td><td class="num">${b.cur != null ? b.cur.toFixed(0) + '%' : '—'}</td><td class="num ${c ? cls(c.o) : ''}">${c ? fmYi(c.o) : '—'}</td><td class="num ${c ? cls(c.f) : ''}">${c ? fmYi(c.f) : '—'}</td></tr>`; }).join('')}</tbody></table></div>
+        <div class="small muted" style="margin-top:6px">自由現金流＝營業現金流＋資本支出；現金流量表由累計數換算為單季。</div>${fmFoot()}</div>`; } }
   if (val.status === 'rejected') h += fmErr('本益比・淨值比區間', val.reason);
   else { const vs = val.value.slice().sort((a, b) => (a.date < b.date ? 1 : -1)); const per = fmBand(vs.map((x) => +x.PER)), pbr = fmBand(vs.map((x) => +x.PBR)), yl = fmBand(vs.map((x) => +x.dividend_yield));
     if (vs.length >= 20) h += `<div class="card"><h2>本益比・淨值比區間<span class="r small muted">近 5 年 · ${esc(vs[0].date)}</span></h2>
