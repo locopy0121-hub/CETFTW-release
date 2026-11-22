@@ -894,7 +894,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"dab11ab","at":"2026-11-23 02:10"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"00c7878","at":"2026-11-23 02:46"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -2731,7 +2731,13 @@ function aiModel(p) { return ((S.pref.aiModel || {})[p[0]]) || p[4][0]; }
 /** 管理員提供的 AI（轉送站代為呼叫，金鑰不經過瀏覽器）：自己的金鑰優先，最後才用 */
 const AI_SHARED = ['shared', '管理員提供的 AI', 'proxy', '', ['（由管理員設定）'], ''];
 function aiShared() { return !!(S.sk && S.sk.on && (S.sk.ai || []).length); }
-function aiChain() { const off = new Set(S.pref.aiOff || []); const own = AI_P.filter((p) => aiHas(p[0]) && !off.has(p[0])); return aiShared() && !off.has('shared') ? own.concat([AI_SHARED]) : own; }
+/** 金鑰來源（AI、FinMind 各自）：auto＝自己的優先、沒有或失敗才用系統提供；system＝只用系統提供；own＝只用自己的（舊設定關閉「管理員提供」視為 own） */
+function keySrc(k) { const v = (S.pref || {})[k]; return v === 'system' || v === 'own' ? v : k === 'aiSrc' && (S.pref.aiOff || []).includes('shared') ? 'own' : 'auto'; }
+function aiChain() {
+  const off = new Set(S.pref.aiOff || []); const src = keySrc('aiSrc'); const sys = aiShared();
+  const own = src === 'system' && sys ? [] : AI_P.filter((p) => aiHas(p[0]) && !off.has(p[0]));
+  return sys && src !== 'own' ? own.concat([AI_SHARED]) : own;
+}
 async function skLoad() { if (!S.session) return; try { const r = await api('skInfo', { session: S.session }); if (!r.kicked) S.sk = r; } catch (e) { S.sk = null; } }
 let SKILL = null;
 async function skillPrompt() { if (SKILL) return SKILL; const r = await fetch('/web/skill.json?v=' + Math.floor(Date.now() / 3600000)); SKILL = (await r.json()).prompt; return SKILL; }
@@ -2914,17 +2920,25 @@ async function aiPanel(el, sym, force = false, useAi = false) {
   if ($('#aiGo', el)) $('#aiGo', el).onclick = () => aiPanel(el, sym, true, true);
   $('#aiJson', el).onclick = () => $('#aiPre', el).classList.toggle('hide');
 }
+/** 金鑰來源選擇：自動／系統提供／自行建立 */
+function keySrcHtml(k, sysOn, desc) {
+  const v = keySrc(k);
+  if (!sysOn) return `<div class="small muted" style="margin:4px 0 8px">金鑰來源：使用者自行建立（系統目前沒有提供）</div>`;
+  return `<div class="field" style="margin:4px 0 8px"><label>金鑰來源</label><div class="seg">${[['auto', '自動'], ['system', '系統提供'], ['own', '自行建立']].map(([x, n]) => `<button data-ksrc="${k}" data-v="${x}" class="${v === x ? 'on' : ''}">${n}</button>`).join('')}</div>
+    <div class="small text2" style="margin-top:4px">${esc(desc[v])}</div></div>`;
+}
 function aiSettingsHtml() {
   const off = new Set(S.pref.aiOff || []);
+  const sysDesc = aiShared() ? S.sk.ai.join('、') + '，今日剩 ' + S.sk.aiLeft + ' / ' + S.sk.aiLimit + ' 次' : '';
   return `<div class="card"><h2>AI 個股體檢</h2>
+    ${keySrcHtml('aiSrc', aiShared(), { auto: '自己有金鑰時優先用自己的，沒有或失敗才用系統提供的 AI（' + sysDesc + '）。系統金鑰由管理員保管，不會傳到瀏覽器。', system: '只用系統提供的 AI（' + sysDesc + '），不使用下方自己的金鑰。', own: '只用下方自己設定的金鑰，不使用系統提供的 AI。' })}
     <div class="small muted" style="margin-bottom:8px">依序嘗試已啟用且有金鑰的服務（Agnes AI 優先）。金鑰只加密保存在這個瀏覽器，不會上傳或同步到手機；手機 App 的金鑰需在 App 內另外設定。</div>
     <div class="list">${AI_P.map((p) => `<div class="it" style="cursor:default;flex-wrap:wrap;gap:8px;padding:8px 2px">
       <input type="checkbox" data-aion="${p[0]}" ${off.has(p[0]) ? '' : 'checked'} style="width:auto"><div class="l" style="min-width:150px"><div class="t1">${esc(p[1])}</div><div class="t2">${aiHas(p[0]) ? '<span class="up">已儲存</span>' : '未設定'} · <a href="${p[5]}" target="_blank" rel="noopener">取得金鑰</a></div></div>
       <select data-aim="${p[0]}" style="width:auto">${p[4].map((m) => `<option ${aiModel(p) === m ? 'selected' : ''}>${m}</option>`).join('')}</select>
       <input type="password" data-aik="${p[0]}" placeholder="${aiHas(p[0]) ? '已儲存（輸入新金鑰可取代）' : '貼上 API 金鑰'}" autocomplete="off" style="flex:1;min-width:160px">
       <button class="btn sm" data-aisave="${p[0]}">儲存</button>${aiHas(p[0]) ? `<button class="btn sm" data-aitest="${p[0]}">測試</button><button class="btn sm" data-aidel="${p[0]}">清除</button>` : ''}</div>`).join('')}
-      ${aiShared() ? `<div class="it" style="cursor:default;flex-wrap:wrap;gap:8px;padding:8px 2px"><input type="checkbox" data-aion="shared" ${off.has('shared') ? '' : 'checked'} style="width:auto"><div class="l" style="min-width:150px"><div class="t1">管理員提供的 AI</div>
-        <div class="t2">${esc(S.sk.ai.join('、'))} · 今日剩 ${S.sk.aiLeft} / ${S.sk.aiLimit} 次</div></div><span class="small muted sp">免設定金鑰；沒有自己的金鑰或自己的金鑰失敗時才使用，金鑰由管理員保管、不會傳到瀏覽器。</span></div>` : ''}</div>
+</div>
     <div class="small muted" style="margin-top:6px">網頁直連：Claude、OpenAI、Gemini 支援；Agnes、DeepSeek 若瀏覽器擋下會自動改用下一家。</div>
     <div class="row wrap" style="gap:8px;margin-top:10px"><button class="btn sm" id="akBak">備份金鑰（加密檔）</button><button class="btn sm" id="akRes">還原金鑰</button><input type="file" id="akFile" accept=".aes,.json,application/octet-stream" class="hide">
       <span class="small muted sp">金鑰只存在這個瀏覽器；網頁更新與自動登出都會保留。換電腦、換瀏覽器或清除瀏覽資料前，可先備份成以匯出密碼加密的檔案，之後一鍵還原（含富果、FinMind）。</span></div></div>`;
@@ -2945,7 +2959,11 @@ async function aiKeysRestore(file) {
   let n = 0; for (const [id, v] of Object.entries(o.keys)) { if (typeof v === 'string' && v) { await aiKeySet(id, v); n++; } }
   Object.keys(FMC).forEach((k) => delete FMC[k]); toast('已還原 ' + n + ' 組金鑰'); route();
 }
+function keySrcBind() {
+  $$('[data-ksrc]').forEach((b) => b.onclick = () => { S.pref[b.dataset.ksrc] = b.dataset.v; savePref(); Object.keys(FMC).forEach((k) => delete FMC[k]); toast('已改為「' + b.textContent + '」'); route(); });
+}
 function aiSettingsBind() {
+  keySrcBind();
   if ($('#akBak')) { $('#akBak').onclick = () => aiKeysBackup().catch((e) => toast('備份失敗：' + e.message)); $('#akRes').onclick = () => $('#akFile').click();
     $('#akFile').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) aiKeysRestore(f).catch((x) => toast('還原失敗：' + x.message)); }; }
   // 已儲存但無法解密（瀏覽器資料被清除）：標示出來，請重新輸入或還原備份
@@ -3346,8 +3364,9 @@ const FMC = {};
 const etfLike = (sym) => D.isEtf(sym) || (!isUs(sym) && /^00/.test(sym)) || (S.q[sym] || {}).type === 'ETF';
 async function fmGet(ds, sym, span) {
   const k = ds + sym + span; if (FMC[k] && Date.now() - FMC[k].at < 1800000) return FMC[k].v;
-  const tk = aiHas('finmind') ? await aiKeyGet('finmind') : '';
-  const r = await fetch('/api/fm?ds=' + ds + '&id=' + encodeURIComponent(sym) + '&span=' + span, tk ? { headers: { 'x-fm-token': tk } } : S.session ? { headers: { 'x-m-session': S.session } } : {});
+  const fsrc = keySrc('fmSrc'); const sysFm = !!(S.sk && S.sk.finmind);
+  const tk = aiHas('finmind') && !(fsrc === 'system' && sysFm) ? await aiKeyGet('finmind') : '';
+  const r = await fetch('/api/fm?ds=' + ds + '&id=' + encodeURIComponent(sym) + '&span=' + span, tk ? { headers: { 'x-fm-token': tk } } : S.session && fsrc !== 'own' ? { headers: { 'x-m-session': S.session } } : {});
   if (!/json/.test(r.headers.get('content-type') || '')) throw new Error('NEEDDEPLOY');
   const j = await r.json(); if (j.err) throw new Error(j.err);
   FMC[k] = { at: Date.now(), v: j.data || [] }; return FMC[k].v;
@@ -5162,7 +5181,8 @@ VIEWS.settings = {
             : `<div class="row" style="gap:6px"><input id="fgK" type="password" autocomplete="off" placeholder="貼上富果 API Key"><button class="btn sm primary" id="fgS">儲存</button><button class="btn sm" id="fgT">測試</button></div>`}
           <div class="small muted" style="margin-top:4px">金鑰以瀏覽器加密保存在這台電腦，不上傳、不同步到手機（手機 App 請另外在「設置 › 行情資料來源」填寫）。<a href="https://developer.fugle.tw/" target="_blank" rel="noopener">還沒有金鑰？到富果開發者平台免費申請 ›</a></div>
           <div class="small" id="fgR" style="margin-top:4px"></div></div>
-        <div class="field" style="margin-top:10px"><label>FinMind API Token（選填）${S.sk && S.sk.finmind && !aiHas('finmind') ? ' <span class="tag ok">目前使用管理員提供的 Token</span>' : ''}</label>
+        ${keySrcHtml('fmSrc', !!(S.sk && S.sk.finmind), { auto: '有填自己的 Token 時優先使用，沒填時用系統提供的 Token。', system: '只用系統提供的 Token（經本站查詢並共用快取），不使用下方自己的 Token。', own: '只用下方自己的 Token；沒填時以免費額度查詢。' })}
+        <div class="field" style="margin-top:10px"><label>FinMind API Token（選填）</label>
           ${aiHas('finmind') ? `<div class="row wrap" style="gap:6px"><span class="tag up">已儲存</span><button class="btn sm" id="fmT">測試連線</button><button class="btn sm" id="fmD">清除</button></div>`
             : `<div class="row" style="gap:6px"><input id="fmK" type="password" autocomplete="off" placeholder="貼上 FinMind Token"><button class="btn sm primary" id="fmS">儲存</button><button class="btn sm" id="fmT">測試</button></div>`}
           <div class="small muted" style="margin-top:4px">個股「財務」的月營收、季度損益、本益比區間，「籌碼」的法人 60 日、融資融券、外資持股，「股息」的股利政策來自 FinMind。不填也能用（由本站共用快取）；查詢量大時填入自己的免費 Token 可提高額度。Token 以瀏覽器加密保存，只在查詢時經本站轉送給 FinMind、不保存。<a href="https://finmindtrade.com/analysis/#/account/user" target="_blank" rel="noopener">免費註冊取得 Token ›</a></div>
