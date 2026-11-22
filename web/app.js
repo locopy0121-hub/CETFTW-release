@@ -115,7 +115,14 @@ async function verifyCode(text) {
     tier: v === 3 ? p[15] : 0, rel: v === 3 && (p[16] & 1) === 1, no, idText: dv.getUint32(1).toString(16).toUpperCase().padStart(8, '0'),
   };
 }
-const DEFAULT_POLICY = { trialDays: 7, trialFeatures: ALL, freeFeatures: 0, revoked: [], notice: '', tiers: [], trialName: 'USER', grace: 3, remind: 7, actWin: 30, gClient: '', loginMode: 0 };
+// 訂閱方案與活動折扣（與 App Pricing 相同算法；政策沒有設定時用預設價格）
+const PLANS_DEFAULT = [{ name: '1 個月', months: 1, price: 199, tier: 0 }, { name: '3 個月', months: 3, price: 499, tier: 0 }, { name: '6 個月', months: 6, price: 799, tier: 0 }, { name: '1 年', months: 12, price: 1099, tier: 0 }];
+function discActive(p, today = ymd()) { return p.disc >= 1 && p.disc <= 90 && (!p.discUntil || today.replace(/-/g, '/') <= String(p.discUntil).trim().replace(/-/g, '/')); }
+function planPrice(p, x, today = ymd()) { return discActive(p, today) ? Math.round(x.price * (100 - p.disc) / 100) : x.price; }
+function offText(pct) { const r = 100 - pct; return r % 10 === 0 ? r / 10 + ' 折' : r + ' 折'; }
+/** 公開顯示的等級（不公開的等級只有目前就是該等級的人看得到；權限不受影響） */
+function publicTiers(p, curId = -1) { return (p.tiers || []).filter((t) => !t.hidden || t.id === curId); }
+const DEFAULT_POLICY = { trialDays: 7, trialFeatures: ALL, freeFeatures: 0, revoked: [], notice: '', tiers: [], trialName: 'USER', grace: 3, remind: 7, actWin: 30, gClient: '', loginMode: 0, plans: PLANS_DEFAULT, disc: 0, discUntil: '', discLabel: '' };
 async function loadPolicy(cfg) {
   PUB = await pubKey(cfg.pubkey);
   if (!cfg.policy) return { ...DEFAULT_POLICY };
@@ -126,7 +133,10 @@ async function loadPolicy(cfg) {
       if (!ok) return { ...DEFAULT_POLICY, bad: true };
     }
     const p = JSON.parse(body);
-    return { ...DEFAULT_POLICY, ...p, tiers: (p.tiers || []).map((t) => ({ name: t.n, features: t.f, id: t.id || 0, days: t.d == null ? 30 : t.d, color: t.c || 0xFF3B82F6, desc: t.ds || '' })) };
+    return { ...DEFAULT_POLICY, ...p, tiers: (p.tiers || []).map((t) => ({ name: t.n, features: t.f, id: t.id || 0, days: t.d == null ? 30 : t.d, color: t.c || 0xFF3B82F6, desc: t.ds || '',
+      hidden: t.h != null ? !!t.h : (/^admin$/i.test(t.n || '') || /管理員/.test(t.ds || '')) })),
+      plans: Array.isArray(p.plans) && p.plans.length ? p.plans.filter((x) => x.m > 0 && x.p > 0).map((x) => ({ name: x.n, months: x.m, price: x.p, tier: x.t || 0 })) : PLANS_DEFAULT,
+      disc: Math.max(0, Math.min(90, p.disc || 0)), discUntil: p.discUntil || '', discLabel: p.discLabel || '' };
   } catch (e) { return { ...DEFAULT_POLICY }; }
 }
 
@@ -184,7 +194,7 @@ function stateLine(m = member()) {
 }
 function badge(m = member()) { const c = argb(m.color); return `<span class="badge" style="color:${c};border-color:${c};background:${c}22">${esc(m.name)}</span>`; }
 function lockCard(f, title) {
-  const m = member(); const need = S.policy.tiers.filter((t) => t.features & F[f]);
+  const m = member(); const need = publicTiers(S.policy).filter((t) => t.features & F[f]);
   return `<div class="card locked"><div class="ic">🔒</div><h2 style="justify-content:center">${esc(title || FEATURES.find((x) => x[0] === f)[1])}</h2>
     <div class="text2">${m.locked ? stateLine(m) + '，開通會員即可使用。' : '你的 ' + esc(m.name) + ' 方案未包含此功能。'}</div>
     ${need.length ? `<div class="row" style="justify-content:center;margin-top:10px">可使用的等級 ${need.map((t) => `<span class="badge" style="color:${argb(t.color)};border-color:${argb(t.color)}">${esc(t.name)}</span>`).join(' ')}</div>` : ''}
@@ -879,7 +889,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"v1.1.387","sha":"77641e3","at":"2026-11-22 22:07"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"73ea7ec","at":"2026-11-22 22:31"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -4391,11 +4401,11 @@ async function onboarding(isNew) {
   try { const r = await api('profile', { session: S.session, name: $('#pfN', box).value.trim(), contact: $('#pfC', box).value.trim() }); if (r.kicked) return kicked(); S.me = { ...S.me, ...r }; toast('已儲存會員資料'); if (S.route === 'member') route(); }
   catch (e) { toast(/未知動作|驗證失敗/.test(e.message) ? '管理員的會員伺服器需要更新到第 5 版才能儲存，請稍後再試' : e.message, 5000); }
 }
-async function applyModal() {
+async function applyModal(preset = '') {
   const p = S.policy; const m = member(); let box = null;
   const kind = m.status === 'MEMBER' || m.status === 'GRACE' ? 'change' : m.status === 'EXPIRED' ? 'renew' : 'new';
   const v = await dialog('申請開通／升級會員', `<div class="field"><label>申請類型</label><select id="apK"><option value="new" ${kind === 'new' ? 'selected' : ''}>開通正式會員</option><option value="renew" ${kind === 'renew' ? 'selected' : ''}>續約</option><option value="change" ${kind === 'change' ? 'selected' : ''}>變更／升級方案</option></select></div>
-      <div class="field"><label>想要的方案</label><select id="apT">${p.tiers.map((t) => `<option>${esc(t.name)}（${t.days > 0 ? t.days + ' 天' : '永久'}）</option>`).join('')}</select></div>
+      <div class="field"><label>想要的方案</label><select id="apT">${p.plans.map((x) => { const pr = planPrice(p, x); return `<option ${preset === x.name ? 'selected' : ''}>${esc(x.name)} NT$${pr}${pr !== x.price ? '（原價 ' + x.price + '）' : ''}</option>`; }).join('')}</select></div>
       <div class="field"><label>聯絡方式</label><input id="apC" maxlength="60" value="${esc((S.me || {}).contact || '')}" placeholder="LINE ID、手機或 Email"></div>
       <div class="field"><label>留言（選填）</label><textarea id="apM" rows="3" maxlength="200" placeholder="例如付款方式、希望開通時間"></textarea></div>
       <div class="small muted">送出後由管理員審核，開通後授權會自動套用到網頁與手機（同一帳號）。</div><div id="merr" class="small up"></div>`,
@@ -4420,8 +4430,15 @@ VIEWS.member = {
     const prog = m.status === 'TRIAL' ? 1 - m.left / Math.max(1, p.trialDays) : m.status === 'MEMBER' && m.left != null && S.code ? 1 - m.left / Math.max(1, (m.exp - S.code.issued)) : null;
     const cols = [];
     if (p.trialDays > 0) cols.push([p.trialName || 'USER', '試用 ' + p.trialDays + ' 天', TRIAL_COLOR, p.trialFeatures, m.status === 'TRIAL']);
-    p.tiers.forEach((t) => cols.push([t.name, t.desc || '會員', t.color, t.features, (m.status === 'MEMBER' || m.status === 'GRACE') && m.tierId === t.id]));
+    publicTiers(p, m.tierId).forEach((t) => cols.push([t.name, t.desc || '會員', t.color, t.features, (m.status === 'MEMBER' || m.status === 'GRACE') && m.tierId === t.id]));
     cols.push(['到期', '鎖定後', LOCK_COLOR, p.freeFeatures, !!m.locked]);
+    const dOn = discActive(p); const base = (() => { const x = p.plans.slice().sort((a, b) => a.months - b.months)[0]; return x ? planPrice(p, x) / x.months : 0; })();
+    const priceHtml = p.plans.length ? `<div class="card" style="margin-top:12px"><h2>訂閱方案${dOn ? `<span class="r" style="color:var(--up);font-size:13px">🎉 ${esc(p.discLabel || '限時優惠')} ${offText(p.disc)}${p.discUntil ? '・至 ' + esc(p.discUntil) : ''}</span>` : ''}</h2>
+      <div class="grid g4" style="gap:10px">${p.plans.map((x) => { const pr = planPrice(p, x); const save = x.months > 1 && base > 0 ? Math.max(0, Math.round((1 - pr / (base * x.months)) * 100)) : 0;
+        return `<div class="tile" style="text-align:center;cursor:pointer" data-plan="${esc(x.name)}"><div style="font-weight:700">${esc(x.name)}${save ? ` <span class="small" style="color:var(--up)">省 ${save}%</span>` : ''}</div>
+          ${pr !== x.price ? `<div class="small muted" style="text-decoration:line-through;margin-top:4px">NT$${x.price}</div>` : '<div style="height:4px"></div>'}<div class="num" style="font-size:24px;font-weight:800;color:${pr !== x.price ? 'var(--up)' : 'var(--text)'}">NT$${pr}</div>
+          <div class="small muted">平均每月 NT$${Math.round(pr / x.months)}</div><button class="btn sm primary" style="margin-top:8px">申請</button></div>`; }).join('')}</div>
+      <div class="small muted" style="margin-top:6px">點選方案即可線上申請，管理員確認付款後開通；開通後網頁與手機同時生效。</div></div>` : '';
     $('#dyn').innerHTML = `<div class="grid g2 stack">
       <div class="card"><div class="row">${badge(m)}<b style="font-size:19px">${esc(m.desc)}</b></div>
         <div class="${m.locked || m.status === 'GRACE' ? 'up' : 'text2'}" style="margin-top:8px">${esc(stateLine(m))}</div>
@@ -4445,7 +4462,7 @@ VIEWS.member = {
             : S.cloudDir === 'w2p' ? (me.phone === false ? '目前只在網頁使用：資料存放在雲端，換電腦或瀏覽器登入同一帳號即可帶回。' : '目前以網頁為主：在這裡的修改會上傳，手機開啟 App 時自動下載；手機上的修改不會上傳。') : '尚未設定同步方向（舊版雙向同步）；請更新手機 App 後在「會員與授權 › 帳號與同步」選擇方向。'}</div>
           <div class="row" style="margin-top:10px;gap:8px;align-items:center"><div class="sp small"><b>🔒 端對端加密${S.e2ee ? '（已開啟）' : ''}</b><div class="${!S.e2ee && S.sealed ? 'up' : 'muted'}">${S.e2ee ? '同步資料在瀏覽器以同步密碼加密後才上傳，伺服器與管理員都無法讀取。' : S.sealed ? '雲端資料已加密：請輸入手機設定的同步密碼。' : '開啟後同步資料先在瀏覽器加密再上傳，只有知道同步密碼的裝置能讀取。'}</div></div><button class="btn sm" id="e2e">${S.e2ee ? '變更' : '設定'}</button></div>
           <div class="small muted" style="margin-top:6px">自選、群組、交易、持股、帳戶與提醒；資料存放在管理員的會員伺服器${S.e2ee ? '（端對端加密）' : ''}。同一帳號網頁同時只能在一個瀏覽器登入。手機需用同一個 Google 帳號登入才會同步。</div></div></div></div>
-      <div class="card" style="margin-top:12px"><h2>會員等級方案</h2><div class="scroll-x"><table class="tbl cmp"><thead><tr><th>功能</th>${cols.map(([n, s, c, , cur]) => `<th style="${cur ? 'background:' + argb(c) + '22' : ''}"><span class="badge" style="color:${argb(c)};border-color:${argb(c)}">${esc(n)}</span><div class="small muted">${esc(s)}${cur ? '・目前' : ''}</div></th>`).join('')}</tr></thead>
+      ${priceHtml}<div class="card" style="margin-top:12px"><h2>會員等級方案</h2><div class="scroll-x"><table class="tbl cmp"><thead><tr><th>功能</th>${cols.map(([n, s, c, , cur]) => `<th style="${cur ? 'background:' + argb(c) + '22' : ''}"><span class="badge" style="color:${argb(c)};border-color:${argb(c)}">${esc(n)}</span><div class="small muted">${esc(s)}${cur ? '・目前' : ''}</div></th>`).join('')}</tr></thead>
         <tbody>${FEATURES.map(([k, t]) => `<tr><td>${esc(t)}</td>${cols.map(([, , c, mask]) => `<td style="color:${mask & F[k] ? argb(c) : 'var(--border)'};font-weight:700">${mask & F[k] ? '✓' : '—'}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
         <div class="small muted" style="margin-top:6px">自選、持股記帳、個股行情等基本功能各等級皆可使用。</div></div>`;
     $('#pfE').onclick = () => onboarding(false);
@@ -4453,6 +4470,7 @@ VIEWS.member = {
     $('#e2e').onclick = () => e2eeModal();
     $('#sAuto').onchange = (e) => { S.pref.syncAuto = e.target.checked; savePref(); toast(e.target.checked ? '已改為自動同步' : '已改為手動同步：按「立即同步」才會上傳／下載'); renderSync(); };
     $('#apBtn').onclick = () => applyModal();
+    $$('[data-plan]').forEach((el) => el.onclick = () => applyModal(el.dataset.plan));
     $('#lo').onclick = async () => { if ((await dialog('登出', '登出後這個瀏覽器的資料會清除（雲端資料保留），重新登入即可恢復。', [['', '取消'], ['ok', '登出', 'primary']])) === 'ok') logout(); };
     $('#pfE').closest('.card').insertAdjacentHTML('beforeend', '<div class="row" style="margin-top:12px;gap:16px"><a href="/web/privacy.html" target="_blank" rel="noopener" class="small">隱私權政策</a><a href="javascript:void 0" id="delAcc" class="small muted">刪除帳號</a></div>');
     $('#delAcc').onclick = () => deleteAccountModal(me);

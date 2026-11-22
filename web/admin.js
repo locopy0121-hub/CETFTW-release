@@ -68,7 +68,7 @@ async function logout(msg) {
 
 // ───────── 主畫面 ─────────
 /** 網頁版本（發布時由 .github/public/sync.sh 填入） */
-const WEB_VER = /*WEBVER*/{"v":"v1.1.387","sha":"77641e3","at":"2026-11-22 22:07"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"73ea7ec","at":"2026-11-22 22:31"};
 const verText = () => (WEB_VER ? (WEB_VER.v ? (/^v/i.test(WEB_VER.v) ? WEB_VER.v : 'v' + WEB_VER.v) + ' · ' : '') + WEB_VER.sha + (WEB_VER.at ? ' · ' + WEB_VER.at : '') : '開發版');
 const TABS = [['home', '總覽'], ['req', '申請'], ['mem', '會員'], ['pol', '政策'], ['tier', '會員等級'], ['rel', '發布'], ['line', 'LINE'], ['forum', '討論區'], ['job', '工作紀錄']];
 /** 功能位元（與 App License.Feature 順序相同，不可調整） */
@@ -236,8 +236,8 @@ function render() {
       <div class="field"><label>試用可用功能</label>${featBoxes('tf', p.trialF ?? 65535)}</div>
       <div class="field"><label>到期（免費）可用功能</label>${featBoxes('ff', p.freeF ?? 0)}</div>
       <button class="btn primary" id="psave">儲存並回傳政策</button><div class="small muted" style="margin-top:6px">由管理員 App 簽章後回傳，使用者約半天內生效（會員頁可手動重新整理）。${p.updated ? '上次回傳 ' + new Date(p.updated).toLocaleString('zh-TW') : ''}</div></div>
-      <div class="card" id="tierBox"></div></div>`;
-    tierEditor($('#tierBox', v), p);
+      <div class="card" id="tierBox"></div><div class="card" id="priceBox"></div></div>`;
+    tierEditor($('#tierBox', v), p); priceEditor($('#priceBox', v), p);
     $('#psave').onclick = () => { const o = {}; $$('[data-pk]', v).forEach((el) => { const k = el.dataset.pk; o[k] = /trialName|notice/.test(k) ? el.value : parseInt(el.value, 10) || 0; }); o.trialF = maskOf(v, 'tf'); o.freeF = maskOf(v, 'ff'); job('policy', o, '已送出政策更新'); };
   } else if (S.tab === 'tier') {
     const p = app.policy || {}; if (!app.policy) { v.innerHTML = '<div class="card empty">等待管理員 App 回報政策（開啟 App 即可）</div>'; return; }
@@ -749,6 +749,37 @@ const lineKit = {
 };
 
 // ───────── 會員等級編輯（政策頁與會員等級頁共用；與管理員 App「會員 › 政策 › 會員等級」相同）─────────
+/** 訂閱方案價格與活動折扣（由管理員 App 簽章回傳；App 與網頁版會員頁顯示） */
+function priceEditor(box, p) {
+  if (!S.prices) S.prices = JSON.parse(JSON.stringify(p.prices && p.prices.length ? p.prices : [{ n: '1 個月', m: 1, p: 199, t: 0 }, { n: '3 個月', m: 3, p: 499, t: 0 }, { n: '6 個月', m: 6, p: 799, t: 0 }, { n: '1 年', m: 12, p: 1099, t: 0 }]));
+  if (!S.discEd) S.discEd = { disc: p.disc || 0, discUntil: p.discUntil || '', discLabel: p.discLabel || '' };
+  const P = S.prices, D0 = S.discEd;
+  const draw = () => {
+    const on = D0.disc > 0 && (!D0.discUntil || new Date().toISOString().slice(0, 10).replace(/-/g, '/') <= D0.discUntil.replace(/-/g, '/'));
+    box.innerHTML = `<h2>訂閱方案與價格<span class="r small muted">價格可隨時調整</span></h2>
+      ${P.map((x, i) => `<div class="row" style="gap:8px;margin-top:8px;align-items:flex-end"><div class="field" style="flex:1.4;margin:0"><label>名稱</label><input data-pi="${i}" data-pk2="n" value="${esc(x.n)}" maxlength="12"></div>
+        <div class="field" style="flex:.7;margin:0"><label>月數</label><input data-pi="${i}" data-pk2="m" type="number" min="1" max="120" value="${x.m}"></div>
+        <div class="field" style="flex:1;margin:0"><label>原價（元）</label><input data-pi="${i}" data-pk2="p" type="number" min="1" value="${x.p}"></div>
+        <div class="small muted" style="flex:1;padding-bottom:10px">${on ? '折後 ' + Math.round(x.p * (100 - D0.disc) / 100) + ' 元' : '月均 ' + Math.round(x.p / Math.max(1, x.m)) + ' 元'}</div><button class="btn sm" data-pd="${i}">刪除</button></div>`).join('')}
+      <div class="row" style="gap:8px;margin-top:8px"><button class="btn sm" id="padd">＋ 新增方案</button><button class="btn sm" id="pdef">恢復預設價格</button></div>
+      <h2 style="margin-top:14px">活動折扣</h2><div class="grid g3" style="gap:8px"><div class="field"><label>折扣 %（0＝不打折，20＝8 折）</label><input id="dPct" type="number" min="0" max="90" value="${D0.disc}"></div>
+        <div class="field"><label>截止日（空白＝不限期）</label><input id="dUntil" type="date" value="${esc(D0.discUntil.replace(/\//g, '-'))}"></div><div class="field"><label>活動名稱</label><input id="dLbl" maxlength="20" value="${esc(D0.discLabel)}" placeholder="例：雙 11 優惠"></div></div>
+      <div class="small ${on ? '' : 'muted'}" style="${on ? 'color:var(--primary)' : ''}">${D0.disc ? (on ? '活動中：' + (100 - D0.disc) + '% 價格' + (D0.discUntil ? '，至 ' + esc(D0.discUntil) : '（不限期）') : '已過截止日，以原價顯示') : '目前不打折'}</div>
+      <div class="row" style="margin-top:10px"><span class="sp"></span><button class="btn primary" id="psave2">儲存並回傳價格與折扣</button></div>`;
+    $$('[data-pi]', box).forEach((el) => el.oninput = () => { const x = P[+el.dataset.pi]; const k = el.dataset.pk2; x[k] = k === 'n' ? el.value : Math.max(1, parseInt(el.value, 10) || 1); });
+    $$('[data-pd]', box).forEach((b) => b.onclick = () => { if (P.length <= 1) return toast('至少要有一個方案'); P.splice(+b.dataset.pd, 1); draw(); });
+    $('#padd', box).onclick = () => { if (P.length >= 8) return; P.push({ n: '新方案', m: 1, p: 199, t: 0 }); draw(); };
+    $('#pdef', box).onclick = () => { S.prices = null; p = { ...p, prices: null }; priceEditor(box, p); };
+    $('#dPct', box).onchange = (e) => { D0.disc = Math.max(0, Math.min(90, parseInt(e.target.value, 10) || 0)); draw(); };
+    $('#dUntil', box).onchange = (e) => { D0.discUntil = e.target.value.replace(/-/g, '/'); draw(); };
+    $('#dLbl', box).oninput = (e) => { D0.discLabel = e.target.value; };
+    $('#psave2', box).onclick = async () => {
+      if (P.some((x) => !String(x.n).trim())) return toast('請輸入每個方案的名稱');
+      if (await job('policy', { prices: P.map((x) => ({ n: String(x.n).trim(), m: x.m, p: x.p, t: x.t || 0 })), disc: D0.disc, discUntil: D0.discUntil, discLabel: D0.discLabel.trim() }, '已送出價格與折扣')) { S.prices = null; S.discEd = null; }
+    };
+  };
+  draw();
+}
 function tierEditor(box, p) {
   if (!S.tiers) S.tiers = JSON.parse(JSON.stringify(p.tiers || []));
   const T = S.tiers;
@@ -760,12 +791,14 @@ function tierEditor(box, p) {
         <div class="field"><label>說明</label><input data-ti="${i}" data-tk="desc" value="${esc(t.desc || '')}" maxlength="30"></div>
         <div class="field"><label>預設天數（0＝永久）</label><input data-ti="${i}" data-tk="days" type="number" min="0" max="3650" value="${t.days}"></div>
         <div class="field"><label>顏色</label><input data-ti="${i}" data-tk="color" type="color" value="${argb(t.color)}" style="height:38px;padding:2px"></div></div>
+        <label class="row small" style="gap:6px;cursor:pointer;margin:4px 0 8px"><input type="checkbox" data-th="${i}" style="width:auto" ${t.hidden ? 'checked' : ''}> 不公開此等級（隱藏於會員頁方案比較、申請選單與 LINE 介紹；授權與權限照常有效）</label>
         <div class="field"><label>開放功能</label>${featBoxes('tm' + i, t.f)}</div></div>`).join('')}
       <div class="row wrap" style="gap:8px;margin-top:12px"><button class="btn" id="tadd">＋ 新增等級</button><span class="sp"></span><button class="btn" id="treset">還原</button><button class="btn primary" id="tsave">儲存並回傳會員等級</button></div>
       <div class="small muted" style="margin-top:6px">每個等級都可修改名稱、說明、天數、顏色與功能，也可新增、刪除、調整順序。儲存後由管理員 App 簽章回傳；已開通的授權碼依其等級編號顯示新名稱，功能以授權碼為準（調整既有會員權限請在會員頁「續約／變更方案」）。</div>`;
     // 輸入即寫回 S.tiers：自動重新整理或切換分頁都不會遺失
     $$('[data-ti]', box).forEach((el) => el.oninput = () => { const t = T[+el.dataset.ti]; const k = el.dataset.tk;
       t[k] = k === 'days' ? Math.max(0, Math.min(3650, parseInt(el.value, 10) || 0)) : k === 'color' ? (0xFF000000 + parseInt(el.value.slice(1), 16)) : el.value; S.tierDirty = true; });
+    $$('[data-th]', box).forEach((el) => el.onchange = () => { T[+el.dataset.th].hidden = el.checked; S.tierDirty = true; });
     T.forEach((t, i) => $$(`[data-tm${i}]`, box).forEach((el) => el.onchange = () => { t.f = maskOf(box, 'tm' + i); S.tierDirty = true; }));
     $$('[data-td]', box).forEach((b) => b.onclick = () => { if (T.length <= 1) return toast('至少要有一個會員等級'); T.splice(+b.dataset.td, 1); S.tierDirty = true; draw(); });
     $$('[data-tu]', box).forEach((b) => b.onclick = () => { const i = +b.dataset.tu; [T[i - 1], T[i]] = [T[i], T[i - 1]]; S.tierDirty = true; draw(); });
@@ -776,7 +809,7 @@ function tierEditor(box, p) {
       if (!T.length) return toast('至少要有一個會員等級');
       if (T.some((t) => !String(t.name).trim())) return toast('請輸入每個等級的名稱');
       const names = T.map((t) => t.name.trim()); if (new Set(names).size !== names.length) return toast('等級名稱不能重複');
-      if (await job('policy', { tiers: T.map((t) => ({ id: t.id || 0, name: t.name.trim(), desc: t.desc || '', days: t.days, color: Number(t.color) >>> 0, f: t.f })) }, '已送出會員等級')) { S.tiers = null; S.tierDirty = false; }
+      if (await job('policy', { tiers: T.map((t) => ({ id: t.id || 0, name: t.name.trim(), desc: t.desc || '', days: t.days, color: Number(t.color) >>> 0, f: t.f, hidden: !!t.hidden })) }, '已送出會員等級')) { S.tiers = null; S.tierDirty = false; }
     };
   };
   draw();
