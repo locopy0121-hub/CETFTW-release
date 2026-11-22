@@ -823,7 +823,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"v1.1.375","sha":"5d3cf9f","at":"2026-11-22 19:14"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"a3100b0","at":"2026-11-22 19:30"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -4214,6 +4214,8 @@ VIEWS.member = {
     $('#sAuto').onchange = (e) => { S.pref.syncAuto = e.target.checked; savePref(); toast(e.target.checked ? '已改為自動同步' : '已改為手動同步：按「立即同步」才會上傳／下載'); renderSync(); };
     $('#apBtn').onclick = () => applyModal();
     $('#lo').onclick = async () => { if ((await dialog('登出', '登出後這個瀏覽器的資料會清除（雲端資料保留），重新登入即可恢復。', [['', '取消'], ['ok', '登出', 'primary']])) === 'ok') logout(); };
+    $('#pfE').closest('.card').insertAdjacentHTML('beforeend', '<div style="margin-top:12px"><a href="javascript:void 0" id="delAcc" class="small muted">刪除帳號</a></div>');
+    $('#delAcc').onclick = () => deleteAccountModal(me);
     $('#syn').onclick = async () => { await syncNow(); this.fill(); };
     $('#dl').onclick = async () => { if ((await dialog('從雲端重新下載', '以雲端資料取代這個網頁的資料？（尚未上傳的變更會遺失）', [['', '取消'], ['ok', '下載', 'primary']])) !== 'ok') return; S.dirty = false; await pull(true); toast('已下載雲端資料'); route(); };
     renderSync();
@@ -5680,6 +5682,25 @@ async function loginWith(r, reg) {
     await start(r);
     if (r.isNew || (r.serverVersion >= 5 && !r.contact && !store.get('profSkip', false))) setTimeout(() => onboarding(r.isNew), 600);
   }
+}
+
+/** 會員自助刪除帳號：輸入會員代號確認 → 伺服器清除個資與雲端資料 → 本機登出 */
+async function deleteAccountModal(me) {
+  const no = String(me.no || '');
+  const html = `<div class="small text2" style="line-height:1.7">刪除後無法復原，以下資料會從雲端刪除：<br>・名稱、Email、聯絡方式、Google 綁定<br>・手機⇄網頁同步的雲端資料<br>・LINE 綁定與到價提醒<br>・討論區留言與暱稱<br>・剩餘的會員期限（不退費）</div>
+    <div class="small muted" style="margin-top:6px">手機 App 內的持股與交易紀錄不受影響；需要保留請先在「設定 › 資料」匯出備份。</div>
+    <div class="field" style="margin-top:10px"><label>輸入會員代號 ${esc(no)} 確認</label><input id="dac" autocomplete="off"></div><div id="merr" class="small up" style="margin-top:6px"></div>`;
+  const r = await dialog('刪除帳號', html, [['', '取消'], ['ok', '永久刪除', 'danger']], (root) => () => {
+    const v = $('#dac', root).value.trim().toUpperCase(); if (!no || v !== no.toUpperCase()) return '請輸入正確的會員代號 ' + no; root._v = v; return null; });
+  if (r !== 'ok') return;
+  try {
+    const o = await api('deleteMe', { session: S.session, confirm: no });
+    if (!o.ok) { await dialog('無法刪除', `<div class="small">${esc(o.err || '刪除失敗')}</div>`, [['ok', '確定', 'primary']]); return; }
+    S.session = ''; store.del('session'); store.del('keys'); store.set('rev', 0); store.set('dirty', false); store.del('no'); store.del('aik'); store.del('aic');
+    S.keys = {}; S.rev = 0; S.dirty = false; S.me = null; S.code = null; S.timers.forEach(clearInterval); S.timers = [];
+    try { if (window.google && google.accounts) google.accounts.id.disableAutoSelect(); } catch (e) {}
+    loginView('帳號已刪除，雲端的會員資料與同步資料都已清除。');
+  } catch (e) { toast('刪除失敗：' + (e.message || e), 4000); }
 }
 async function logout(msg) {
   const ses = S.session;
