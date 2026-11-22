@@ -814,7 +814,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"v1.1.363","sha":"9b135b6","at":"2026-11-22 14:25"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"965c9e7","at":"2026-11-22 15:44"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -1593,8 +1593,9 @@ VIEWS.s = {
     html += `<div class="card"><h2>我的筆記<span class="r small muted" id="nst"></span></h2><textarea id="note" rows="4" placeholder="記下買進理由、停損停利、觀察重點…（與手機同步）">${esc(note)}</textarea>
       <div class="row" style="margin-top:8px"><span class="small muted">目標占比</span><input id="tgt" type="number" step="0.1" min="0" style="width:90px" value="${kjson('targets', {})[sym] || ''}"><span class="small muted">%（再平衡用）</span>
       <span class="sp"></span><button class="btn sm" id="alrt">＋ 價格提醒</button></div></div>`;
-    html += '<div id="peers"></div>';
+    html += '<div id="fmsnap" style="grid-column:1/-1"></div><div id="peers"></div>';
     $('#si').innerHTML = html;
+    fmSnap($('#fmsnap'), sym, () => this.sym === sym && this.tab() === 'ov' && !!$('#fmsnap'));
     $('#note').onchange = () => { const o = kjson('notes', {}); const v = $('#note').value.trim(); if (v) o[sym] = { x: v, t: Date.now() }; else delete o[sym]; ksetJson('notes', o); changed(); $('#nst').textContent = '已儲存'; };
     $('#tgt').onchange = () => { const o = kjson('targets', {}); const v = parseFloat($('#tgt').value); if (v > 0) o[sym] = v; else delete o[sym]; ksetJson('targets', o); changed(); toast('已更新目標占比'); };
     $('#alrt').onclick = () => can('ALERTS') ? alertModal(sym) : toast('提醒為會員功能');
@@ -3132,6 +3133,47 @@ async function fmDivCard(el, sym, isCur) {
     <div class="scroll-x" style="max-height:300px;overflow:auto;margin-top:6px"><table class="tbl"><thead><tr><th>所屬期間</th><th>現金</th><th>股票</th><th>除息日</th><th>發放日</th></tr></thead><tbody>
       ${ds.slice(0, 40).map((d) => `<tr><td>${esc(d.y)}</td><td class="num">${fmt(d.cash, 4).replace(/\.?0+$/, '')}</td><td class="num">${d.stock ? fmt(d.stock, 4).replace(/\.?0+$/, '') : '—'}</td><td class="num">${esc(d.ex || '—')}</td><td class="num">${esc(d.pay || '—')}</td></tr>`).join('')}</tbody></table></div>${fmFoot('（董事會／股東會決議）')}</div>`;
 }
+
+/** 概覽：基本面快照（台股個股） */
+async function fmSnap(el, sym, isCur) {
+  if (!el || isUs(sym) || etfLike(sym) || !can('STOCKPRO')) return;
+  el.innerHTML = '<div class="card"><h2>基本面快照<span class="r small muted">FinMind</span></h2><div class="small muted">讀取中…</div></div>';
+  const [rv, inc, val, fh] = await Promise.allSettled([fmGet('TaiwanStockMonthRevenue', sym, 1500), fmGet('TaiwanStockFinancialStatements', sym, 1280), fmGet('TaiwanStockPER', sym, 1830), fmGet('TaiwanStockShareholding', sym, 200)]);
+  if (!isCur()) return;
+  const m0 = rv.status === 'fulfilled' ? fmMonthRev(rv.value)[0] : null; const qs = inc.status === 'fulfilled' ? fmQuarters(inc.value) : [];
+  const e4 = qs.slice(0, 4).map((q) => q.eps).filter((x) => x != null), p4 = qs.slice(4, 8).map((q) => q.eps).filter((x) => x != null);
+  const ttm = e4.length === 4 ? e4.reduce((a, b) => a + b, 0) : null, pttm = p4.length === 4 ? p4.reduce((a, b) => a + b, 0) : null;
+  const vs = val.status === 'fulfilled' ? val.value.slice().sort((a, b) => (a.date < b.date ? 1 : -1)) : []; const per = fmBand(vs.map((x) => +x.PER));
+  const hs = fh.status === 'fulfilled' ? fh.value.filter((o) => o.ForeignInvestmentSharesRatio != null).sort((a, b) => (a.date < b.date ? 1 : -1)) : [];
+  const f0 = hs[0] ? +hs[0].ForeignInvestmentSharesRatio : null, f20 = hs[20] && f0 != null ? f0 - +hs[20].ForeignInvestmentSharesRatio : null;
+  if (!m0 && ttm == null && !per && f0 == null) { el.innerHTML = ''; return; }
+  const tile = (go, k, v, c, sub) => `<div class="tile click" data-fmgo="${go}"><div class="k">${k}</div><div class="v num ${c}">${v}</div><div class="s muted">${sub}</div></div>`;
+  el.innerHTML = `<div class="card"><h2>基本面快照<span class="r small muted">FinMind · 點選看完整資料</span></h2><div class="grid g4">
+    ${tile('fin', m0 ? m0.mo + ' 月營收年增' : '月營收', m0 ? fmtPct(m0.yoy, 1) : '—', cls(m0 && m0.yoy), m0 ? '累計 ' + fmtPct(m0.ytdYoy, 1) : '')}
+    ${tile('fin', '近四季 EPS', ttm != null ? fmt(ttm, 2) : '—', ttm != null && pttm != null ? cls(ttm - pttm) : '', [pttm != null ? '前四季 ' + fmt(pttm, 2) : '', qs[0] && qs[0].gm != null ? '毛利 ' + qs[0].gm.toFixed(1) + '%' : ''].filter(Boolean).join('・'))}
+    ${tile('fin', '本益比 5 年位階', per ? per.pct.toFixed(0) + '%' : '—', per ? (per.pct <= 25 ? 'down' : per.pct >= 75 ? 'up' : '') : '', per ? '目前 ' + fmt(per.cur, 1) + '・中位 ' + fmt(per.med, 1) : '虧損或資料不足')}
+    ${tile('chip', '外資持股', f0 != null ? f0.toFixed(2) + '%' : '—', cls(f20), f20 != null ? '20 日 ' + fmtPct(f20) : '')}</div></div>`;
+  $$('[data-fmgo]', el).forEach((x) => x.onclick = () => { const b = $(`[data-st="${x.dataset.fmgo}"]`); if (b) { b.click(); window.scrollTo({ top: 0, behavior: 'smooth' }); } });
+}
+/** 持股月營收（年增排行） */
+async function fmHoldRev(el) {
+  const P = portfolio(); const syms = P.rows.filter((r) => !isUs(r.symbol) && !etfLike(r.symbol)).sort((a, b) => b.weight - a.weight).map((r) => r.symbol).slice(0, 20);
+  if (!syms.length) { el.innerHTML = '<div class="card empty">目前沒有台股個股持股（ETF 不公布月營收）。</div>'; return; }
+  el.innerHTML = `<div class="card"><h2>持股月營收</h2><div class="small muted">讀取 ${syms.length} 檔持股月營收中…</div></div>`;
+  const got = []; let err = null;
+  for (let i = 0; i < syms.length; i += 4) { const part = await Promise.allSettled(syms.slice(i, i + 4).map((s) => fmGet('TaiwanStockMonthRevenue', s, 1500).then((r) => [s, fmMonthRev(r)[0]])));
+    part.forEach((x) => { if (x.status === 'fulfilled' && x.value[1]) got.push(x.value); else if (x.status === 'rejected') err = x.reason; }); }
+  if (!el.isConnected) return;
+  if (!got.length) { el.innerHTML = `<div class="card"><h2>持股月營收</h2>${sapiErr(err)}</div>`; return; }
+  const newest = Math.max(...got.map(([, m]) => m.y * 100 + m.mo)); const up = got.filter(([, m]) => (m.yoy || 0) > 0).length;
+  got.sort((a, b) => (b[1].yoy ?? -1e9) - (a[1].yoy ?? -1e9));
+  el.innerHTML = `<div class="card"><h2>持股月營收<span class="r small muted">依年增排序 · FinMind</span></h2>
+    <div class="small muted" style="margin-bottom:6px">最新 ${Math.floor(newest / 100)}/${newest % 100}：${got.length} 檔中 ${up} 檔年增${got.length < syms.length ? `（${syms.length - got.length} 檔取不到）` : ''}</div>
+    <div class="scroll-x"><table class="tbl"><thead><tr><th style="text-align:left">股票</th><th>月份</th><th>營收（億）</th><th>月增</th><th>年增</th><th>累計年增</th></tr></thead><tbody>
+    ${got.map(([s, m]) => `<tr class="click" data-go="#/s/${encodeURIComponent(s)}"><td class="nm" style="text-align:left">${esc(D.name(s))} <span class="muted small num">${esc(s)}</span></td><td class="num ${m.y * 100 + m.mo < newest ? 'muted' : ''}">${m.y % 100}/${m.mo}</td><td class="num">${fmYi(m.rev)}</td><td class="num ${cls(m.mom)}">${fmtPct(m.mom, 1)}</td><td class="num ${cls(m.yoy)}"><b>${fmtPct(m.yoy, 1)}</b></td><td class="num ${cls(m.ytdYoy)}">${fmtPct(m.ytdYoy, 1)}</td></tr>`).join('')}</tbody></table></div>
+    <div class="small muted" style="margin-top:6px">月份灰色＝尚未公布最新月份。每月 10 日前公布上月營收。</div></div>`;
+  $$('[data-go]', el).forEach((x) => x.onclick = () => { location.hash = x.dataset.go; });
+}
 const STABS = [['ov', '概覽'], ['ta', '技術分析'], ['chip', '籌碼'], ['fin', '財務'], ['hold', '成分'], ['div', '股息'], ['news', '新聞'], ['talk', '討論'], ['co', '公司']];
 /** 個股分頁列：依「分頁列排版」設定排序與隱藏（S.pref.stabL＝{o:順序, h:隱藏, def:預設分頁, pos:'top'|'bottom'}） */
 function stockTabs(sym, all) {
@@ -4154,7 +4196,7 @@ VIEWS.div = {
 // ───────── 投資分析 ─────────
 VIEWS.analysis = {
   title: '投資分析',
-  render() { return head('投資分析') + `<div class="chips" style="margin-bottom:12px">${[['perf', '已實現損益'], ['review', '績效回顧'], ['alloc', '配置分析'], ['rebal', '再平衡'], ['health', '健康檢查'], ['cost', '交易成本'], ['goal', '目標規劃']].map(([k, n]) => `<button class="chip ${(S.pref.an || 'perf') === k ? 'on' : ''}" data-an="${k}">${n}</button>`).join('')}</div><div id="dyn"></div>`; },
+  render() { return head('投資分析') + `<div class="chips" style="margin-bottom:12px">${[['perf', '已實現損益'], ['review', '績效回顧'], ['alloc', '配置分析'], ['rev', '持股營收'], ['rebal', '再平衡'], ['health', '健康檢查'], ['cost', '交易成本'], ['goal', '目標規劃']].map(([k, n]) => `<button class="chip ${(S.pref.an || 'perf') === k ? 'on' : ''}" data-an="${k}">${n}</button>`).join('')}</div><div id="dyn"></div>`; },
   bind() { $$('[data-an]').forEach((b) => b.onclick = () => { S.pref.an = b.dataset.an; savePref(); route(); }); },
   fill() {
     if (!can('ANALYSIS')) { $('#dyn').innerHTML = lockCard('ANALYSIS'); return; }
@@ -4165,6 +4207,7 @@ VIEWS.analysis = {
     if (tab === 'health') return this.health();
     if (tab === 'cost') return this.cost();
     if (tab === 'goal') return this.goal();
+    if (tab === 'rev') return can('STOCKPRO') ? fmHoldRev($('#dyn')) : ($('#dyn').innerHTML = lockCard('STOCKPRO', '持股月營收'));
     return this.rebal();
   },
   /** 績效回顧：依資產紀錄算每年與每月報酬（扣除入出金）、與 0050 比較 */
