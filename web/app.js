@@ -221,28 +221,11 @@ function ledger(trades = D.trades(), opt = {}) {
   let realized = base.year === year ? base.realized : 0, divTw = base.year === year ? base.divTw : 0, divUs = base.year === year ? base.divUs : 0;
   const realizedById = {}, dividendById = {};
   const debt = {}, lots = {}; let mgInt = 0; // 融資：代號 → 餘額、批次（與 App Ledger 相同）
-  const shorts = {}; // 放空（融券、當沖先賣）：代號 → { n 股數, net 淨價款, dep 保證金, col 擔保價款, d 首次日期 }
   const today = ymd();
   const sorted = trades.filter((t) => t.o !== 'legacy').slice().sort((a, b) => (a.d + '#' + String(a.id).padStart(10, '0')).localeCompare(b.d + '#' + String(b.id).padStart(10, '0')));
   for (const t of sorted) {
     const us = isUs(t.s); const fx = us ? (t.x || 1) : 1; const thisYear = String(t.d).startsWith(y);
     const ex = hs.get(t.s); const g = gross(t.s, t.n, t.p);
-    if (t.sh && !us && (t.t === 'SELL' || t.t === 'BUY')) {
-      const sp = shorts[t.s];
-      if (t.t === 'SELL') {
-        const net = g - (t.fee || 0) - (t.tax || 0) - (t.mi || 0); const dep = Math.max(0, t.mg || 0);
-        if (dep > 0) cash -= dep; else cash += net;
-        shorts[t.s] = { symbol: t.s, n: (sp ? sp.n : 0) + t.n, net: (sp ? sp.net : 0) + net, dep: (sp ? sp.dep : 0) + dep, col: (sp ? sp.col : 0) + (dep > 0 ? net : 0), d: sp ? sp.d : t.d };
-      } else {
-        if (!sp || sp.n <= 1e-9) return { err: t.d + ' 回補 ' + t.s + ' 時沒有放空部位' };
-        if (t.n > sp.n + 1e-9) return { err: t.d + ' 回補 ' + t.s + ' ' + t.n + ' 股，超過放空的 ' + sp.n + ' 股' };
-        const k = Math.min(1, t.n / sp.n); const cost = g + (t.fee || 0); const mi = t.mi || 0;
-        const r = sp.net * k - cost + mi; realizedById[t.id] = r; if (thisYear) realized += r;
-        cash += (sp.dep + sp.col) * k - cost + mi;
-        if (1 - k <= 1e-9) delete shorts[t.s]; else shorts[t.s] = { ...sp, n: sp.n - t.n, net: sp.net * (1 - k), dep: sp.dep * (1 - k), col: sp.col * (1 - k) };
-      }
-      continue;
-    }
     if (t.t === 'BUY') {
       const add = g + (t.fee || 0); const oldN = ex ? ex.shares : 0; const oldCost = oldN * (ex ? ex.avgCost : 0); const newN = oldN + t.n;
       if (newN <= 0) continue;
@@ -267,15 +250,14 @@ function ledger(trades = D.trades(), opt = {}) {
       const net = us ? g * (1 - 0.3) * fx : g - (t.fee || 0);
       dividendById[t.id] = net; if (thisYear) { if (us) divUs += g; else divTw += g - (t.fee || 0); } cash += net;
     } else if (t.t === 'SPLIT') {
-      if (!ex && !shorts[t.s]) return { err: t.d + ' ' + t.s + ' 拆股時沒有持股' };
+      if (!ex) return { err: t.d + ' ' + t.s + ' 拆股時沒有持股' };
       const ratio = t.p; if (ratio <= 0) return { err: t.d + ' ' + t.s + ' 拆股比例需大於 0' };
-      if (ex) hs.set(t.s, { ...ex, shares: ex.shares * ratio, avgCost: ex.avgCost / ratio }); (lots[t.s] || []).forEach((l) => { l.n *= ratio; });
-      if (shorts[t.s]) shorts[t.s].n *= ratio;
+      hs.set(t.s, { ...ex, shares: ex.shares * ratio, avgCost: ex.avgCost / ratio }); (lots[t.s] || []).forEach((l) => { l.n *= ratio; });
     }
   }
   const flows = opt.base ? 0 : D.cashFlows().reduce((a, f) => a + (Number(f.a) || 0), 0);
   Object.keys(debt).forEach((k) => { if (debt[k] <= 0.5) { delete debt[k]; delete lots[k]; } });
-  return { holdings: Array.from(hs.values()), cash: cash + flows, realized, divTw, divUs, realizedById, dividendById, debt, lots, mgInt, shorts: Object.values(shorts).filter((x) => x.n > 1e-9) };
+  return { holdings: Array.from(hs.values()), cash: cash + flows, realized, divTw, divUs, realizedById, dividendById, debt, lots, mgInt };
 }
 function holdings() {
   const t = D.trades();
@@ -296,13 +278,8 @@ function portfolio() {
   const mv = rows.reduce((a, r) => a + r.mv, 0); rows.forEach((r) => { r.weight = mv > 0 ? r.mv / mv * 100 : 0; });
   const lg = D.trades().length ? ledger() : null;
   const cash = lg && !lg.err ? lg.cash : knum('cash');
-  const margin = lg && !lg.err ? Object.values(lg.debt || {}).reduce((a, v) => a + v, 0) : 0;
-  // 放空部位淨值＝保證金＋擔保價款−股數×現價（計入總資產）；debt＝融資−放空淨值，總資產一律 mv＋cash−debt
-  const shorts = (lg && !lg.err ? lg.shorts || [] : []).map((x) => { const px = (S.q[x.symbol] || {}).price || (x.n > 0 ? x.net / x.n : 0);
-    return { ...x, name: D.name(x.symbol), avg: x.n > 0 ? x.net / x.n : 0, px, eq: x.dep + x.col - x.n * px, un: x.net - x.n * px, ratio: x.dep > 0 && px > 0 ? (x.dep + x.col) / (x.n * px) * 100 : null, call: x.dep > 0 ? (x.dep + x.col) / (x.n * 1.3) : null }; });
-  const shortEq = shorts.reduce((a, x) => a + x.eq, 0);
-  const debt = margin - shortEq;
-  return { rows, mv, cost: rows.reduce((a, r) => a + r.cost, 0), pl: rows.reduce((a, r) => a + r.pl, 0), day: rows.reduce((a, r) => a + r.day, 0), cash, debt, margin, shorts, shortEq, mgDebt: lg && !lg.err ? lg.debt || {} : {}, mgLots: lg && !lg.err ? lg.lots || {} : {}, mgInt: lg && !lg.err ? lg.mgInt || 0 : 0,
+  const debt = lg && !lg.err ? Object.values(lg.debt || {}).reduce((a, v) => a + v, 0) : 0;
+  return { rows, mv, cost: rows.reduce((a, r) => a + r.cost, 0), pl: rows.reduce((a, r) => a + r.pl, 0), day: rows.reduce((a, r) => a + r.day, 0), cash, debt, mgDebt: lg && !lg.err ? lg.debt || {} : {}, mgLots: lg && !lg.err ? lg.lots || {} : {}, mgInt: lg && !lg.err ? lg.mgInt || 0 : 0,
     realized: lg && !lg.err ? lg.realized : knum('realized'), divTw: lg && !lg.err ? lg.divTw : knum('divTw'), divUs: lg && !lg.err ? lg.divUs : knum('divUs') };
 }
 
@@ -846,7 +823,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"0c55fe6","at":"2026-11-22 20:42"};
+const WEB_VER = /*WEBVER*/{"v":"v1.1.381","sha":"59b1c9c","at":"2026-11-22 20:44"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -970,7 +947,7 @@ VIEWS[''] = {
     const plans = (await kv('sx:plans')) || {};
     const C = {};
     C.tiles = () => `<div class="grid g3">
-      <div class="tile"><div class="k">總資產（台幣）</div><div class="v num">${fmtInt(total)}</div><div class="s muted">市值 ${fmtInt(P.mv)} ＋ 現金 ${fmtInt(P.cash)}${P.margin > 0 ? ' − 融資 ' + fmtInt(P.margin) : ''}${P.shorts.length ? ' ＋ 放空 ' + fmtInt(P.shortEq) : ''}</div></div>
+      <div class="tile"><div class="k">總資產（台幣）</div><div class="v num">${fmtInt(total)}</div><div class="s muted">市值 ${fmtInt(P.mv)} ＋ 現金 ${fmtInt(P.cash)}${P.debt > 0 ? ' − 融資 ' + fmtInt(P.debt) : ''}</div></div>
       <div class="tile"><div class="k">今日損益</div><div class="v num ${cls(P.day)}">${fmtSigned(P.day)}</div><div class="s num ${cls(P.day)}">${fmtPct(P.mv - P.day > 0 ? P.day / (P.mv - P.day) * 100 : 0)}</div></div>
       <div class="tile"><div class="k">未實現損益</div><div class="v num ${cls(P.pl)}">${fmtSigned(P.pl)}</div><div class="s num ${cls(P.pl)}">${fmtPct(P.cost > 0 ? P.pl / P.cost * 100 : 0)}</div></div>
       <div class="tile"><div class="k">今年已實現</div><div class="v num ${cls(P.realized)}">${fmtSigned(P.realized)}</div></div>
@@ -1245,9 +1222,8 @@ VIEWS.hold = {
       <div class="tile"><div class="k">市值</div><div class="v num">${fmtInt(P.mv)}</div></div>
       <div class="tile"><div class="k">今日損益</div><div class="v num ${cls(P.day)}">${fmtSigned(P.day)}</div></div>
       <div class="tile"><div class="k">未實現損益</div><div class="v num ${cls(P.pl)}">${fmtSigned(P.pl)}</div><div class="s num ${cls(P.pl)}">${fmtPct(P.cost ? P.pl / P.cost * 100 : 0)}</div></div>
-      <div class="tile"><div class="k">現金</div><div class="v num">${fmtInt(P.cash)}</div>${P.margin > 0 ? `<div class="s muted">融資 ${fmtInt(P.margin)}</div>` : ''}</div></div>`;
-    if (P.margin > 0) h += `<div style="margin-bottom:12px">${marginCardHtml(P)}</div>`;
-    if (P.shorts.length) h += `<div style="margin-bottom:12px">${shortCardHtml(P)}</div>`;
+      <div class="tile"><div class="k">現金</div><div class="v num">${fmtInt(P.cash)}</div>${P.debt > 0 ? `<div class="s muted">融資 ${fmtInt(P.debt)}</div>` : ''}</div></div>`;
+    if (P.debt > 0) h += `<div style="margin-bottom:12px">${marginCardHtml(P)}</div>`;
     if (!rows.length) h += '<div class="card empty">尚無持股。按「新增交易」記錄買進，或在手機開啟同步。</div>';
     else if (S.pref.holdView === 'wall' && can('WALL')) h += `<div class="wall">${rows.map((r) => wallTile(r.symbol, false)).join('')}</div>`;
     else if (S.pref.holdView === 'heat' && can('WALL')) h += heatHtml(rows.map((r) => r.symbol), Object.fromEntries(rows.map((r) => [r.symbol, r.weight])));
@@ -1309,13 +1285,13 @@ VIEWS.trades = {
         <div class="tile"><div class="k">手續費＋交易稅</div><div class="v num">${fmtInt(fee + tax)}</div><div class="s muted">手續費 ${fmtInt(fee)}・稅 ${fmtInt(tax)}</div></div>
         <div class="tile"><div class="k">已實現損益＋股息</div><div class="v num ${cls(rz + dv)}">${fmtSigned(rz + dv)}</div><div class="s muted">損益 ${fmtSigned(rz)}・股息 ${fmtInt(dv)}</div></div></div>`; }
     if (list.length) h += `<div class="card list m-only" style="padding:4px 12px">${list.slice(0, 300).map((t) => { const us = isUs(t.s); const r = lg.realizedById ? lg.realizedById[t.id] : null;
-      return `<div class="it" data-ed="${t.id}"><div class="l"><div class="t1"><span class="tag ${t.t === 'BUY' ? 'up' : t.t === 'SELL' ? 'down' : ''}">${t.o === 'opening' ? '期初' : TYPE_N[t.t]}</span>${t.sh ? ` <span class="tag">${t.t === 'SELL' ? (t.mg > 0 ? '融券賣' : '當沖賣') : '回補'}</span>` : t.mg > 0 && t.t === 'BUY' ? ' <span class="tag">融資</span>' : ''} ${esc(D.name(t.s))} <span class="muted small num">${t.s}</span></div>
+      return `<div class="it" data-ed="${t.id}"><div class="l"><div class="t1"><span class="tag ${t.t === 'BUY' ? 'up' : t.t === 'SELL' ? 'down' : ''}">${t.o === 'opening' ? '期初' : TYPE_N[t.t]}</span>${t.mg > 0 && t.t === 'BUY' ? ' <span class="tag">融資</span>' : ''} ${esc(D.name(t.s))} <span class="muted small num">${t.s}</span></div>
         <div class="t2">${esc(t.d)} · ${t.t === 'SPLIT' ? '1 → ' + t.p : fmt(t.n, t.n % 1 ? 2 : 0) + ' 股 @ ' + fmtPrice(t.p)}${t.note ? ' · ' + esc(t.note) : ''}</div></div>
         <div class="r"><div class="num">${t.t === 'SPLIT' ? '' : fmt(gross(t.s, t.n, t.p), us ? 2 : 0)}</div>${r != null ? `<div class="num small ${cls(r)}">${fmtSigned(r)}</div>` : ''}</div></div>`; }).join('')}</div>`;
     h += list.length ? `<div class="card scroll-x d-only" style="padding:6px 8px"><table class="tbl"><thead><tr><th>日期</th><th>類別</th><th>個股</th><th>股數</th><th>價格</th><th>金額</th><th>手續費</th><th>交易稅</th><th>損益／實收</th><th>備註</th><th></th></tr></thead><tbody>${list.slice(0, 500).map((t) => {
       const us = isUs(t.s); const g = gross(t.s, t.n, t.p); const r = lg.realizedById ? lg.realizedById[t.id] : null; const dv = lg.dividendById ? lg.dividendById[t.id] : null;
       const tc = t.t === 'BUY' ? 'up' : t.t === 'SELL' ? 'down' : '';
-      return `<tr><td class="num">${esc(t.d)}</td><td><span class="tag ${tc}">${t.o === 'opening' ? '期初' : TYPE_N[t.t]}</span>${t.sh ? ` <span class="tag">${t.t === 'SELL' ? (t.mg > 0 ? '融券賣' : '當沖賣') : '回補'}</span>` : t.mg > 0 && t.t === 'BUY' ? ' <span class="tag">融資</span>' : ''}</td>
+      return `<tr><td class="num">${esc(t.d)}</td><td><span class="tag ${tc}">${t.o === 'opening' ? '期初' : TYPE_N[t.t]}</span>${t.mg > 0 && t.t === 'BUY' ? ' <span class="tag">融資</span>' : ''}</td>
         <td class="nm click" data-go="#/s/${t.s}" style="cursor:pointer">${esc(D.name(t.s))} <span class="muted small num">${t.s}</span></td>
         <td class="num">${t.t === 'SPLIT' ? '—' : fmt(t.n, t.n % 1 ? 2 : 0)}</td><td class="num">${t.t === 'SPLIT' ? '1 → ' + t.p : fmtPrice(t.p, us)}</td>
         <td class="num">${t.t === 'SPLIT' ? '—' : fmt(g, us ? 2 : 0)}</td><td class="num">${t.fee ? fmt(t.fee, us ? 2 : 0) : '—'}</td><td class="num">${t.tax ? fmt(t.tax, us ? 2 : 0) : '—'}</td>
@@ -1341,31 +1317,6 @@ function mgInterest(lots, repay, sellDate, rate = mgRate()) {
   return Math.floor(sum);
 }
 /** 交易視窗的融資試算：買進→融資金額；賣出→償還與利息 */
-const shDepPct = () => Number(S.pref.shDep) || 90;
-const shFeePct = () => S.pref.shFee != null && !isNaN(+S.pref.shFee) ? +S.pref.shFee : 0.08;
-/** 放空試算（與 App 交易編輯相同）：on＝null 時自動（買進且此股有放空、沒有持股才預設勾選） */
-function shCalc(t0, type, s, n, p, on, margin, dText, iText) {
-  const out = { show: false, on: false, margin, mg: 0, mi: 0, note: '', open: null };
-  if (!s || isUs(s) || !(type === 'BUY' || type === 'SELL')) return out;
-  const r = ledger(D.trades().filter((x) => !t0 || x.id !== t0.id)); const open = r.err ? null : (r.shorts || []).find((x) => x.symbol === s) || null; out.open = open;
-  const held = r.err ? false : r.holdings.some((h) => h.symbol === s);
-  out.show = type === 'SELL' || !!open || !!(t0 && t0.sh);
-  out.on = out.show && (on == null ? (t0 ? !!t0.sh : type === 'BUY' && !!open && !held) : on);
-  if (!out.on) return out;
-  const g = n > 0 && p > 0 ? gross(s, n, p) : 0;
-  if (type === 'SELL') {
-    if (margin) {
-      out.mg = dText !== '' ? Math.max(0, +dText || 0) : Math.ceil(g * shDepPct() / 100 / 100) * 100;
-      const est = g > 0 ? Math.max(1, Math.floor(g * shFeePct() / 100)) : 0; out.mi = iText !== '' ? Math.max(0, +iText || 0) : est;
-      out.note = g ? `融券：現金扣保證金 ${fmtInt(out.mg)}；賣出價款扣手續費、證交稅與借券費 ${fmtInt(out.mi)}（估 ${fmtInt(est)}）後由券商留置，回補時取回。` : '';
-    } else out.note = '當沖先賣：不繳保證金，價款直接入帳，證交稅 0.15%；必須在同一天新增「買進」並勾選「回補放空部位」。';
-    return out;
-  }
-  out.mi = iText !== '' ? Math.max(0, +iText || 0) : 0;
-  if (open && g > 0) { const k = Math.min(1, n / open.n); const cost = g + Math.max(20, Math.floor(g * 0.001425)); const rr = open.net * k - cost + out.mi;
-    out.note = `回補：取回保證金與擔保價款 ${fmtInt((open.dep + open.col) * k)}，預估已實現 ${fmtSigned(rr)}（手續費以實際為準）。`; }
-  return out;
-}
 function mgCalc(t0, type, s, n, p, d, on, vText, iText) {
   const out = { show: false, mg: 0, mi: 0, owed: 0, note: '' };
   if (!s || isUs(s) || !(type === 'BUY' || type === 'SELL')) return out;
@@ -1388,19 +1339,6 @@ function mgCalc(t0, type, s, n, p, d, on, vText, iText) {
   return out;
 }
 /** 融資部位卡：整戶維持率、各股維持率、追繳價 */
-/** 放空部位卡（融券、當沖先賣），與 App ShortPositionsCard 相同 */
-function shortCardHtml(P) {
-  const xs = P.shorts || []; if (!xs.length) return ''; const today = ymd();
-  const un = xs.reduce((a, x) => a + x.un, 0); const c = (r) => r == null ? '' : r < 130 ? 'up' : r < 140 ? 'mg-warn' : '';
-  const stale = xs.filter((x) => x.dep <= 0 && x.d < today);
-  return `<div class="card" style="grid-column:1/-1"><h2>放空部位<span class="r small muted">融券、當沖先賣</span></h2>
-    <div class="grid g3"><div class="tile"><div class="k">未實現損益</div><div class="v num ${un > 0 ? 'up' : un < 0 ? 'down' : ''}">${fmtSigned(un)}</div></div><div class="tile"><div class="k">部位淨值</div><div class="v num">${fmtInt(P.shortEq)}</div></div><div class="tile"><div class="k">保證金</div><div class="v num">${fmtInt(xs.reduce((a, x) => a + x.dep, 0))}</div></div></div>
-    ${stale.length ? `<div class="notice err" style="margin-top:8px">${stale.map((x) => esc(x.symbol)).join('、')} 為當沖先賣但沒有買回紀錄：當沖須當日買回，請補記買回交易（或改為融券）</div>` : ''}
-    <div class="scroll-x" style="margin-top:8px"><table class="tbl"><thead><tr><th style="text-align:left">股票</th><th>類型</th><th>股數</th><th>放空均價</th><th>現價</th><th>未實現</th><th>維持率</th><th>追繳價</th></tr></thead><tbody>
-    ${xs.map((x) => `<tr class="click" data-go="#/s/${encodeURIComponent(x.symbol)}"><td class="nm" style="text-align:left">${esc(x.name)} <span class="muted small num">${esc(x.symbol)}</span></td><td>${x.dep > 0 ? '融券' : '當沖'}</td><td class="num">${fmtInt(x.n)}</td><td class="num">${fmtPx(x.avg)}</td><td class="num">${fmtPx(x.px)}</td><td class="num ${x.un > 0 ? 'up' : x.un < 0 ? 'down' : ''}">${fmtSigned(x.un)}</td><td class="num ${c(x.ratio)}">${x.ratio == null ? '—' : x.ratio.toFixed(1) + '%'}</td><td class="num">${x.call == null ? '—' : fmtPx(x.call)}</td></tr>`).join('')}
-    </tbody></table></div>
-    <div class="small muted" style="margin-top:6px">放空均價已扣手續費、交易稅與借券費；股價上漲為虧損。融券維持率＝（保證金＋擔保價款）÷ 現價市值，低於 130% 追繳。回補時新增「買進」並勾選「回補放空」。</div></div>`;
-}
 function marginCardHtml(P) {
   const syms = Object.keys(P.mgDebt || {}); if (!syms.length) return '';
   const rows = syms.map((s) => { const d = P.mgDebt[s]; const lots = (P.mgLots || {})[s] || []; const row = P.rows.find((r) => r.symbol === s) || {};
@@ -1430,14 +1368,10 @@ async function tradeModal(t0, preset = {}) {
     <div id="mgw" style="display:none"><label class="row" style="gap:6px;margin:4px 0 8px" id="mgcw"><input type="checkbox" id="mgc" style="width:auto" ${t.mg > 0 ? 'checked' : ''}> <span>融資買進（成數 <span id="mgr"></span>%）</span></label>
       <div class="grid g2" id="mgf"><div class="field"><label id="mgl1">融資金額</label><input id="mgv" type="number" step="any" value="${t.mg > 0 ? t.mg : ''}" placeholder="空白＝自動"></div>
         <div class="field" id="mgif"><label>融資利息</label><input id="mgi" type="number" step="any" value="${t.mi > 0 ? t.mi : ''}" placeholder="空白＝估算"></div></div><div id="mgs" class="small muted"></div></div>
-    <div id="shw" style="display:none"><label class="row" style="gap:6px;margin:4px 0 8px"><input type="checkbox" id="shc" style="width:auto" ${t.sh ? 'checked' : ''}> <span id="shl">放空</span></label>
-      <div id="shf"><div class="field" id="shmf"><label>放空方式</label><select id="shm"><option value="1" ${!t0 || !t0.sh || t0.mg > 0 ? 'selected' : ''}>融券（繳保證金）</option><option value="0" ${t0 && t0.sh && !(t0.mg > 0) && t0.t === 'SELL' ? 'selected' : ''}>當沖先賣（當日買回）</option></select></div>
-        <div class="grid g2"><div class="field" id="shdf"><label>保證金</label><input id="shd" type="number" step="any" value="${t.sh && t.t === 'SELL' && t.mg > 0 ? t.mg : ''}" placeholder="空白＝成交 × 90%"></div>
-        <div class="field"><label id="shil">借券費</label><input id="shi" type="number" step="any" value="${t.sh && t.mi > 0 ? t.mi : ''}" placeholder="空白＝估算"></div></div></div><div id="shs" class="small muted"></div></div>
     <div class="field"><label>備註</label><input id="mnote" value="${esc(t.note || '')}"></div><div id="merr" class="small up" style="margin-top:8px"></div>`;
   const acts = t0 ? [['del', '刪除', 'danger'], ['', '取消'], ['ok', '儲存', 'primary']] : [['', '取消'], ['ok', '新增', 'primary']];
   const res = await dialog(t0 ? '編輯交易' : '新增交易', html, acts, (root, close) => {
-    let type = t.t, feeEdited = !!t0, taxEdited = !!t0, shTouched = !!t0;
+    let type = t.t, feeEdited = !!t0, taxEdited = !!t0;
     const upd = () => {
       const s = $('#ms', root).value.trim().toUpperCase(); const us = isUs(s);
       $('#fxf', root).style.display = us ? '' : 'none';
@@ -1451,14 +1385,6 @@ async function tradeModal(t0, preset = {}) {
         if (!taxEdited) $('#mtx', root).value = type === 'SELL' ? Math.floor(g * twTaxRate(s)) : 0;
       }
       if (type === 'DIVIDEND' && !taxEdited) $('#mtx', root).value = 0;
-      // 放空（台股）：賣出＝融券賣出／當沖先賣；買進＝回補
-      const sh = shCalc(t0, type, s, n, p, shTouched ? $('#shc', root).checked : null, $('#shm', root).value === '1', $('#shd', root).value, $('#shi', root).value);
-      $('#shw', root).style.display = sh.show ? '' : 'none'; $('#shc', root).checked = sh.on; $('#shf', root).style.display = sh.on ? '' : 'none';
-      $('#shl', root).textContent = type === 'SELL' ? '放空（融券賣出／先賣後買當沖）' : '回補放空部位' + (sh.open ? `（放空 ${fmtInt(sh.open.n)} 股）` : '');
-      $('#shmf', root).style.display = type === 'SELL' ? '' : 'none'; $('#shdf', root).style.display = type === 'SELL' && sh.margin ? '' : 'none';
-      $('#shil', root).textContent = type === 'SELL' ? '借券費' : '融券利息收入（選填）'; $('#shi', root).parentElement.style.display = type === 'SELL' && !sh.margin ? 'none' : '';
-      $('#shs', root).textContent = sh.note; t._sh = sh;
-      if (sh.on && type === 'SELL' && !sh.margin && !taxEdited && !D.isEtf(s) && n > 0 && p > 0) $('#mtx', root).value = Math.floor(gross(s, n, p) * 0.0015);
       // 融資（台股）
       const mg = mgCalc(t0, type, s, n, p, $('#md', root).value, $('#mgc', root).checked, $('#mgv', root).value, $('#mgi', root).value);
       $('#mgw', root).style.display = mg.show ? '' : 'none'; $('#mgcw', root).style.display = type === 'BUY' ? '' : 'none';
@@ -1466,9 +1392,7 @@ async function tradeModal(t0, preset = {}) {
       $('#mgif', root).style.display = type === 'SELL' ? '' : 'none'; $('#mgr', root).textContent = mgRatio();
       $('#mgl1', root).textContent = type === 'SELL' ? '償還融資（空白＝依比例）' : '融資金額（空白＝成交 × 成數）';
       $('#mgs', root).textContent = mg.note; t._mg = mg;
-      if (sh.on) $('#mgw', root).style.display = 'none';
     };
-    $('#shc', root).onchange = () => { shTouched = true; upd(); }; ['#shm', '#shd', '#shi'].forEach((id) => { $(id, root).oninput = upd; $(id, root).onchange = upd; });
     ['#mgc', '#mgv', '#mgi'].forEach((id) => { $(id, root).oninput = upd; $(id, root).onchange = upd; });
     $$('[data-t]', root).forEach((b) => b.onclick = () => { type = b.dataset.t; $$('[data-t]', root).forEach((x) => x.classList.toggle('on', x === b)); upd(); });
     ['#mn2', '#mp', '#md'].forEach((id) => $(id, root).oninput = upd);
@@ -1485,9 +1409,8 @@ async function tradeModal(t0, preset = {}) {
       const nt = { ...(t0 || {}), t: type, s, d: $('#md', root).value.replace(/-/g, '/'), n: type === 'SPLIT' ? 0 : n, p, x: isUs(s) ? (+$('#mx', root).value || usdTwd()) : 1,
         fee: +$('#mf', root).value || 0, tax: +$('#mtx', root).value || 0, note: $('#mnote', root).value.trim(), acc: Number(($('#ma', root) || {}).value || 0),
         id: t0 ? t0.id : Math.max(0, ...D.trades().map((x) => Number(x.id) || 0)) + 1, o: t0 ? (t0.o || '') : '', att: t0 ? (t0.att || []) : [], tags: t0 ? (t0.tags || []) : [] };
-      delete nt.mg; delete nt.mi; delete nt.sh; const mg = t._mg || {}; const sh = t._sh || {};
-      if (sh.on) { nt.sh = 1; if (sh.mg > 0) nt.mg = sh.mg; if (sh.mi > 0) nt.mi = sh.mi; }
-      else { if (mg.mg > 0) nt.mg = mg.mg; if (mg.mi > 0) nt.mi = mg.mi; }
+      delete nt.mg; delete nt.mi; const mg = t._mg || {};
+      if (mg.mg > 0) nt.mg = mg.mg; if (mg.mi > 0) nt.mi = mg.mi;
       const list = D.trades().filter((x) => !t0 || x.id !== t0.id).concat([nt]);
       const r = ledger(list); if (r.err) return r.err;
       t._new = list; return null;
@@ -4400,7 +4323,7 @@ VIEWS.member = {
     $('#sAuto').onchange = (e) => { S.pref.syncAuto = e.target.checked; savePref(); toast(e.target.checked ? '已改為自動同步' : '已改為手動同步：按「立即同步」才會上傳／下載'); renderSync(); };
     $('#apBtn').onclick = () => applyModal();
     $('#lo').onclick = async () => { if ((await dialog('登出', '登出後這個瀏覽器的資料會清除（雲端資料保留），重新登入即可恢復。', [['', '取消'], ['ok', '登出', 'primary']])) === 'ok') logout(); };
-    $('#pfE').closest('.card').insertAdjacentHTML('beforeend', '<div class="row" style="margin-top:12px;gap:16px"><a href="/web/privacy.html" target="_blank" rel="noopener" class="small">隱私權政策</a><a href="javascript:void 0" id="delAcc" class="small muted">刪除帳號</a></div>');
+    $('#pfE').closest('.card').insertAdjacentHTML('beforeend', '<div style="margin-top:12px"><a href="javascript:void 0" id="delAcc" class="small muted">刪除帳號</a></div>');
     $('#delAcc').onclick = () => deleteAccountModal(me);
     $('#syn').onclick = async () => { await syncNow(); this.fill(); };
     $('#dl').onclick = async () => { if ((await dialog('從雲端重新下載', '以雲端資料取代這個網頁的資料？（尚未上傳的變更會遺失）', [['', '取消'], ['ok', '下載', 'primary']])) !== 'ok') return; S.dirty = false; await pull(true); toast('已下載雲端資料'); route(); };
@@ -4566,7 +4489,7 @@ VIEWS.analysis = {
   },
   perf() {
     const lg = ledger(); if (lg.err) { $('#dyn').innerHTML = `<div class="notice err">${esc(lg.err)}</div>`; return; }
-    const sells = D.trades().filter((t) => (t.t === 'SELL' || (t.sh && t.t === 'BUY')) && lg.realizedById[t.id] != null).map((t) => ({ ...t, r: lg.realizedById[t.id] }));
+    const sells = D.trades().filter((t) => t.t === 'SELL' && lg.realizedById[t.id] != null).map((t) => ({ ...t, r: lg.realizedById[t.id] }));
     const byYear = {}; sells.forEach((t) => { const y = String(t.d).slice(0, 4); byYear[y] = (byYear[y] || 0) + t.r; });
     const years = Object.keys(byYear).sort(); const y = S.pref.anY && byYear[S.pref.anY] != null ? S.pref.anY : years[years.length - 1] || String(new Date().getFullYear());
     const months = Array.from({ length: 12 }, (_, i) => sells.filter((t) => String(t.d).startsWith(y + '/' + String(i + 1).padStart(2, '0'))).reduce((a, t) => a + t.r, 0));
@@ -4800,10 +4723,8 @@ VIEWS.settings = {
         <div class="tile small" style="margin-top:6px"><div><b>目前狀態</b></div><div class="text2" id="rtSt" style="white-space:pre-line">${esc(rtStatusText())}</div></div>
         <div class="row wrap" style="margin-top:8px;gap:6px"><button class="btn sm" id="rtNow">立即更新行情</button><a class="btn sm" href="#/diag">資料來源診斷</a></div>
         <div class="small muted" style="margin-top:8px">非交易時間每分鐘更新一次。美股與指數使用 Yahoo Finance（免金鑰）；台指期等期貨資料請使用手機 App。</div></div>
-      <div class="card"><h2>融資融券</h2><div class="small text2">新增台股買進時可勾選「融資買進」：現金只扣自備款，融資金額記為負債；賣出時依比例償還並扣利息。總資產以淨值（市值＋現金−融資）計算，與手機 App 相同。</div>
+      <div class="card"><h2>融資</h2><div class="small text2">新增台股買進時可勾選「融資買進」：現金只扣自備款，融資金額記為負債；賣出時依比例償還並扣利息。總資產以淨值（市值＋現金−融資）計算，與手機 App 相同。</div>
         <div class="grid g2" style="margin-top:8px"><div class="field"><label>融資成數 %</label><input id="mgRt" type="number" step="1" value="${mgRatio()}"></div><div class="field"><label>融資年利率 %</label><input id="mgRr" type="number" step="0.01" value="${mgRate()}"></div></div>
-        <div class="small text2" style="margin-top:10px"><b>融券與當沖先賣</b>：台股賣出勾選「放空」。融券繳保證金、價款由券商留置；當沖先賣不繳保證金、價款直接入帳（證交稅 0.15%）。回補時新增買進並勾選「回補放空部位」。</div>
-        <div class="grid g2" style="margin-top:8px"><div class="field"><label>融券保證金成數 %</label><input id="shDp" type="number" step="1" value="${shDepPct()}"></div><div class="field"><label>借券費率 %</label><input id="shFe" type="number" step="0.01" value="${shFeePct()}"></div></div>
         <div class="small muted">成數與利率只存在這個瀏覽器（手機 App 另在「設置 › 帳本」設定）。</div></div>
       <div class="card"><h2>資料</h2>
         <div class="row wrap"><button class="btn" id="ex1">匯出交易紀錄 CSV</button><button class="btn" id="ex2">匯出持股 CSV</button><button class="btn" id="rsAll">重設網頁版面設定</button><a class="btn" href="#/diag">資料來源診斷</a></div>
@@ -4837,7 +4758,6 @@ VIEWS.settings = {
     $('#rsAll').onclick = async () => { if ((await dialog('重設版面設定', '恢復網頁版預設的外觀與版面？（不影響資料）', [['', '取消'], ['ok', '重設', 'primary']])) !== 'ok') return; S.pref = { layout: 'wall', group: 'all', holdSort: 'mv', sub: 'KD', range: '6M' }; re(); };
     aiSettingsBind();
     const fgOut = (ok, msg) => { const el = $('#fgR'); if (el) { el.textContent = msg; el.className = 'small ' + (ok ? 'up' : 'down'); } };
-    if ($('#shDp')) { $('#shDp').onchange = () => { S.pref.shDep = +$('#shDp').value || 90; savePref(); toast('已更新融券保證金成數'); }; $('#shFe').onchange = () => { S.pref.shFee = Math.max(0, +$('#shFe').value || 0); savePref(); toast('已更新借券費率'); }; }
     if ($('#mgRt')) { $('#mgRt').onchange = () => { S.pref.mgRatio = +$('#mgRt').value || 60; savePref(); toast('已更新融資成數'); }; $('#mgRr').onchange = () => { S.pref.mgRate = +$('#mgRr').value || 6.45; savePref(); toast('已更新融資利率'); }; }
     if ($('#fmS')) $('#fmS').onclick = async () => { const v = $('#fmK').value.trim(); if (!v) return toast('請先貼上 Token'); await aiKeySet('finmind', v); Object.keys(FMC).forEach((k) => delete FMC[k]); toast('已儲存 FinMind Token'); route(); };
     if ($('#fmD')) $('#fmD').onclick = async () => { await aiKeySet('finmind', ''); toast('已清除 FinMind Token'); route(); };
@@ -5775,7 +5695,6 @@ function loginView(msg, mode) {
     <div id="gbtn" class="gbtn" style="margin-top:14px">${p.gClient || MOCK ? '' : '<div class="notice">管理員尚未開放網頁登入（Google 登入未設定）。</div>'}</div>
     ${mode === 'login' ? `<div style="margin-top:12px"><button class="btn" id="qrBtn" style="min-width:280px">📱 用 App 掃描登入</button><div class="small muted" style="margin-top:4px">手機 App 已登入帳號時，掃描 QR Code 即可登入，免在電腦輸入 Google 帳號</div></div>` : ''}
     <div id="lerr" class="small up" style="margin-top:10px"></div>
-    <div class="small" style="margin-top:8px"><a href="/web/privacy.html" target="_blank" rel="noopener">隱私權政策</a></div>
     ${lineOaId() ? `<div style="margin-top:14px">${lineJoinHtml()}</div>` : ''}
     <div class="small muted" style="margin-top:18px">${mode === 'reg' ? '已經在手機 App 用 Google 登入過？直接按「登入」即可，不需重新註冊。' : '還沒有帳號？按上方「註冊新帳號」。'}同一帳號網頁同時只能在一個瀏覽器使用。</div>${webVerHtml()}</div></div>`;
   $$('[data-lm]').forEach((b) => b.onclick = () => { store.set('lmode', b.dataset.lm); loginView('', b.dataset.lm); });

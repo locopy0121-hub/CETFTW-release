@@ -18,7 +18,7 @@ for (const raw of fs.readFileSync(path.join(here, '..', '..', 'app', 'src', 'tes
   if (p[0] === 'case') cases.push(cur = { name: l.slice(5).trim(), base: { cash: 0, realized: 0, year: 2026, divTw: 0, divUs: 0 }, trades: [], expect: [] });
   else if (p[0] === 'base') p.slice(1).forEach((kv) => { const [k, v] = kv.split('='); cur.base[k] = +v; });
   else if (p[0] === 't') { const kv = Object.fromEntries(p.slice(6).map((x) => x.split('=')));
-    cur.trades.push({ t: p[1], s: p[2], d: p[3], n: +p[4], p: +p[5], x: kv.x ? +kv.x : 1, fee: +(kv.fee || 0), tax: +(kv.tax || 0), id: +kv.id, o: kv.o || '', ...(kv.mg ? { mg: +kv.mg } : {}), ...(kv.mi ? { mi: +kv.mi } : {}), ...(kv.sh ? { sh: 1 } : {}) }); }
+    cur.trades.push({ t: p[1], s: p[2], d: p[3], n: +p[4], p: +p[5], x: kv.x ? +kv.x : 1, fee: +(kv.fee || 0), tax: +(kv.tax || 0), id: +kv.id, o: kv.o || '', ...(kv.mg ? { mg: +kv.mg } : {}), ...(kv.mi ? { mi: +kv.mi } : {}) }); }
   else if (p[0] === 'expect') cur.expect.push(...p.slice(1));
 }
 let fail = 0; const near = (a, b, e = 0.01) => Math.abs(a - b) <= e;
@@ -34,9 +34,6 @@ for (const c of cases) {
     if (k.startsWith('debt.') && !near((r.debt || {})[k.slice(5)] || 0, +v)) bad.push(`融資 ${(r.debt || {})[k.slice(5)]} ≠ ${v}`);
     if (k.startsWith('hold.')) { const h = r.holdings.find((x) => x.symbol === k.slice(5)); const [n, a] = v.split('@').map(Number);
       if (!h) bad.push('沒有持股 ' + k.slice(5)); else { if (!near(h.shares, n, 1e-6)) bad.push(`股數 ${h.shares} ≠ ${n}`); if (!near(h.avgCost, a, 1e-6)) bad.push(`均價 ${h.avgCost} ≠ ${a}`); } }
-    if (k.startsWith('short.')) { const x = (r.shorts || []).find((y) => y.symbol === k.slice(6)); const [n, a] = v.split('@').map(Number);
-      if (!x) bad.push('沒有放空 ' + k.slice(6)); else { if (!near(x.n, n, 1e-6)) bad.push(`放空股數 ${x.n} ≠ ${n}`); if (!near(x.net / x.n, a, 1e-6)) bad.push(`放空均價 ${x.net / x.n} ≠ ${a}`); } }
-    if (k.startsWith('noshort.') && (r.shorts || []).some((y) => y.symbol === k.slice(8))) bad.push('應無放空 ' + k.slice(8));
     if (k.startsWith('none.') && r.holdings.some((x) => x.symbol === k.slice(5))) bad.push('應無持股 ' + k.slice(5));
   }
   console.log((bad.length ? '✗ ' : '✓ ') + c.name + (bad.length ? '：' + bad.join('；') : ''));
