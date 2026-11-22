@@ -814,7 +814,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"b5b8ebd","at":"2026-11-22 15:55"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"9f7cdf7","at":"2026-11-22 16:04"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -3480,6 +3480,13 @@ Object.assign(VIEWS.s, {
     const [plans, list] = await Promise.all([kv('sx:plans'), divHist(sym)]); if (this.sym !== sym || this.tab() !== 'div') return;
     const p = plans && plans[sym]; const h = holdings().find((x) => x.symbol === sym);
     $('#dvup').innerHTML = `<div class="card"><h2>即將除權息</h2>${p && p.ex >= ymd() ? kvRows([['除息日', p.ex], ['最後買進日', p.lb || '—'], ['發放日', p.pay || '—'], ['現金股利', p.cash ? fmt(p.cash, 4) + ' 元' : '—'], ['股票股利', p.stock || null], ['預估可領', h && p.cash ? fmtInt(h.shares * p.cash) + ' 元' : null]]) : '<div class="small muted">目前沒有已公告的除權息。</div>'}</div>`;
+    if (!(p && p.ex >= ymd()) && !us && !etfLike(sym)) fmGet('TaiwanStockDividend', sym, 3700).then((rows) => {
+      const ds = rows.map((o) => ({ y: o.year || '', cash: (+o.CashEarningsDistribution || 0) + (+o.CashStatutorySurplus || 0), stock: (+o.StockEarningsDistribution || 0) + (+o.StockStatutorySurplus || 0), ex: o.CashExDividendTradingDate || o.StockExDividendTradingDate || '', pay: o.CashDividendPaymentDate || '' })).filter((d) => d.cash > 0 || d.stock > 0);
+      const today = ymd().replace(/\//g, '-'); const fut = ds.filter((d) => d.ex && d.ex >= today).sort((a, b) => (a.ex < b.ex ? -1 : 1))[0];
+      const dated = ds.filter((d) => d.ex).sort((a, b) => (a.ex < b.ex ? 1 : -1))[0]; const pend = ds.filter((d) => !d.ex && dated && d.y > dated.y).sort((a, b) => (a.y < b.y ? 1 : -1))[0];
+      const f = fut || pend; if (!f || !$('#dvup') || this.sym !== sym) return;
+      $('#dvup').innerHTML = `<div class="card"><h2>即將除權息<span class="r small muted">公司決議 · FinMind</span></h2>${kvRows([['所屬期間', f.y], ['現金股利', fmt(f.cash, 4).replace(/\.?0+$/, '') + ' 元'], ['股票股利', f.stock ? fmt(f.stock, 4).replace(/\.?0+$/, '') + ' 元' : null], ['除息日', f.ex || '尚未公布'], ['發放日', f.pay || null], ['預估可領', h && f.cash ? fmtInt(h.shares * f.cash) + ' 元' : null]])}
+        <div class="small muted" style="margin-top:6px">交易所尚未公告除權息時程，以上為董事會／股東會決議；實際日期以公告為準。</div></div>`; }).catch(() => {});
     const price = (S.q[sym] || {}).price;
     $('#dvlist').innerHTML = `<div class="card"><h2>配息紀錄<span class="r small muted">${list.length} 筆</span></h2>${list.length ? `<div class="scroll-x" style="max-height:420px;overflow:auto"><table class="tbl"><thead><tr><th>除息日</th><th>每股</th><th>以現價殖利率</th>${h ? '<th>以目前持股可領</th>' : ''}</tr></thead><tbody>
       ${list.slice().reverse().map(([d, c]) => `<tr><td class="num">${esc(d)}</td><td class="num">${fmt(c, us ? 3 : 4)}</td><td class="num">${price ? (c / price * 100).toFixed(2) + '%' : '—'}</td>${h ? `<td class="num">${fmtInt(h.shares * c * divNetFactor(sym))}</td>` : ''}</tr>`).join('')}</tbody></table></div>` : '<div class="small muted">查無配息紀錄</div>'}</div>`;
