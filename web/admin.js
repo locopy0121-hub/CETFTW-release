@@ -68,7 +68,7 @@ async function logout(msg) {
 
 // ───────── 主畫面 ─────────
 /** 網頁版本（發布時由 .github/public/sync.sh 填入） */
-const WEB_VER = /*WEBVER*/{"v":"","sha":"8b32a73","at":"2026-11-23 10:32"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"dc2c7d0","at":"2026-11-23 12:35"};
 const verText = () => (WEB_VER ? (WEB_VER.v ? (/^v/i.test(WEB_VER.v) ? WEB_VER.v : 'v' + WEB_VER.v) + ' · ' : '') + WEB_VER.sha + (WEB_VER.at ? ' · ' + WEB_VER.at : '') : '開發版');
 const TABS = [['home', '總覽'], ['req', '申請'], ['trade', '交易'], ['msg', '訊息'], ['mem', '會員'], ['pol', '政策'], ['tier', '會員等級'], ['rel', '發布'], ['line', 'LINE'], ['forum', '討論區'], ['job', '工作紀錄']];
 /** 功能位元（與 App License.Feature 順序相同，不可調整） */
@@ -764,12 +764,14 @@ const lineKit = {
 /** 訂閱方案價格與活動折扣（由管理員 App 簽章回傳；App 與網頁版會員頁顯示） */
 function priceEditor(box, p) {
   if (!S.prices) S.prices = JSON.parse(JSON.stringify(p.prices && p.prices.length ? p.prices : [{ n: '1 個月', m: 1, p: 199, t: 0 }, { n: '3 個月', m: 3, p: 499, t: 0 }, { n: '6 個月', m: 6, p: 799, t: 0 }, { n: '1 年', m: 12, p: 1099, t: 0 }]));
-  if (!S.discEd) S.discEd = { disc: p.disc || 0, discUntil: p.discUntil || '', discLabel: p.discLabel || '', payOn: p.payOn !== false };
+  if (!S.discEd) S.discEd = { disc: p.disc || 0, discUntil: p.discUntil || '', discLabel: p.discLabel || '', payOn: p.payOn !== false, comp: !!p.comp };
   const P = S.prices, D0 = S.discEd;
   const draw = () => {
     const on = D0.disc > 0 && (!D0.discUntil || new Date().toISOString().slice(0, 10).replace(/-/g, '/') <= D0.discUntil.replace(/-/g, '/'));
     box.innerHTML = `<h2>收費功能</h2><label class="row small" style="gap:6px;cursor:pointer"><input type="checkbox" id="payOn" style="width:auto" ${D0.payOn ? 'checked' : ''}> ${D0.payOn ? '開啟：顯示方案價格與申請，試用期滿鎖定進階功能' : '關閉（試運作）：免費使用試用等級功能、不限天數，隱藏價格與申請'}</label>
       <div class="small muted" style="margin:4px 0 12px">試運作時可在「會員」頁「註冊名額」控管試用人數；已開通的會員照常依等級使用。</div>
+      <h2>商業合規模式</h2><label class="row small" style="gap:6px;cursor:pointer"><input type="checkbox" id="compOn" style="width:auto" ${D0.comp ? 'checked' : ''}> ${D0.comp ? '開啟：只用政府開放資料與使用者自己的金鑰' : '關閉：沿用目前所有資料來源'}</label>
+      <div class="small muted" style="margin:4px 0 12px">正式收費前建議開啟。開啟後轉送站停止代抓證交所盤中即時、Yahoo 非公開 API、鉅亨、MoneyDJ，FinMind 只用使用者自己的 Token；App 停用 MoneyDJ／ETF 持股彙整站與 Yahoo 排行，台股盤中改以使用者的富果金鑰為主。LINE 查價與到價提醒會暫停。${D0.payOn && !D0.comp ? '<br><b style="color:var(--warn,#d97706)">⚠ 收費已開啟但合規模式關閉：部分資料來源未取得商業授權</b>' : ''}</div>
       <h2>訂閱方案與價格<span class="r small muted">價格可隨時調整</span></h2>
       ${P.map((x, i) => `<div class="row" style="gap:8px;margin-top:8px;align-items:flex-end"><div class="field" style="flex:1.4;margin:0"><label>名稱</label><input data-pi="${i}" data-pk2="n" value="${esc(x.n)}" maxlength="12"></div>
         <div class="field" style="flex:.7;margin:0"><label>月數</label><input data-pi="${i}" data-pk2="m" type="number" min="1" max="120" value="${x.m}"></div>
@@ -785,12 +787,13 @@ function priceEditor(box, p) {
     $('#padd', box).onclick = () => { if (P.length >= 8) return; P.push({ n: '新方案', m: 1, p: 199, t: 0 }); draw(); };
     $('#pdef', box).onclick = () => { S.prices = null; p = { ...p, prices: null }; priceEditor(box, p); };
     $('#payOn', box).onchange = (e) => { D0.payOn = e.target.checked; draw(); };
+    $('#compOn', box).onchange = (e) => { D0.comp = e.target.checked; draw(); };
     $('#dPct', box).onchange = (e) => { D0.disc = Math.max(0, Math.min(90, parseInt(e.target.value, 10) || 0)); draw(); };
     $('#dUntil', box).onchange = (e) => { D0.discUntil = e.target.value.replace(/-/g, '/'); draw(); };
     $('#dLbl', box).oninput = (e) => { D0.discLabel = e.target.value; };
     $('#psave2', box).onclick = async () => {
       if (P.some((x) => !String(x.n).trim())) return toast('請輸入每個方案的名稱');
-      if (await job('policy', { prices: P.map((x) => ({ n: String(x.n).trim(), m: x.m, p: x.p, t: x.t || 0 })), disc: D0.disc, discUntil: D0.discUntil, discLabel: D0.discLabel.trim(), payOn: D0.payOn }, '已送出收費設定、價格與折扣')) { S.prices = null; S.discEd = null; }
+      if (await job('policy', { prices: P.map((x) => ({ n: String(x.n).trim(), m: x.m, p: x.p, t: x.t || 0 })), disc: D0.disc, discUntil: D0.discUntil, discLabel: D0.discLabel.trim(), payOn: D0.payOn, comp: D0.comp }, '已送出收費設定、合規模式、價格與折扣')) { S.prices = null; S.discEd = null; }
     };
   };
   draw();

@@ -136,7 +136,7 @@ async function loadPolicy(cfg) {
     return { ...DEFAULT_POLICY, ...p, tiers: (p.tiers || []).map((t) => ({ name: t.n, features: t.f, id: t.id || 0, days: t.d == null ? 30 : t.d, color: t.c || 0xFF3B82F6, desc: t.ds || '',
       hidden: t.h != null ? !!t.h : (/^admin$/i.test(t.n || '') || /管理員/.test(t.ds || '')) })),
       plans: Array.isArray(p.plans) && p.plans.length ? p.plans.filter((x) => x.m > 0 && x.p > 0).map((x) => ({ name: x.n, months: x.m, price: x.p, tier: x.t || 0 })) : PLANS_DEFAULT,
-      disc: Math.max(0, Math.min(90, p.disc || 0)), discUntil: p.discUntil || '', discLabel: p.discLabel || '', payOn: p.pay !== false };
+      disc: Math.max(0, Math.min(90, p.disc || 0)), discUntil: p.discUntil || '', discLabel: p.discLabel || '', payOn: p.pay !== false, comp: !!p.comp };
   } catch (e) { return { ...DEFAULT_POLICY }; }
 }
 
@@ -355,7 +355,7 @@ async function e2eeModal() {
 const DATA_FMT_MAX = 3;
 function dataFmt(json) { const t = String(json || ''); return /"sh"\s*:/.test(t) ? 3 : /"m[gi]"\s*:/.test(t) ? 2 : 1; }
 function snapshot() { const k = S.keys || {}; const fmt = Math.max(dataFmt((k.trades || {}).v), dataFmt((k['sim:trades'] || {}).v));
-  return JSON.stringify({ app: 'ClaudeETF', format: fmt, fmtMax: DATA_FMT_MAX, ...(S.cloudDir ? { dir: S.cloudDir } : {}), keys: S.keys }); }
+  return JSON.stringify({ app: 'CETFTW', format: fmt, fmtMax: DATA_FMT_MAX, ...(S.cloudDir ? { dir: S.cloudDir } : {}), keys: S.keys }); }
 /** 交易變更後，連帶更新持股與現金（與 App 一致） */
 function recalc() {
   const r = ledger(); if (r.err) return r.err;
@@ -438,6 +438,7 @@ function num(v) { const n = parseFloat(v); return isNaN(n) ? null : n; }
 /** 台股即時（證交所 MIS，上市＋上櫃一次查） */
 async function fetchTw(syms) {
   const out = {};
+  if (compOn()) return out;   // 合規模式：盤中即時改由使用者自己的富果金鑰串流
   const chunks = []; for (let i = 0; i < syms.length; i += 30) chunks.push(syms.slice(i, i + 30));
   await Promise.all(chunks.map(async (c) => {
     const ch = c.map((s) => (s === 't00' ? 'tse_t00.tw' : s === 'o00' ? 'otc_o00.tw' : 'tse_' + s + '.tw|otc_' + s + '.tw')).join('|');
@@ -460,7 +461,9 @@ async function fetchTw(syms) {
 /** 富果 Fugle 串流（選填）：瀏覽器直接連 wss://api.fugle.tw，金鑰只在這個瀏覽器加密保存、不經過本站伺服器、不同步 */
 const FG_URL = 'wss://api.fugle.tw/marketdata/v1.0/stock/streaming';
 const FG = { ws: null, authed: false, status: '', subs: new Set(), rej: new Set(), queue: [], awaiting: null, awaitingAt: 0, limit: false, at: {}, msgs: 0, retry: 0, authFail: '', connAt: 0, timer: 0 };
-function fgWanted() { return S.pref.twSrc === 'fugle' && aiHas('fugle'); }
+function fgWanted() { return (S.pref.twSrc === 'fugle' || compOn()) && aiHas('fugle'); }
+/** 商業合規模式（管理員政策）：轉送站不代抓證交所盤中即時、Yahoo 非公開 API、鉅亨、MoneyDJ */
+function compOn() { return !!(S.policy && S.policy.comp); }
 function fgFresh(sym) { return FG.authed && Date.now() - (FG.at[sym] || 0) < 20000; }
 function fgStop(msg) { const w = FG.ws; FG.ws = null; FG.authed = false; FG.subs.clear(); FG.rej.clear(); FG.queue = []; FG.awaiting = null; FG.limit = false; if (w) try { w.close(1000, 'bye'); } catch (e) {} if (msg != null) FG.status = msg; }
 function fgSend(o) { try { FG.ws && FG.ws.readyState === 1 && FG.ws.send(JSON.stringify(o)); } catch (e) {} }
@@ -576,7 +579,7 @@ function netState(st) {
   let el = $('#net');
   if (st === 'ok') { if (el) el.remove(); return; }
   if (!el) { el = document.createElement('div'); el.id = 'net'; el.className = 'netbar'; document.body.appendChild(el); }
-  el.textContent = st === 'off' ? '⚠ 目前離線，顯示的是上次的資料' : '⚠ 暫時無法取得行情，稍後自動重試';
+  el.textContent = st === 'off' ? '⚠ 目前離線，顯示的是上次的資料' : compOn() && !aiHas('fugle') ? '⚠ 商業合規模式：盤中即時報價請到「設定 › 即時行情」填入自己的富果金鑰' : '⚠ 暫時無法取得行情，稍後自動重試';
 }
 window.addEventListener('online', () => { netState('ok'); tick(); });
 window.addEventListener('offline', () => netState('off'));
@@ -593,6 +596,7 @@ async function refreshIndexes() {
 // 漲跌停（Yahoo 排行，逐頁讀到不再是漲停／跌停）
 const LIMIT = { up: [], down: [], at: 0, loading: false };
 async function refreshLimits(force = false) {
+  if (compOn()) return;   // 合規模式：Yahoo 排行為非公開 API，停用
   if (LIMIT.loading || (!force && Date.now() - LIMIT.at < (twOpen() ? 60000 : 600000))) return;
   LIMIT.loading = true;
   const pull = async (ex, up) => {
@@ -896,7 +900,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"8b32a73","at":"2026-11-23 10:32"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"dc2c7d0","at":"2026-11-23 12:35"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -2950,8 +2954,8 @@ async function aiKeysBackup() {
   const out = {}; for (const id of Object.keys(store.get('aik', {}))) { const v = await aiKeyGet(id); if (v) out[id] = v; }
   if (!Object.keys(out).length) return toast('沒有可備份的金鑰');
   const pwd = await expPassword(); if (!pwd) return;
-  const enc = await expEncrypt(JSON.stringify({ app: 'ClaudeETF', type: 'apiKeys', at: ymd(), keys: out }), pwd, 'keys');
-  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([enc], { type: 'application/octet-stream' })); a.download = 'ClaudeETF-API金鑰-' + ymd().replace(/\//g, '-') + '.aes'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  const enc = await expEncrypt(JSON.stringify({ app: 'CETFTW', type: 'apiKeys', at: ymd(), keys: out }), pwd, 'keys');
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([enc], { type: 'application/octet-stream' })); a.download = 'CETFTW-API金鑰-' + ymd().replace(/\//g, '-') + '.aes'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   toast('已備份 ' + Object.keys(out).length + ' 組金鑰（加密）');
 }
 async function aiKeysRestore(file) {
@@ -4549,7 +4553,7 @@ VIEWS.member = {
     $('#lo').onclick = async () => { let ck = false;
       if ((await dialog('登出', '登出後這個瀏覽器的投資資料會清除（雲端資料保留），重新登入即可恢復。<label class="row small" style="gap:6px;margin-top:10px;cursor:pointer;justify-content:flex-start"><input type="checkbox" id="loK" style="width:auto"> 同時清除這個瀏覽器保存的 API 金鑰（共用電腦建議勾選）</label>',
         [['', '取消'], ['ok', '登出', 'primary']], (b) => () => { ck = $('#loK', b).checked; return null; })) === 'ok') logout(undefined, ck); };
-    $('#pfE').closest('.card').insertAdjacentHTML('beforeend', '<div class="row" style="margin-top:12px;gap:16px"><a href="/web/privacy.html" target="_blank" rel="noopener" class="small">隱私權政策</a><a href="javascript:void 0" id="delAcc" class="small muted">刪除帳號</a></div>');
+    $('#pfE').closest('.card').insertAdjacentHTML('beforeend', '<div class="row" style="margin-top:12px;gap:16px"><a href="/web/privacy.html" target="_blank" rel="noopener" class="small">隱私權政策</a><a href="/web/terms.html" target="_blank" rel="noopener" class="small">使用者條款</a><a href="/web/notice.html" target="_blank" rel="noopener" class="small">資料來源與授權</a><a href="javascript:void 0" id="delAcc" class="small muted">刪除帳號</a></div>');
     $('#delAcc').onclick = () => deleteAccountModal(me);
     $('#syn').onclick = async () => { await syncNow(); this.fill(); };
     $('#dl').onclick = async () => { if ((await dialog('從雲端重新下載', '以雲端資料取代這個網頁的資料？（尚未上傳的變更會遺失）', [['', '取消'], ['ok', '下載', 'primary']])) !== 'ok') return; S.dirty = false; await pull(true); toast('已下載雲端資料'); route(); };
@@ -5066,7 +5070,7 @@ VIEWS.tax = {
       ['計入基本所得額的海外所得（估）', R(a.included)], ['基本稅額上限（估，未扣一般所得稅額）', R(a.maxTax)], ['手續費', R(r.fees)], ['交易稅', R(r.taxes)], [],
       ['台股股利明細'], ['代號', '配息總額', '應稅比例', '股利所得', '二代健保'], ...Object.values(r.divs).map((d) => [d.s, R(d.g), R(d.ratio * 100) + '%', R(d.tx), R(d.nhi)]), [],
       ['個股已實現損益'], ['代號', '金額（TWD）'], ...Object.entries(r.bySym).map(([sy, v]) => [sy, R(v)]), [], ['本表依交易紀錄估算，僅供報稅參考，請以券商與國稅局資料為準。']];
-    download(`ClaudeETF-${r.year}年度報稅.csv`, rows.map((x) => x.map(csvCell).join(',')).join('\n'));
+    download(`CETFTW-${r.year}年度報稅.csv`, rows.map((x) => x.map(csvCell).join(',')).join('\n'));
   },
   syms() { return []; },
 };
@@ -5272,7 +5276,7 @@ async function expKey(pwd, salt, iter) {
 async function expEncrypt(plain, pwd, kind) {
   const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await expKey(pwd, salt, EXP_ITER), new TextEncoder().encode(plain)));
-  return JSON.stringify({ app: 'ClaudeETF', enc: 'AES-256-GCM', kdf: 'PBKDF2-SHA256', iter: EXP_ITER, kind, salt: b64big(salt), iv: b64big(iv), ct: b64big(ct) });
+  return JSON.stringify({ app: 'CETFTW', enc: 'AES-256-GCM', kdf: 'PBKDF2-SHA256', iter: EXP_ITER, kind, salt: b64big(salt), iv: b64big(iv), ct: b64big(ct) });
 }
 function expIsEnc(text) { try { return /^\s*\{/.test(text) && JSON.parse(text).enc === 'AES-256-GCM'; } catch (e) { return false; } }
 async function expDecrypt(text, pwd) {
@@ -5318,12 +5322,12 @@ function exportCsv(kind) {
     const lg = ledger();
     const rows = [['日期', '類別', '代號', '股數', '價格', '手續費', '交易稅', '匯率', '備註', '名稱', '成交金額(原幣)', '已實現損益(台幣)']];
     D.trades().filter((t) => t.o !== 'legacy').sort((a, b) => a.d.localeCompare(b.d)).forEach((t) => rows.push([t.d, t.o === 'opening' ? '期初' : TYPE_N[t.t], t.s, t.n, t.p, t.fee, t.tax, t.x, t.note || '', D.name(t.s), gross(t.s, t.n, t.p), lg.realizedById && lg.realizedById[t.id] != null ? Math.round(lg.realizedById[t.id]) : '']));
-    download('ClaudeETF-交易-' + day + '.csv', rows.map((r) => r.map(csvCell).join(',')).join('\n'));
+    download('CETFTW-交易-' + day + '.csv', rows.map((r) => r.map(csvCell).join(',')).join('\n'));
   } else {
     const P = portfolio();
     const rows = [['代號', '名稱', '股數', '均價', '現價', '市值(台幣)', '成本(台幣)', '未實現損益', '報酬率%', '占比%']];
     P.rows.forEach((r) => rows.push([r.symbol, r.name, r.shares, r.avgCost.toFixed(4), r.price, Math.round(r.mv), Math.round(r.cost), Math.round(r.pl), r.plPct.toFixed(2), r.weight.toFixed(2)]));
-    download('ClaudeETF-持股-' + day + '.csv', rows.map((r) => r.map(csvCell).join(',')).join('\n'));
+    download('CETFTW-持股-' + day + '.csv', rows.map((r) => r.map(csvCell).join(',')).join('\n'));
   }
   toast('已下載 CSV');
 }
@@ -6164,14 +6168,14 @@ function loginView(msg, mode) {
     ${msg ? `<div class="notice err" style="margin-top:14px">${esc(msg)}</div>` : ''}
     ${mode === 'reg' ? `<div class="text2" style="margin-top:12px">${tr}，用 Google 帳號一鍵建立會員（不需手機 App）</div>
       <div class="steps" style="text-align:left;margin:14px auto 0;max-width:330px">${[['1', '同意使用條款', '勾選下方同意事項'], ['2', 'Google 帳號驗證', '不需另設密碼，帳號即會員身分'], ['3', '填寫暱稱與聯絡方式', '方便管理員開通與聯繫'], ['4', '開始使用', '不需要手機也能使用；之後下載 App 用同一帳號登入即可綁定同步']].map(([n, t, d]) => `<div class="row" style="gap:10px;margin-bottom:8px;align-items:flex-start"><span class="badge" style="min-width:22px;text-align:center">${n}</span><div><b>${t}</b><div class="small muted">${d}</div></div></div>`).join('')}</div>
-      <label class="row small" style="justify-content:center;margin-top:10px;cursor:pointer"><input type="checkbox" id="agree" style="width:auto" ${store.get('agree', false) ? 'checked' : ''}> 我已閱讀並同意<a href="/web/privacy.html" target="_blank" rel="noopener">隱私權政策</a>（含個人資料蒐集目的與境外儲存），同意以 Google 帳號識別會員身分，並了解本服務內容僅供參考、不構成投資建議</label>`
+      <label class="row small" style="justify-content:center;margin-top:10px;cursor:pointer"><input type="checkbox" id="agree" style="width:auto" ${store.get('agree', false) ? 'checked' : ''}> 我已閱讀並同意<a href="/web/terms.html" target="_blank" rel="noopener">使用者條款</a>與<a href="/web/privacy.html" target="_blank" rel="noopener">隱私權政策</a>（含個人資料蒐集目的與境外儲存），同意以 Google 帳號識別會員身分，並了解本服務內容僅供參考、不構成投資建議</label>`
     : `<div class="text2" style="margin-top:12px">用註冊時的 Google 帳號登入（與手機 App 相同帳號）</div>
       <div class="feat"><div>📈 自選行情牆、指數、今日漲跌停</div><div>💼 持股損益、資產配置、交易記帳</div><div>📊 個股 K 線、進場建議、籌碼與財務</div><div>🔄 與手機 App 自動同步</div></div>`}
     ${QR_HINT ? `<div class="notice" style="margin-top:14px;text-align:left">這是電腦登入用的 QR Code：請打開手機「台美股資產」App › 會員 › 帳號與同步 ›「掃描登入網頁版」來掃描，不是用相機開啟。</div>` : ''}
     <div id="gbtn" class="gbtn" style="margin-top:14px">${p.gClient || MOCK ? '' : '<div class="notice">管理員尚未開放網頁登入（Google 登入未設定）。</div>'}</div>
     ${mode === 'login' ? `<div style="margin-top:12px"><button class="btn" id="qrBtn" style="min-width:280px">📱 用 App 掃描登入</button><div class="small muted" style="margin-top:4px">手機 App 已登入帳號時，掃描 QR Code 即可登入，免在電腦輸入 Google 帳號</div></div>` : ''}
     <div id="lerr" class="small up" style="margin-top:10px"></div>
-    <div class="small" style="margin-top:8px"><a href="/web/privacy.html" target="_blank" rel="noopener">隱私權政策</a></div>
+    <div class="small" style="margin-top:8px"><a href="/web/privacy.html" target="_blank" rel="noopener">隱私權政策</a>・<a href="/web/terms.html" target="_blank" rel="noopener">使用者條款</a>・<a href="/web/notice.html" target="_blank" rel="noopener">資料來源與授權</a></div>
     ${lineOaId() ? `<div style="margin-top:14px">${lineJoinHtml()}</div>` : ''}
     <div class="small muted" style="margin-top:18px">${mode === 'reg' ? '已經在手機 App 用 Google 登入過？直接按「登入」即可，不需重新註冊。' : '還沒有帳號？按上方「註冊新帳號」。'}同一帳號網頁同時只能在一個瀏覽器使用。</div>${webVerHtml()}</div></div>`;
   $$('[data-lm]').forEach((b) => b.onclick = () => { store.set('lmode', b.dataset.lm); loginView('', b.dataset.lm); });
