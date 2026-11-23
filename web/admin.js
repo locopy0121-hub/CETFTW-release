@@ -68,7 +68,7 @@ async function logout(msg) {
 
 // ───────── 主畫面 ─────────
 /** 網頁版本（發布時由 .github/public/sync.sh 填入） */
-const WEB_VER = /*WEBVER*/{"v":"v1.1.411","sha":"52f418a","at":"2026-11-23 20:51"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"1344090","at":"2026-11-23 20:53"};
 const verText = () => (WEB_VER ? (WEB_VER.v ? (/^v/i.test(WEB_VER.v) ? WEB_VER.v : 'v' + WEB_VER.v) + ' · ' : '') + WEB_VER.sha + (WEB_VER.at ? ' · ' + WEB_VER.at : '') : '開發版');
 const TABS = [['home', '總覽'], ['req', '申請'], ['trade', '交易'], ['msg', '訊息'], ['mem', '會員'], ['pol', '政策'], ['tier', '會員等級'], ['rel', '發布'], ['line', 'LINE'], ['forum', '討論區'], ['job', '工作紀錄']];
 /** 功能位元（與 App License.Feature 順序相同，不可調整） */
@@ -209,8 +209,9 @@ function render() {
         <div class="card"><h2>最近工作</h2>${d.jobs.slice(0, 6).map(jobRow).join('') || '<div class="small muted">尚無工作</div>'}</div>
         ${d.d1 ? '<div class="card" id="useBox" style="grid-column:1/-1"><h2>用量與成本</h2><div class="small muted">讀取中…</div></div>' : ''}
         ${d.d1 ? '<div class="card" id="skBox" style="grid-column:1/-1"><h2>統一金鑰</h2><div class="small muted">讀取中…</div></div>' : ''}
+        ${d.d1 ? '<div class="card" id="crBox" style="grid-column:1/-1"><h2>閃退回報</h2><div class="small muted">讀取中…</div></div>' : ''}
         <div class="card" id="hcBox" style="grid-column:1/-1"><h2>資料源健康檢查<span class="r"><button class="btn sm" id="hcRun">立即檢查</button></span></h2><div class="small muted">讀取中…</div></div></div>`;
-    healthBox($('#hcBox', v), false); if ($('#skBox', v)) skBox($('#skBox', v)); if ($('#useBox', v)) useBox($('#useBox', v)); $('#hcRun', v).onclick = () => healthBox($('#hcBox', v), true);
+    healthBox($('#hcBox', v), false); if ($('#skBox', v)) skBox($('#skBox', v)); if ($('#useBox', v)) useBox($('#useBox', v)); if ($('#crBox', v)) crBox($('#crBox', v)); $('#hcRun', v).onclick = () => healthBox($('#hcBox', v), true);
     $$('[data-go]', v).forEach((b) => b.onclick = () => { S.tab = b.dataset.go; renderTabs(); render(); });
     if ($('#rdp')) $('#rdp').onclick = () => job('redeploy', {}, '已送出重新部署');
     bindReq(v);
@@ -1109,7 +1110,7 @@ async function skBox(el, act) {
 }
 
 // ───────── 用量與成本：每日請求、API、LINE 推播、Email、AI；接近免費額度時提醒 ─────────
-const USE_N = { req: '總請求', page: '頁面', web: '網頁檔案', api_m: '會員', api_fm: 'FinMind', api_q: '行情代理', api_f: '討論區', api_stock: '個股資料', line_in: 'LINE 訊息', push: 'LINE 推播', mail: 'Email', ai: 'AI 代呼叫', cron: '排程' };
+const USE_N = { req: '總請求', page: '頁面', web: '網頁檔案', api_m: '會員', api_fm: 'FinMind', api_q: '行情代理', api_f: '討論區', api_stock: '個股資料', line_in: 'LINE 訊息', push: 'LINE 推播', mail: 'Email', ai: 'AI 代呼叫', crash: '閃退回報', cron: '排程' };
 async function useBox(el) {
   let r;
   if (S.useL && Date.now() - S.useAt < 60000) r = S.useL;
@@ -1126,6 +1127,26 @@ async function useBox(el) {
     <div class="scroll-x" style="margin-top:8px"><table class="tbl"><thead><tr><th>日期</th><th style="text-align:right">總請求</th>${kinds.map((k) => `<th style="text-align:right">${USE_N[k]}</th>`).join('')}</tr></thead><tbody>
       ${Object.keys(r.days).sort().reverse().map((dd) => `<tr><td>${esc(dd)}</td><td style="text-align:right">${fmtN(r.days[dd].req || 0)}</td>${kinds.map((k) => `<td style="text-align:right">${fmtN(r.days[dd][k] || 0)}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="9" class="small muted">部署新版轉送站後開始記錄</td></tr>`}</tbody></table></div>
     <div class="small muted" style="margin-top:6px">免費額度以 Cloudflare、LINE、Google 公告為準；用量每分鐘彙總一次。</div>`;
+}
+
+// ───────── 閃退回報：使用者 App 匿名上傳，依例外類別＋第一個 App 堆疊歸組（轉送站 D1 crash_groups） ─────────
+async function crBox(el, act) {
+  let r;
+  try { r = await call('crash', act || { act: 'list', sig: S.crOpen || '' }); if (!r.ok) throw new Error(r.err); if (act) return crBox(el); }
+  catch (e) { el.innerHTML = `<h2>閃退回報</h2><div class="small muted">讀取失敗：${esc(e.message)}${/未知|不支援/.test(e.message) ? '（請在管理員 App 重新部署轉送站）' : ''}</div>`; return; }
+  if (!el.isConnected) return;
+  const tm = (ms) => ms ? new Date(ms).toLocaleString('zh-TW', { hour12: false }) : '—';
+  el.innerHTML = `<h2>閃退回報（${r.list.length} 組）${r.list.length ? '<span class="r"><button class="btn sm" id="crClr">全部清除</button></span>' : ''}</h2>
+    <div class="small muted" style="margin-bottom:8px">使用者 App 閃退後下次開啟時匿名上傳（使用者可在「錯誤紀錄」關閉）；相同錯誤歸成一組，近 7 天有發生 ${r.week || 0} 組。點一組看完整內容。</div>
+    ${r.list.length ? r.list.map((x) => `<div class="crRow" data-sig="${esc(x.sig)}" style="padding:8px 10px;margin-top:6px;border-radius:8px;background:var(--bg);cursor:pointer">
+      <div class="row" style="justify-content:space-between"><b>${esc(x.title.split('.').pop())}</b><span class="small ${x.n >= 5 ? 'up' : 'muted'}">${x.n} 次</span></div>
+      <div class="small text2" style="word-break:break-all">${esc(x.frame.replace(/^at /, ''))}</div>
+      <div class="small muted">最近 ${tm(x.last)} · 首次 ${tm(x.first)} · 版本 ${esc(x.vers.split('|').join('、'))} · 機型 ${esc(x.models.split('|').join('、'))}</div>
+      ${S.crOpen === x.sig ? `<pre class="small" style="white-space:pre-wrap;word-break:break-all;margin:6px 0 0">${esc(x.sample || '讀取中…')}</pre><button class="btn sm crDel" data-sig="${esc(x.sig)}" style="margin-top:6px">已處理，刪除這組</button>` : ''}
+    </div>`).join('') : '<div class="small muted">目前沒有閃退回報。</div>'}`;
+  el.querySelectorAll('.crRow').forEach((row) => { row.onclick = (e) => { if (e.target.closest('.crDel') || e.target.closest('pre')) return; S.crOpen = S.crOpen === row.dataset.sig ? '' : row.dataset.sig; crBox(el); }; });
+  el.querySelectorAll('.crDel').forEach((b) => { b.onclick = () => { S.crOpen = ''; crBox(el, { act: 'del', sig: b.dataset.sig }); toast('已刪除'); }; });
+  if ($('#crClr', el)) $('#crClr', el).onclick = () => { if (confirm('清除全部閃退回報？（不影響使用者手機裡的紀錄）')) crBox(el, { act: 'clear' }); };
 }
 
 // ───────── 註冊名額（試運作控管試用人數）、候補名單、推薦排行 ─────────
