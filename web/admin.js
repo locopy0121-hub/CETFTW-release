@@ -68,7 +68,7 @@ async function logout(msg) {
 
 // ───────── 主畫面 ─────────
 /** 網頁版本（發布時由 .github/public/sync.sh 填入） */
-const WEB_VER = /*WEBVER*/{"v":"v1.1.404","sha":"fe8b243","at":"2026-11-23 14:57"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"9324981","at":"2026-11-23 15:04"};
 const verText = () => (WEB_VER ? (WEB_VER.v ? (/^v/i.test(WEB_VER.v) ? WEB_VER.v : 'v' + WEB_VER.v) + ' · ' : '') + WEB_VER.sha + (WEB_VER.at ? ' · ' + WEB_VER.at : '') : '開發版');
 const TABS = [['home', '總覽'], ['req', '申請'], ['trade', '交易'], ['msg', '訊息'], ['mem', '會員'], ['pol', '政策'], ['tier', '會員等級'], ['rel', '發布'], ['line', 'LINE'], ['forum', '討論區'], ['job', '工作紀錄']];
 /** 功能位元（與 App License.Feature 順序相同，不可調整） */
@@ -334,12 +334,13 @@ async function memberDialog(m) {
     <div class="grid g2" style="gap:10px;margin-top:12px"><div class="field"><label>名稱</label><input id="eN" value="${esc(m.name || '')}"></div><div class="field"><label>聯絡方式</label><input id="eC" value="${esc(m.contact || '')}"></div></div>
     <div class="field"><label>備註</label><input id="eNote" value="${esc(m.note || '')}"></div>
     ${m.code ? `<div class="small muted" style="word-break:break-all">授權碼：${esc(m.code)}</div>` : ''}
-    <div class="row wrap" style="gap:6px;margin-top:10px"><button class="btn sm primary" data-act="renew">${active ? '續約／變更方案' : '開通'}</button>${active ? '<button class="btn sm" data-act="revoke">停用授權</button>' : m.status === '停用' ? '<button class="btn sm" data-act="unrevoke">恢復授權</button>' : ''}
+    <div class="row wrap" style="gap:6px;margin-top:10px"><button class="btn sm primary" data-act="renew">${active ? '續約／變更方案' : '開通'}</button>${S.d.d1 ? `<button class="btn sm" data-act="msg">${m.code ? '官方帳號傳授權碼' : '官方帳號傳訊息'}</button>` : ''}${active ? '<button class="btn sm" data-act="revoke">停用授權</button>' : m.status === '停用' ? '<button class="btn sm" data-act="unrevoke">恢復授權</button>' : ''}
       ${m.google ? '<button class="btn sm" data-act="logout">強制登出</button><button class="btn sm" data-act="unlink">解除 Google 綁定</button>' : ''}</div>`,
   [['', '關閉'], ['save', '儲存資料', 'primary']], (bg) => {
     $$('[data-act]', bg).forEach((b) => b.onclick = async () => {
       bg.remove(); const a = b.dataset.act;
       if (a === 'renew') return issueDialog({ ...m, renew: active, device: m.device });
+      if (a === 'msg') return sendMsgDialog(m.no, m.code ? '授權碼' : '', m.code ? `${m.name || ''} 您好，以下是你的授權碼（${m.tier || ''}，到期 ${m.expiry || '—'}）：\n\n${m.code}\n\n長按複製整段訊息後打開 App，會自動完成開通。` : '');
       const label = { revoke: '停用 ' + m.no + ' 的授權？會同時回傳停用名單。', unrevoke: '恢復 ' + m.no + ' 的授權？', logout: '強制登出 ' + m.no + '？', unlink: '解除 ' + m.no + ' 的 Google 帳號綁定？' }[a];
       const c = await dialog('確認', `<div class="text2">${esc(label)}</div>`, [['', '取消'], ['ok', '確定', 'primary']]); if (c.v !== 'ok') return;
       if (a === 'revoke' || a === 'unrevoke') job('revoke', { no: m.no, v: a === 'revoke' }, '已送出');
@@ -848,7 +849,7 @@ function tierEditor(box, p) {
 // ───────── 交易（訂單）與訊息：資料在會員資料庫 D1，由轉送站直接處理；開通交給管理員 App 簽章 ─────────
 const ORD_ST = { 0: ['待付款', '#f59e0b'], 1: ['已付款', '#3b82f6'], 2: ['已開通', '#16a34a'], 8: ['已取消', '#94a3b8'], 9: ['已退款', '#ef4444'] };
 const PAY_METHODS = ['轉帳', 'LINE Pay', '街口支付', '現金', '其他'];
-const CH_N = { auto: '自動（有 LINE 用 LINE，否則 Email）', line: 'LINE', email: 'Email', both: 'LINE 與 Email' };
+const CH_N = { auto: '官方帳號優先（未綁定或送不到改寄 Email）', line: '只用 LINE 官方帳號', email: '只寄 Email', both: '官方帳號＋Email' };
 const MSG_ST = { 0: ['排隊', 'muted'], 1: ['已送出', ''], 2: ['失敗', 'up'], 3: ['略過', 'muted'] };
 const fmtN = (n) => Number(n || 0).toLocaleString('zh-TW');
 const tsText = (t) => (t ? new Date(t).toLocaleString('zh-TW', { hour12: false }).replace(/:\d\d$/, '') : '');
@@ -905,7 +906,7 @@ async function orderNew(pre) {
     toast('✓ 已建立訂單 ' + r.order.no + (r.sent ? '，' + sentText(r.sent) : '')); S.tab = 'trade'; store.set('tab', 'trade'); renderTabs(); render();
   } catch (e) { toast('建立失敗：' + e.message, 6000); }
 }
-const sentText = (l) => (l || []).map((x) => (x.channel === 'line' ? 'LINE' : 'Email') + (x.status === 1 ? '已送出' : x.status === 3 ? '略過（' + x.err + '）' : '失敗（' + x.err + '）')).join('、');
+const sentText = (l) => (l || []).map((x) => (x.channel === 'line' ? '官方帳號 LINE ' : 'Email ') + (x.status === 1 ? '已送出' : x.status === 3 ? '略過（' + x.err + '）' : '失敗（' + x.err + '）')).join('、');
 /** 訂單詳情：付款、開通、通知、取消／退款、事件與訊息紀錄 */
 async function orderDialog(id) {
   let r; try { r = await tcall('get', { id }); } catch (e) { return toast(e.message); }
@@ -1004,18 +1005,32 @@ async function renderMsg(v) {
   let r; try { r = await call('msgList', { limit: 150 }); if (!r.ok) throw new Error(r.err); } catch (e) { v.innerHTML = `<div class="card empty">讀取失敗：${esc(e.message)}</div>`; return; }
   if (S.tab !== 'msg') return;
   v.innerHTML = `<div class="card"><h2>訊息紀錄<span class="r"><button class="btn sm primary" id="mNew">＋ 發送訊息給會員</button></span></h2>
-    <div class="small muted" style="margin-bottom:8px">LINE 發給已綁定官方帳號的會員；Email 由管理員 Gmail（Apps Script）寄出，個人 Gmail 每天最多 100 位收件者。</div>
+    <div class="small muted" style="margin-bottom:8px">以 LINE 官方帳號推播給已綁定的會員（扣官方帳號每月額度）；未綁定或送不到時改寄 Email（管理員 Gmail，每天最多 100 位）。會員在 App 或網頁「會員中心」取得綁定碼，傳給官方帳號即完成綁定。</div>
     ${r.messages.length ? `<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>時間</th><th>會員</th><th>管道</th><th>內容</th><th>狀態</th></tr></thead><tbody>${r.messages.map((x) => `<tr><td class="small muted">${tsText(x.at)}</td><td>${esc(x.no)} ${esc(x.name)}</td><td>${x.channel === 'line' ? 'LINE' : 'Email'}</td><td>${esc(x.subject || x.template)}</td><td class="${MSG_ST[x.status][1]}">${MSG_ST[x.status][0]}${x.err ? '<div class="small muted">' + esc(x.err) + '</div>' : ''}</td></tr>`).join('')}</tbody></table></div>` : '<div class="small muted">尚無訊息。</div>'}</div>`;
-  $('#mNew', v).onclick = async () => {
-    const ms = S.d.members || [];
-    const x = await dialog('發送訊息給會員', `<div class="field"><label>會員代號</label><input id="gNo" list="gNoL"><datalist id="gNoL">${ms.map((m) => `<option value="${esc(m.no)}">${esc(m.name || '')}</option>`).join('')}</datalist></div>
-      <div class="field"><label>發送管道</label><select id="gC">${Object.entries(CH_N).map(([k, n]) => `<option value="${k}">${n}</option>`).join('')}</select></div>
-      <div class="field"><label>標題</label><input id="gS" maxlength="60"></div><div class="field"><label>內容</label><textarea id="gT" rows="5" maxlength="4000"></textarea></div><div id="derr" class="small up"></div>`,
-      [['', '取消'], ['ok', '發送', 'primary']], (bg) => () => (!$('#gNo', bg).value.trim() ? '請輸入會員代號' : !$('#gT', bg).value.trim() ? '請輸入內容' : null));
-    if (x.v !== 'ok') return;
-    try { const r2 = await call('msgMember', { no: $('#gNo', x.box).value.trim().toUpperCase(), channel: $('#gC', x.box).value, subject: $('#gS', x.box).value.trim(), text: $('#gT', x.box).value.trim() });
-      if (!r2.ok) throw new Error(r2.err); toast(sentText(r2.sent), 6000); renderMsg(v); } catch (e) { toast('發送失敗：' + e.message, 6000); }
-  };
+  $('#mNew', v).onclick = async () => { if (await sendMsgDialog()) renderMsg(v); };
+}
+/** 以官方帳號發訊給會員（顯示綁定狀態與本月剩餘額度）；no、subject、text 可預先帶入。回傳是否已送出 */
+async function sendMsgDialog(no, subject, text) {
+  const ms = S.d.members || [];
+  const x = await dialog('發送訊息給會員', `<div class="field"><label>會員代號</label><input id="gNo" list="gNoL" value="${esc(no || '')}"><datalist id="gNoL">${ms.map((m) => `<option value="${esc(m.no)}">${esc(m.name || '')}</option>`).join('')}</datalist></div>
+    <div id="gTg" class="small muted" style="margin:-4px 0 8px"></div>
+    <div class="field"><label>發送管道</label><select id="gC">${Object.entries(CH_N).map(([k, n]) => `<option value="${k}">${n}</option>`).join('')}</select></div>
+    <div class="field"><label>標題</label><input id="gS" maxlength="60" value="${esc(subject || '')}"></div><div class="field"><label>內容</label><textarea id="gT" rows="6" maxlength="4000">${esc(text || '')}</textarea></div><div id="derr" class="small up"></div>`,
+    [['', '取消'], ['ok', '發送', 'primary']], (bg) => {
+      let tk = 0;
+      const look = async () => {
+        const n = $('#gNo', bg).value.trim().toUpperCase(); const el = $('#gTg', bg); const my = ++tk; if (!n) { el.textContent = ''; return; }
+        el.textContent = '查詢綁定狀態…';
+        try { const t = await call('msgTarget', { no: n }); if (my !== tk) return; if (!t.ok) { el.textContent = t.err || ''; return; }
+          el.innerHTML = `${t.line ? '<span class="up" style="color:var(--primary)">✓ 已綁定官方帳號</span>' : '<span class="up">✕ 未綁定官方帳號（或已封鎖）</span>'} · ${t.email ? '有 Email' : '無 Email'}${!t.oa ? ' · <span class="up">轉送站未設定官方帳號權杖</span>' : t.left >= 0 ? ' · 本月剩 ' + t.left + ' 則' : ''}`;
+        } catch (e) { if (my === tk) el.textContent = ''; }
+      };
+      $('#gNo', bg).onchange = look; $('#gNo', bg).onblur = look; if (no) look();
+      return () => (!$('#gNo', bg).value.trim() ? '請輸入會員代號' : !$('#gT', bg).value.trim() ? '請輸入內容' : null);
+    });
+  if (x.v !== 'ok') return false;
+  try { const r2 = await call('msgMember', { no: $('#gNo', x.box).value.trim().toUpperCase(), channel: $('#gC', x.box).value, subject: $('#gS', x.box).value.trim(), text: $('#gT', x.box).value.trim() });
+    if (!r2.ok) throw new Error(r2.err); toast(sentText(r2.sent), 6000); return true; } catch (e) { toast('發送失敗：' + e.message, 6000); return false; }
 }
 
 // ───────── 刪除中帳號：保留期、恢復申請、立即刪除 ─────────
