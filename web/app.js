@@ -62,7 +62,7 @@ async function kv(k) {
 
 // ───────── 會員：政策、授權碼（與 App 相同的簽章驗證） ─────────
 const FEATURES = [
-  ['KLINE', 'K 線分析與進場建議'], ['AI', 'AI 個股體檢'], ['ALERTS', '提醒與進場鈴聲'], ['WALL', '行情牆與熱度圖'],
+  ['KLINE', 'K 線分析與進場評估'], ['AI', 'AI 個股體檢'], ['ALERTS', '提醒與進場鈴聲'], ['WALL', '行情牆與熱度圖'],
   ['DIVTAX', '股息與稅務'], ['ANALYSIS', '投資分析工具'], ['REPORT', '報告'], ['MARKET', '市場與排行'], ['CHAT', '群聊'],
   ['BACKUP', '備份與設定檔'], ['MONITOR', '盤中持股監控'], ['WIDGET', '桌面小工具'], ['CHART', '進階圖表'], ['NEWS', '新聞'],
   ['STYLE', '外觀自訂'], ['STOCKPRO', '個股進階資料'],
@@ -900,7 +900,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"dc2c7d0","at":"2026-11-23 12:35"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"9ca580f","at":"2026-11-23 12:42"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -1624,6 +1624,22 @@ async function importTrades(text) {
 
 // ───────── 對話框 ─────────
 /** buttons: [[值, 文字, 樣式]]；setup(root, close) 可回傳驗證函式（回傳錯誤訊息則不關閉） */
+// ───────── 投資風險聲明：每頁底部提示＋首次使用確認（聲明更新時 RISK_VER 加 1，會請使用者重新確認） ─────────
+const RISK_VER = 1;
+const RISK_TEXT = '本服務僅提供資產管理與分析成果，不構成投資建議；投資有風險，請依自身財務狀況與風險承受度自行判斷，並自負盈虧。';
+function riskFootHtml() { return `<div class="small muted riskfoot" style="margin:24px 0 8px;padding-top:10px;border-top:1px solid var(--line);line-height:1.6">⚠ ${RISK_TEXT}<a href="/web/risk.html" target="_blank" rel="noopener" style="margin-left:4px">投資風險聲明</a></div>`; }
+async function riskAck() {
+  if ((store.get('riskAck', 0) || 0) >= RISK_VER || $('.modal-bg')) return;
+  const html = `<div class="notice" style="line-height:1.7">${RISK_TEXT}</div>
+    <ul class="small text2" style="padding-left:18px;margin:10px 0;line-height:1.7">
+      <li>進場評估、綜合結論、模型試算比例、選股、回測、AI 體檢與組合診斷，都是程式依指標計算的結果，未考量你的個人財務狀況與風險承受度。</li>
+      <li>資料可能延遲或有誤，歷史績效不代表未來表現；融資融券與槓桿商品可能放大虧損。</li>
+      <li>本服務不是證券投資顧問，不提供個別化建議；所有投資決定由你自行判斷並承擔結果。</li>
+    </ul>
+    <label class="row small" style="gap:6px;cursor:pointer;justify-content:flex-start"><input type="checkbox" id="rkOk" style="width:auto"> 我已閱讀並了解<a href="/web/risk.html" target="_blank" rel="noopener">投資風險聲明</a>，願自行承擔投資風險</label><div id="merr" class="small up"></div>`;
+  const v = await dialog('使用前請先閱讀：投資風險聲明', html, [['ok', '我了解並同意', 'primary']], (b) => () => ($('#rkOk', b).checked ? null : '請先勾選確認'));
+  if (v === 'ok') store.set('riskAck', RISK_VER); else setTimeout(riskAck, 400);
+}
 function dialog(title, html, buttons, setup) {
   return new Promise((resolve) => {
     const bg = document.createElement('div'); bg.className = 'modal-bg';
@@ -1776,7 +1792,7 @@ VIEWS.s = {
     const score = items.reduce((a, [, c]) => a + (c === 'up' ? 1 : c === 'down' ? -1 : 0), 0);
     el.innerHTML = `<div class="card"><h2>K 線體檢<span class="r tag ${score > 0 ? 'up' : score < 0 ? 'down' : ''}">${score >= 2 ? '偏多' : score <= -2 ? '偏空' : '中性'}</span></h2>
       <div class="list">${items.map(([t, c, d]) => `<div class="it" style="cursor:default"><div class="l"><div class="t1 ${c}">${t}</div><div class="t2">${d}</div></div></div>`).join('')}</div>
-      <div class="small muted" style="margin-top:6px">依日 K 線即時計算，僅供參考，非投資建議。</div></div>`;
+      <div class="small muted" style="margin-top:6px">依日 K 線即時計算，僅為分析成果，不構成投資建議；投資有風險，請自行評估並自負盈虧。</div></div>`;
   },
   async info() {
     const t = this.tab(); if (t !== 'ov') return this['t_' + t]();
@@ -1803,17 +1819,17 @@ VIEWS.s = {
     $$('[data-edt]').forEach((d) => d.onclick = () => tradeModal(D.trades().find((t) => String(t.id) === d.dataset.edt)));
     this.signals(); this.pro(); aiPanel($('#aib'), sym); this.book(); this.stats(); this.peers(); advCard($('#adv'), sym);
   },
-  /** 進階分析：三關價、股價光譜、分價量、月份季節性（個股進階資料） */
+  /** 進階分析：三關價、價格位階、分價量、月份季節性（個股進階資料） */
   async pro() {
     const el = $('#pro'); if (!el) return;
-    if (!can('STOCKPRO')) { el.innerHTML = lockCard('STOCKPRO', '三關價、股價光譜、分價量、月份漲跌（個股進階資料）'); return; }
-    // 一律用近兩年日 K 計算（不受圖表區間影響：當日、1 個月、週 K 時資料不足或不是日 K，光譜會算不出來）
+    if (!can('STOCKPRO')) { el.innerHTML = lockCard('STOCKPRO', '三關價、價格位階、分價量、月份漲跌（個股進階資料）'); return; }
+    // 一律用近兩年日 K 計算（不受圖表區間影響：當日、1 個月、週 K 時資料不足或不是日 K，位階會算不出來）
     const sym = this.sym; const us = isUs(sym); const etf = D.isEtf(sym); const today = ymd();
     const dk = sym + '2y'; const daily = barCache[dk] || (barCache[dk] = await loadBars(sym, '2y'));
     if (S.route !== 's' || this.sym !== sym || !$('#pro')) return;
     const b = (daily || []).slice();
     { const q = S.q[sym]; if (b.length && q && q.price && !us && twOpen()) { const last = b[b.length - 1]; const cur = { d: today, o: q.open || q.price, h: Math.max(q.high || q.price, q.price), l: Math.min(q.low || q.price, q.price), c: q.price, v: q.volLots || 0 }; if (last.d === today) b[b.length - 1] = cur; else b.push(cur); } }
-    if (b.length < 30) { el.innerHTML = '<div class="card"><h2>進階分析</h2><div class="small muted">日 K 資料不足（上市未滿 30 個交易日），暫無三關價、光譜與分價量。</div></div>'; return; }
+    if (b.length < 30) { el.innerHTML = '<div class="card"><h2>進階分析</h2><div class="small muted">日 K 資料不足（上市未滿 30 個交易日），暫無三關價、位階與分價量。</div></div>'; return; }
     if (this._proKey === sym + b.length + b[b.length - 1].c && $('#proBand')) return;   // 同一份資料不重畫（切換圖表區間時）
     this._proKey = sym + b.length + b[b.length - 1].c;
     const snap = (v) => { if (us) return Math.round(v * 100) / 100; const t = twTick(v, etf); return Math.round(Math.round(v / t) * t * 100) / 100; };
@@ -1831,8 +1847,8 @@ VIEWS.s = {
         <div class="small muted" style="margin-top:6px">橘色為成交最密集的價區（籌碼支撐／壓力），藍色為目前價格所在區間。</div></div>
       <div class="card" id="season"><h2>月份漲跌</h2><div class="muted small">載入中…</div></div>`;
     { const bd = bandInfo(b, price); const ss = bandSeries(b); const pb = $('#proBand');
-      if (bd && ss && pb) { pb.innerHTML = bandCardHtml('股價光譜（近一年）', bd, price, fmtPx, 'proBz'); requestAnimationFrame(() => drawBandZ($('#proBz'), ss, price, bd)); }
-      else if (pb) pb.innerHTML = '<h2>股價光譜（近一年）</h2><div class="small muted">需要至少 60 個交易日的日 K 才能計算光譜（目前 ' + b.length + ' 日）。</div>'; }
+      if (bd && ss && pb) { pb.innerHTML = bandCardHtml('價格位階（近一年）', bd, price, fmtPx, 'proBz'); requestAnimationFrame(() => drawBandZ($('#proBz'), ss, price, bd)); }
+      else if (pb) pb.innerHTML = '<h2>價格位階（近一年）</h2><div class="small muted">需要至少 60 個交易日的日 K 才能計算位階（目前 ' + b.length + ' 日）。</div>'; }
     const k = 'mx' + sym; const m = barCache[k] || (barCache[k] = await fetchYahoo(ysym(sym), 'max', '1mo', 86400));
     if (S.route !== 's' || this.sym !== sym || !$('#season')) return;
     if (!m || !m.timestamp) { $('#season').innerHTML = '<h2>月份漲跌</h2><div class="muted small">無資料</div>'; return; }
@@ -2189,7 +2205,7 @@ VIEWS.screener = {
       <div class="card scroll-x" style="padding:6px 8px"><table class="tbl"><thead><tr><th style="text-align:left">股票</th><th>股價</th><th>漲跌幅</th><th>成交量</th><th>本益比</th><th>殖利率</th><th>淨值比</th><th>營收年增</th><th>投信</th><th>外資</th></tr></thead><tbody>
       ${out.slice(0, 100).map((r) => `<tr class="click" data-go="#/s/${r.s}"><td class="nm" style="text-align:left">${esc(r.n)} <span class="muted small num">${r.s}${r.otc ? ' 櫃' : ''}</span></td><td class="num">${fmtPrice(r.price)}</td><td class="num ${cls(r.chg)}">${fmtPct(r.chg)}</td><td class="num">${r.lots != null ? fmtInt(r.lots) : '—'}</td>
         <td class="num">${r.pe != null ? fmt(r.pe, 1) : '—'}</td><td class="num">${r.y != null ? fmt(r.y, 2) + '%' : '—'}</td><td class="num">${r.pb != null ? fmt(r.pb, 2) : '—'}</td><td class="num ${cls(r.yoy)}">${fmtPct(r.yoy, 1)}</td><td class="num ${cls(r.ti)}">${r.ti != null ? fmtSigned(Math.round(r.ti)) : '—'}</td><td class="num ${cls(r.fi)}">${r.fi != null ? fmtSigned(Math.round(r.fi)) : '—'}</td></tr>`).join('')}</tbody></table></div>
-      <div class="small muted" style="margin-top:6px">資料來源：證交所、櫃買中心每日開放資料（收盤後更新）。只列普通股，不含 ETF、權證與特別股。法人單位為張；選股結果僅供研究參考，非投資建議。</div>`;
+      <div class="small muted" style="margin-top:6px">資料來源：證交所、櫃買中心每日開放資料（收盤後更新）。只列普通股，不含 ETF、權證與特別股。法人單位為張；選股結果僅為篩選成果，不構成投資建議；投資有風險，請自行評估並自負盈虧。</div>`;
     const save = () => { st.p = ''; savePref(); this.fill(); };
     $$('[data-sp]').forEach((x) => x.onclick = () => { const p = SCR_P.concat(mine)[+x.dataset.sp]; S.pref.scr = { c: JSON.parse(JSON.stringify(p[1])), s: p[2], d: p[3], p: p[0] }; savePref(); this.fill(); });
     $('#scrAdd').onchange = (e) => { if (e.target.value) { st.c.push([e.target.value, null, null]); save(); } };
@@ -2449,7 +2465,7 @@ VIEWS.ix = {
       const v = volaOf(b); const kr = klineAnalyze(b);
       if (v) { $('#ixVol').innerHTML = voCardHtml(v, null).replace('<h2>波動', '<h2>波動（日 K）'); drawSeries($('#voChart'), v.series.map((x) => x[0]), [{ v: v.series.map((x) => x[1]), color: '#f59e0b', name: '年化波動', fill: true }], { h: 180, fmt: (x) => x.toFixed(0) + '%', key: 'ixvo' + sym }); }
       if (kr) { $('#ixKa').innerHTML = kaCardHtml(kr, false, sym).replace(/<span class="seg" id="kaTf">[\s\S]*?<\/span><\/span><\/h2>/, '</h2>'); drawChart($('#kaChart'), b.slice(-120), { key: 'ixka' + sym, count: 60, pats: true, mas: [20, 60], H: 280 }); }
-      const bd = bandInfo(b, px0); const bs = bandSeries(b); if (bd && bs) { $('#ixBand').innerHTML = bandCardHtml('一年光譜', bd, px0, (x) => fmt(x, 0), 'ixBz'); drawBandZ($('#ixBz'), bs, px0, bd); }
+      const bd = bandInfo(b, px0); const bs = bandSeries(b); if (bd && bs) { $('#ixBand').innerHTML = bandCardHtml('一年價格位階', bd, px0, (x) => fmt(x, 0), 'ixBz'); drawBandZ($('#ixBz'), bs, px0, bd); }
     } else { $('#ixTech').innerHTML = '<h2>技術面</h2><div class="small muted">資料不足</div>'; }
     // 回撤（週線，全期間）
     if (W.length > 20) { let peak = 0, peakD = '', mdd = 0, mddD = ''; const ds = []; W.forEach(([d, v]) => { if (v > peak) { peak = v; peakD = d; } const x = (v / peak - 1) * 100; ds.push([d, x]); if (x < mdd) { mdd = x; mddD = d; } });
@@ -2689,7 +2705,7 @@ VIEWS.report = {
     if (!m) { $('#dyn').innerHTML = '<div class="card empty">今日報告尚未產生，交易日收盤後再來看看。</div>'; return; }
     $('#dyn').innerHTML = `<div class="grid g2 stack">${m.img ? `<div class="card" style="padding:6px"><img src="/report.jpg?d=${encodeURIComponent(m.date)}" alt="盤後報告" style="width:100%;border-radius:8px;display:block"></div>` : ''}
       <div class="card"><h2>${esc(m.date)}<span class="r"><button class="btn sm" id="rcp">複製文字</button></span></h2><pre style="white-space:pre-wrap;font-family:inherit;line-height:1.7;margin:0">${esc(m.text || '')}</pre></div></div>
-      <div class="small muted" style="margin-top:8px">內容僅供參考，不構成投資建議。</div>`;
+      <div class="small muted" style="margin-top:8px">內容僅為分析成果，不構成投資建議；投資有風險，請自行評估並自負盈虧。</div>`;
     $('#rcp').onclick = () => { navigator.clipboard.writeText(m.text || '').then(() => toast('已複製')); };
   },
   syms() { return []; },
@@ -2808,13 +2824,13 @@ function candlePatterns(b) {
   for (let i = Math.max(5, n - 3); i < n; i++) patAt(b, i, ab).forEach((x) => out.add(x));
   return Array.from(out);
 }
-/** 一年光譜位階（近一年收盤線性迴歸 ±σ） */
+/** 一年價格位階（近一年收盤線性迴歸 ±σ） */
 function bandZone(b, price) {
   const cl = b.slice(-250).map((x) => x.c); const n = cl.length; if (n < 60) return null;
   const mx = (n - 1) / 2, my = cl.reduce((a, v) => a + v, 0) / n; let sxy = 0, sxx = 0; cl.forEach((v, i) => { sxy += (i - mx) * (v - my); sxx += (i - mx) ** 2; });
   const slope = sxy / sxx, a0 = my - slope * mx; const sigma = Math.sqrt(cl.reduce((acc, v, i) => acc + (v - (a0 + slope * i)) ** 2, 0) / n); const t = a0 + slope * (n - 1);
   const i = [-2, -1, 0, 1, 2].map((k) => t + k * sigma).findIndex((v) => price < v);
-  return ['特價', '便宜', '合理偏低', '合理偏高', '昂貴', '極貴'][i < 0 ? 5 : i];
+  return ['低檔', '偏低', '中低', '中高', '偏高', '高檔'][i < 0 ? 5 : i];
 }
 async function stockMetrics(sym) {
   const key = sym + '2y'; const bars0 = barCache[key] || (barCache[key] = await loadBars(sym, '2y'));
@@ -2870,8 +2886,8 @@ function localReport(m) {
   const chipStatus = m.market === 'US' ? '量能觀察' : '法人資料不足';
   const chipSummary = '量比 ' + (m.volumeRatioToMa5 != null ? m.volumeRatioToMa5.toFixed(1) + ' 倍' : '—') + '，' + m.priceVolumeState + (m.market === 'US' ? '（美股無三大法人資料，以量能判讀）。' : '（網頁版以量能判讀，法人近 5 日動向請見手機 App）。');
   const z = m.priceBandZone;
-  const valuation = z == null && m.pe == null ? '資料不足' : z === '特價' || (m.pe != null && m.pe < 10) ? '低估' : z === '便宜' || (m.pe != null && m.pe < 14) ? '合理偏低' : z === '昂貴' || z === '極貴' || (m.pe != null && m.pe > 30) ? '偏高' : '合理';
-  const peer = [m.pe != null && '本益比 ' + m.pe.toFixed(1), m.pb != null && '淨值比 ' + m.pb.toFixed(2), m.yieldPct != null && '殖利率 ' + m.yieldPct.toFixed(2) + '%' + (m.yieldPct >= 5 ? '（具下檔保護）' : ''), z && `一年光譜「${z}」`].filter(Boolean).join('、') || '估值資料不足';
+  const valuation = z == null && m.pe == null ? '資料不足' : z === '低檔' || (m.pe != null && m.pe < 10) ? '低估' : z === '便宜' || (m.pe != null && m.pe < 14) ? '合理偏低' : z === '偏高' || z === '高檔' || (m.pe != null && m.pe > 30) ? '偏高' : '合理';
+  const peer = [m.pe != null && '本益比 ' + m.pe.toFixed(1), m.pb != null && '淨值比 ' + m.pb.toFixed(2), m.yieldPct != null && '殖利率 ' + m.yieldPct.toFixed(2) + '%' + (m.yieldPct >= 5 ? '（具下檔保護）' : ''), z && `一年價格位階「${z}」`].filter(Boolean).join('、') || '估值資料不足';
   const risks = [];
   if (overheat) risks.push('短線乖離過大（' + [bias != null && '乖離 ' + sg(bias) + '%', rsi != null && 'RSI ' + rsi.toFixed(0)].filter(Boolean).join('、') + '），切勿盲目追高');
   if (distribution) risks.push('高檔出現' + topP.join('、') + '且價跌爆量，留意主力調節');
@@ -3638,7 +3654,7 @@ Object.assign(VIEWS.s, {
     t.push([TAX_KINDS[taxKindOf(sym)][0], 'var(--text2)']);
     const p = plans && plans[sym]; const today = ymd();
     el.innerHTML = t.filter(([x], i) => t.findIndex(([y]) => y === x) === i).map(([x, c]) => `<span class="tag" style="color:${c};border-color:${c}">${esc(x)}</span>`).join(' ') +
-      (can('KLINE') ? ` <span class="tag" id="advTag" style="color:var(--muted);border-color:var(--line)">進場建議 計算中…</span>` : '') +
+      (can('KLINE') ? ` <span class="tag" id="advTag" style="color:var(--muted);border-color:var(--line)">進場評估 計算中…</span>` : '') +
       (p && p.ex >= today ? ` <span class="tag" style="color:#f59e0b;border-color:#f59e0b">除息 ${esc(p.ex.slice(5))}${p.lb ? '・最後買進 ' + esc(p.lb.slice(5)) : ''}${p.cash ? '・' + fmt(p.cash, 4) + ' 元' : ''}${p.pay ? '・發放 ' + esc(p.pay.slice(5)) : ''}</span>` : '');
     if (can('KLINE')) entryAdviceCached(sym).then((a) => { if (this.sym === sym) setAdvTag(sym, a); }).catch(() => setAdvTag(sym, null));
   },
@@ -3712,7 +3728,7 @@ Object.assign(VIEWS.s, {
       const cs = weekly ? weeklyBars(await liveBars(sym, '5y')) : b; if (this.sym !== sym || !$('#kaC')) return;
       const r = klineAnalyze(cs); const el = $('#kaC');
       if (!r) { el.innerHTML = '<h2>K 線形態分析</h2><div class="small muted">資料不足</div>'; return; }
-      // 與 App 相同：K 棒策略訊號＋經典型態修正進場建議
+      // 與 App 相同：K 棒策略訊號＋經典型態修正進場評估
       r.etf = etf; r.sigs = weekly ? kbarSignals(cs, etf, tickOf) : sigs;
       try { r.pats = chartPatterns(cs, tickOf); } catch (e) { r.pats = []; }
       r.entry = withPatterns(r, refineEntry(r, r.sigs, etf), r.pats);
@@ -4051,7 +4067,7 @@ Object.assign(VIEWS.s, {
 
 // ───────── 各頁版面自訂：卡片顯示／隱藏、順序、寬度、欄數（存在這個瀏覽器） ─────────
 const LAY_SKIP = new Set(['', 'more', 'diag']);
-const LAY_ID_NAMES = { adv: '綜合進場建議', book: '最佳五檔', sig: 'K 線體檢', kst: '關鍵數據與報酬', aib: 'AI 個股體檢', pro: '進階分析（三關價、光譜、分價量、月份）', peers: '相似股票',
+const LAY_ID_NAMES = { adv: '綜合進場評估', book: '最佳五檔', sig: 'K 線體檢', kst: '關鍵數據與報酬', aib: 'AI 個股體檢', pro: '進階分析（三關價、位階、分價量、月份）', peers: '相似股票',
   dvs: '配息統計', dvtax: '配息稅務', dvup: '即將除權息', dvlist: '配息紀錄', dvsplit: '股票分割', news: '新聞', gnews: '相關新聞', dd: '加權指數回撤', season: '月份漲跌', el: 'ETF 清單' };
 const LAY_PAGE_NAMES = { watch: '行情', hold: '持股', trades: '交易', div: '股息', analysis: '分析', compare: '比較', calendar: '行事曆', sim: '模擬交易', tools: '工具', alerts: '提醒',
   market: '市場', cash: '現金與帳戶', member: '會員', settings: '設定', s: '個股', us: '美股市場', etf: 'ETF 市場', index: '指數與匯率', rank: '排行', limits: '漲跌停', report: '盤後報告', news: '新聞', crash: '歷次大跌' };
@@ -4298,7 +4314,7 @@ if ('serviceWorker' in navigator && !/[?&]mock\b/.test(location.search)) {
   navigator.serviceWorker.register('/web/sw.js', { scope: '/web' }).catch(() => navigator.serviceWorker.register('/web/sw.js').catch(() => {}));
 }
 
-// ───────── 綜合進場建議（多指標同一把尺 −2～+2 加權彙總；與 App 同樣的等級、信心度、先投比例規則） ─────────
+// ───────── 綜合進場評估（多指標同一把尺 −2～+2 加權彙總；與 App 同樣的等級、信心度、先投比例規則） ─────────
 async function entryAdvice(sym) {
   const key = sym + '2y'; const b0 = barCache[key] || (barCache[key] = await loadBars(sym, '2y')); if (!b0 || b0.length < 60) return null;
   const q = S.q[sym] || {}; const b = b0.slice(); const today = ymd();
@@ -4317,8 +4333,8 @@ async function entryAdvice(sym) {
   if (m) { const pv = m.priceVolumeState; add('量價', '技術', { 價漲量增: 0.6, 價漲爆量: 0.4, 價漲量縮: -0.3, 價跌量縮: 0.2, 價跌量增: -0.5, 價跌爆量: -1.2 }[pv] ?? 0, 0.7, pv + (m.volumeRatioToMa5 != null ? '（量比 ' + m.volumeRatioToMa5.toFixed(1) + '）' : '')); }
   if (m && m.candlestickPatterns.length) { const bot = m.candlestickPatterns.filter((x) => PAT_BOTTOM.includes(x)), tp = m.candlestickPatterns.filter((x) => PAT_TOP.includes(x));
     add('K 棒型態', '技術', (bot.length ? (m.patternNearMa ? 1.2 : 0.6) : 0) - (tp.length ? ((m.bias20Pct || 0) > 5 ? 1.2 : 0.6) : 0), 0.8, m.candlestickPatterns.join('、') + (bot.length && m.patternNearMa ? '，止跌位於 ' + m.patternNearMa : '')); }
-  const zones = ['特價', '便宜', '合理偏低', '合理偏高', '昂貴', '極貴']; const zone = m && m.priceBandZone; const zi = zones.indexOf(zone);
-  if (zi >= 0) add('一年光譜', '位置', [1.5, 1, 0.4, -0.2, -0.8, -1.5][zi], 1.0, '位於「' + zone + '」區');
+  const zones = ['低檔', '偏低', '中低', '中高', '偏高', '高檔']; const zone = m && m.priceBandZone; const zi = zones.indexOf(zone);
+  if (zi >= 0) add('一年價格位階', '位置', [1.5, 1, 0.4, -0.2, -0.8, -1.5][zi], 1.0, '位於「' + zone + '」區');
   const y1 = b.slice(-250); const h52 = Math.max(...y1.map((x) => x.h)), l52 = Math.min(...y1.map((x) => x.l)); const pos = h52 > l52 ? (px0 - l52) / (h52 - l52) : 0.5;
   add('52 週位置', '位置', pos < 0.1 ? (trend < 0 ? 0.1 : 0.6) : pos > 0.95 ? (trend > 0 ? 0.2 : -0.4) : 0, 0.5, '位於一年區間 ' + (pos * 100).toFixed(0) + '%');
   const base = b[b.length - 1].d === today && b.length > 1 ? b[b.length - 2] : b[b.length - 1]; const rg = base.h - base.l; const upK = base.l + rg * 1.382, dnK = base.h - rg * 1.382;
@@ -4339,14 +4355,14 @@ async function entryAdvice(sym) {
   const agree = decided.length ? decided.filter((s) => Math.sign(s.score) === Math.sign(total)).reduce((a, s) => a + s.share, 0) / decided.reduce((a, s) => a + s.share, 0) : 0.5;
   const coverage = Math.min(1, src.length / (us ? 9 : 14)); const confidence = Math.max(5, Math.min(98, Math.round((agree * 0.75 + coverage * 0.25) * 100)));
   const guards = []; let level = total >= 0.85 && agree >= 0.6 ? 2 : total >= 0.3 ? 1 : total > -0.3 ? 0 : total > -0.85 ? -1 : -2;
-  if (level >= 1 && zi === 5) { level = Math.min(level, 0); guards.push('股價位於光譜「極貴」區，不建議追高'); }
+  if (level >= 1 && zi === 5) { level = Math.min(level, 0); guards.push('股價位於價格位階「高檔」，位階偏高'); }
   if (level >= 1 && regime >= 1.6 && trend < 0) { level = 0; guards.push('波動急遽放大且趨勢向下，先觀望'); }
-  if (level === -2 && zi >= 0 && zi <= 1) { level = -1; guards.push('價格已在光譜便宜區，避免過度悲觀'); }
+  if (level === -2 && zi >= 0 && zi <= 1) { level = -1; guards.push('價格已在價格位階偏低區，避免過度悲觀'); }
   if (coverage < 0.6 && level === 2) { level = 1; guards.push('部分資料尚未取得，結論保守一級'); }
   const bullRev = m && m.candlestickPatterns.some((x) => PAT_BOTTOM.includes(x));
   const tech = src.filter((s) => s.group === '技術').reduce((a, s) => a + s.score * s.share, 0); const valu = src.filter((s) => s.group === '估值' || s.group === '位置').reduce((a, s) => a + s.score * s.share, 0);
-  const label = level === 2 ? '建議進場' : level === 1 ? '可分批進場' : level === 0 ? (tech >= 0.05 && valu < 0 ? '等回測再進' : bullRev && total < 0 ? '觀察止跌' : '觀望') : level === -1 ? (bullRev ? '等待止跌確認' : '暫不進場') : '不宜進場';
-  const tip = { 2: '已持有：可續抱，停利上移', 1: '已持有：續抱', 0: '已持有：續抱觀察', '-1': '已持有：暫不加碼', '-2': '已持有：建議減碼，嚴設停損' }[level];
+  const label = level === 2 ? '訊號偏多' : level === 1 ? '訊號略偏多' : level === 0 ? (tech >= 0.05 && valu < 0 ? '待回測' : bullRev && total < 0 ? '觀察止跌' : '觀望') : level === -1 ? (bullRev ? '等待止跌確認' : '訊號偏弱') : '訊號轉弱';
+  const tip = { 2: '已持有：持有者可留意停利', 1: '已持有：續抱', 0: '已持有：續抱觀察', '-1': '已持有：暫不加碼', '-2': '已持有：風險升高，留意停損' }[level];
   const baseR = { 2: 80, 1: 50, 0: 20, '-1': 5, '-2': 0 }[level]; const volAdj = Math.max(0.6, Math.min(1, 1 / regime));
   const ratio = Math.round(baseR * (0.6 + 0.4 * confidence / 100) * volAdj / 5) * 5;
   const sorted = src.slice().sort((a, b2) => b2.score * b2.share - a.score * a.share);
@@ -4355,35 +4371,35 @@ async function entryAdvice(sym) {
     stop: Math.min(px0 - atr14, m20 && m20 < px0 ? Math.max(m20 - atr14 * 0.5, px0 - atr14 * 3) : px0 - atr14 * 2) };
 }
 const ADV_COL = { 2: '#dc2626', 1: '#f97316', 0: '#64748b', '-1': '#16a34a', '-2': '#15803d' };
-/** 進場建議快取（個股頁標籤列與綜合進場建議卡共用，2 分鐘內不重算；同時只算一次） */
+/** 進場評估快取（個股頁標籤列與綜合進場評估卡共用，2 分鐘內不重算；同時只算一次） */
 const ADV_CACHE = {};
 function entryAdviceCached(sym, maxAge = 120000) {
   const c = ADV_CACHE[sym]; if (c && Date.now() - c.at < maxAge) return c.p;
   const p = entryAdvice(sym).catch(() => null); ADV_CACHE[sym] = { at: Date.now(), p }; return p;
 }
 function advColor(level) { return S.pref.color === 'us' ? { 2: '#16a34a', 1: '#22c55e', 0: '#64748b', '-1': '#f97316', '-2': '#dc2626' }[level] : ADV_COL[level]; }
-/** 個股標籤列的進場建議標籤：建議＋先投比例（已持有顯示加減碼建議）、分數與信心度；點一下捲到綜合進場建議卡 */
+/** 個股標籤列的進場評估標籤：建議＋先投比例（已持有顯示加減碼建議）、分數與信心度；點一下捲到綜合進場評估卡 */
 function setAdvTag(sym, a) {
   const t = $('#advTag'); if (!t) return;
-  if (!a) { t.textContent = '進場建議 資料不足'; return; }
+  if (!a) { t.textContent = '進場評估 資料不足'; return; }
   const col = advColor(a.level); const held = holdings().some((x) => x.symbol === sym);
   const px = (S.q[sym] || {}).price;
   t.style.color = col; t.style.borderColor = col; t.style.fontWeight = '700'; t.style.cursor = 'pointer';
-  t.innerHTML = `${a.level >= 1 ? '▲' : a.level <= -1 ? '▼' : '●'} ${esc(a.label)}${held ? '・' + esc(a.tip.replace('已持有：', '')) : '・先投 ' + a.ratio + '%'} <span style="font-weight:400;opacity:.8">${a.score} 分・信心 ${a.confidence}%</span>`;
-  t.title = `綜合進場建議：${a.label}（綜合分數 ${a.score}／100、信心度 ${a.confidence}%、${a.src.length} 項指標）` + (px ? `\n參考停損 ${fmtPrice(a.stop)}（${fmtPct((a.stop / px - 1) * 100, 1)}）` : '') +
+  t.innerHTML = `${a.level >= 1 ? '▲' : a.level <= -1 ? '▼' : '●'} ${esc(a.label)}${held ? '・' + esc(a.tip.replace('已持有：', '')) : '・試算 ' + a.ratio + '%'} <span style="font-weight:400;opacity:.8">${a.score} 分・信心 ${a.confidence}%</span>`;
+  t.title = `綜合進場評估：${a.label}（綜合分數 ${a.score}／100、信心度 ${a.confidence}%、${a.src.length} 項指標）` + (px ? `\n參考停損 ${fmtPrice(a.stop)}（${fmtPct((a.stop / px - 1) * 100, 1)}）` : '') +
     (a.pros.length ? '\n利多：' + a.pros.map((x) => x.name).join('、') : '') + (a.cons.length ? '\n利空：' + a.cons.map((x) => x.name).join('、') : '') + (a.guards.length ? '\n' + a.guards.join('；') : '') + '\n點一下看完整分析（僅供參考）';
   t.onclick = () => { const el = $('#adv'); if (el && el.firstElementChild) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); else { const b = $('[data-st="ov"]'); if (b) { b.click(); setTimeout(() => { const e2 = $('#adv'); if (e2) e2.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 900); } } };
 }
 async function advCard(el, sym) {
   if (!el) return; if (!can('KLINE')) { el.innerHTML = lockCard('KLINE'); return; }
-  el.innerHTML = '<div class="card"><h2>綜合進場建議</h2><div class="small muted">計算中…</div></div>';
+  el.innerHTML = '<div class="card"><h2>綜合進場評估</h2><div class="small muted">計算中…</div></div>';
   const a = await entryAdviceCached(sym); if (!el.isConnected) return; setAdvTag(sym, a);
-  if (!a) { el.innerHTML = '<div class="card"><h2>綜合進場建議</h2><div class="small muted">資料不足，無法計算。</div></div>'; return; }
+  if (!a) { el.innerHTML = '<div class="card"><h2>綜合進場評估</h2><div class="small muted">資料不足，無法計算。</div></div>'; return; }
   const col = advColor(a.level);
   const h = holdings().find((x) => x.symbol === sym);
-  el.innerHTML = `<div class="card"><h2>綜合進場建議<span class="r small muted">${a.src.length} 項指標 · 信心度 ${a.confidence}%</span></h2>
+  el.innerHTML = `<div class="card"><h2>綜合進場評估<span class="r small muted">${a.src.length} 項指標 · 信心度 ${a.confidence}%</span></h2>
     <div class="row wrap" style="gap:16px;align-items:center">
-      <div style="text-align:center;min-width:110px"><div style="font-size:22px;font-weight:800;color:${col}">${esc(a.label)}</div><div class="small muted" style="margin-top:2px">${h ? esc(a.tip) : '建議先投入'}</div>${h ? '' : `<div class="num" style="font-size:28px;font-weight:800;color:${col}">${a.ratio}%</div>`}</div>
+      <div style="text-align:center;min-width:110px"><div style="font-size:22px;font-weight:800;color:${col}">${esc(a.label)}</div><div class="small muted" style="margin-top:2px">${h ? esc(a.tip) : '模型試算'}</div>${h ? '' : `<div class="num" style="font-size:28px;font-weight:800;color:${col}">${a.ratio}%</div>`}</div>
       <div style="flex:1;min-width:200px"><div style="position:relative;height:10px;border-radius:5px;background:linear-gradient(90deg,${S.pref.color === 'us' ? '#dc2626,#f97316,#94a3b8,#22c55e,#16a34a' : '#15803d,#22c55e,#94a3b8,#f97316,#dc2626'})"><i style="position:absolute;top:-4px;left:calc(${a.score}% - 2px);width:4px;height:18px;border-radius:2px;background:var(--text)"></i></div>
         <div class="row between small muted" style="margin-top:4px"><span>偏空</span><span>綜合分數 ${a.score}</span><span>偏多</span></div>
         <div class="small text2" style="margin-top:6px">參考停損 ${fmtPrice(a.stop)}（約 ${fmtPct((a.stop / ((S.q[sym] || {}).price || a.stop) - 1) * 100, 1)}）　日均波動 ${a.atrPct.toFixed(1)}%${h ? '　已持有可參考加減碼；未持有時建議先投 ' + a.ratio + '%' : ''}</div></div></div>
@@ -4392,7 +4408,7 @@ async function advCard(el, sym) {
     ${a.guards.length ? `<div class="notice" style="margin-top:10px">${a.guards.map(esc).join('；')}</div>` : ''}
     <details style="margin-top:8px"><summary class="small muted" style="cursor:pointer">全部指標與權重</summary><table class="tbl" style="margin-top:6px"><thead><tr><th>指標</th><th>類別</th><th>分數</th><th>影響</th><th>說明</th></tr></thead><tbody>
       ${a.src.map((s) => `<tr><td>${esc(s.name)}</td><td class="small">${esc(s.group)}</td><td class="num ${cls(s.score)}">${s.score > 0 ? '+' : ''}${s.score.toFixed(1)}</td><td class="num">${(s.share * 100).toFixed(0)}%</td><td class="small text2" style="text-align:left">${s.note}</td></tr>`).join('')}</tbody></table></details>
-    <div class="small muted" style="margin-top:6px">每項指標換算成 −2～+2 再加權（單項上限 18%），信心度看各指標方向是否一致；僅供參考，非投資建議。</div></div>`;
+    <div class="small muted" style="margin-top:6px">每項指標換算成 −2～+2 再加權（單項上限 18%），信心度看各指標方向是否一致；僅為分析成果，不構成投資建議；投資有風險，請自行評估並自負盈虧。</div></div>`;
 }
 
 // ───────── 指令面板（Ctrl＋K）：跳頁、找個股、常用動作 ─────────
@@ -4553,7 +4569,7 @@ VIEWS.member = {
     $('#lo').onclick = async () => { let ck = false;
       if ((await dialog('登出', '登出後這個瀏覽器的投資資料會清除（雲端資料保留），重新登入即可恢復。<label class="row small" style="gap:6px;margin-top:10px;cursor:pointer;justify-content:flex-start"><input type="checkbox" id="loK" style="width:auto"> 同時清除這個瀏覽器保存的 API 金鑰（共用電腦建議勾選）</label>',
         [['', '取消'], ['ok', '登出', 'primary']], (b) => () => { ck = $('#loK', b).checked; return null; })) === 'ok') logout(undefined, ck); };
-    $('#pfE').closest('.card').insertAdjacentHTML('beforeend', '<div class="row" style="margin-top:12px;gap:16px"><a href="/web/privacy.html" target="_blank" rel="noopener" class="small">隱私權政策</a><a href="/web/terms.html" target="_blank" rel="noopener" class="small">使用者條款</a><a href="/web/notice.html" target="_blank" rel="noopener" class="small">資料來源與授權</a><a href="javascript:void 0" id="delAcc" class="small muted">刪除帳號</a></div>');
+    $('#pfE').closest('.card').insertAdjacentHTML('beforeend', '<div class="row" style="margin-top:12px;gap:16px"><a href="/web/risk.html" target="_blank" rel="noopener" class="small">投資風險聲明</a><a href="/web/privacy.html" target="_blank" rel="noopener" class="small">隱私權政策</a><a href="/web/terms.html" target="_blank" rel="noopener" class="small">使用者條款</a><a href="/web/notice.html" target="_blank" rel="noopener" class="small">資料來源與授權</a><a href="javascript:void 0" id="delAcc" class="small muted">刪除帳號</a></div>');
     $('#delAcc').onclick = () => deleteAccountModal(me);
     $('#syn').onclick = async () => { await syncNow(); this.fill(); };
     $('#dl').onclick = async () => { if ((await dialog('從雲端重新下載', '以雲端資料取代這個網頁的資料？（尚未上傳的變更會遺失）', [['', '取消'], ['ok', '下載', 'primary']])) !== 'ok') return; S.dirty = false; await pull(true); toast('已下載雲端資料'); route(); };
@@ -5419,14 +5435,14 @@ function kaEntry(dir, plan, x, latest, last) {
   const rr = plan ? plan.rr : 0; const f = fmtPx; const r2 = (v) => v.toFixed(2);
   const bullRev = latest.some((h) => h.i === last && KP[h.k][2] > 0 && (KP[h.k][1] === '反轉' || h.k === 'RT'));
   const bearRev = latest.some((h) => h.i === last && KP[h.k][2] < 0 && (KP[h.k][1] === '反轉' || h.k === 'BT'));
-  if (dir === 2 && rr >= 1.5 && x.vol !== 'DT' && x.loc !== 'R') return { label: '建議進場', level: 2, reason: '多方訊號強、盈虧比 1:' + r2(rr) + '，可依布局區間進場，跌破 ' + f(plan.stop) + ' 停損。', tip: '可續抱，停利上移' };
-  if (dir > 0 && rr >= 1.2 && x.loc !== 'R' && x.vol !== 'DT') return { label: '可分批進場', level: 1, reason: '偏多、盈虧比 1:' + r2(rr) + '，先進 1/3～1/2，站穩形態高點再加碼。', tip: '續抱' };
-  if (dir > 0) return { label: '等回測再進', level: 0, reason: x.vol === 'DT' ? '價漲量縮，追價風險高，等回測支撐 ' + f(x.support) + ' 附近量縮不破再進。' : x.loc === 'R' ? '接近壓力 ' + f(x.resistance) + '，等突破站穩或回測再進。' : '方向偏多但盈虧比僅 1:' + r2(rr) + '，等拉回到 ' + f(plan ? plan.e0 : x.ma20) + ' 附近再進。', tip: '續抱' };
+  if (dir === 2 && rr >= 1.5 && x.vol !== 'DT' && x.loc !== 'R') return { label: '訊號偏多', level: 2, reason: '多方訊號強、盈虧比 1:' + r2(rr) + '，可依布局區間進場，跌破 ' + f(plan.stop) + ' 停損。', tip: '持有者可留意停利' };
+  if (dir > 0 && rr >= 1.2 && x.loc !== 'R' && x.vol !== 'DT') return { label: '訊號略偏多', level: 1, reason: '偏多、盈虧比 1:' + r2(rr) + '，先進 1/3～1/2，站穩形態高點再加碼。', tip: '續抱' };
+  if (dir > 0) return { label: '待回測', level: 0, reason: x.vol === 'DT' ? '價漲量縮，追價風險高，等回測支撐 ' + f(x.support) + ' 附近量縮不破再進。' : x.loc === 'R' ? '接近壓力 ' + f(x.resistance) + '，等突破站穩或回測再進。' : '方向偏多但盈虧比僅 1:' + r2(rr) + '，等拉回到 ' + f(plan ? plan.e0 : x.ma20) + ' 附近再進。', tip: '續抱' };
   if (dir === 0 && bullRev) return { label: '觀察止跌', level: 0, reason: '出現止跌形態但力道未確認，等下一根收紅並站上 ' + f(x.ma20) + '（MA20）再考慮。', tip: '續抱觀察' };
   if (dir === 0) return { label: '觀望', level: 0, reason: '多空不明，等帶量突破 ' + f(x.resistance) + ' 或回測 ' + f(x.support) + ' 有撐再決定。', tip: '續抱觀察' };
-  if (dir < 0 && bullRev) return { label: '等待止跌確認', level: -1, reason: '空頭格局中出現止跌形態，尚未扭轉，等站回 MA20 ' + f(x.ma20) + ' 再評估。', tip: '暫不加碼' };
-  if (dir === -1) return { label: '暫不進場', level: -1, reason: '偏空' + (bearRev ? '，最新出現轉弱形態' : '') + '，等止跌訊號出現再評估。', tip: '反彈減碼、跌破 ' + f(x.support) + ' 防守' };
-  return { label: '不宜進場', level: -2, reason: '強烈偏空' + (x.loc === 'B' ? '且跌破支撐' : '') + '，避免接刀。', tip: '建議減碼，嚴設停損' };
+  if (dir < 0 && bullRev) return { label: '等待止跌確認', level: -1, reason: '空頭格局中出現止跌形態，尚未扭轉，等站回 MA20 ' + f(x.ma20) + ' 再評估。', tip: '留意風險' };
+  if (dir === -1) return { label: '訊號偏弱', level: -1, reason: '偏空' + (bearRev ? '，最新出現轉弱形態' : '') + '，等止跌訊號出現再評估。', tip: '反彈減碼、跌破 ' + f(x.support) + ' 防守' };
+  return { label: '訊號轉弱', level: -2, reason: '強烈偏空' + (x.loc === 'B' ? '且跌破支撐' : '') + '，避免接刀。', tip: '風險升高，留意停損' };
 }
 const KVOL = { C: '帶量（≥ 1.5 倍均量）', D: '量縮（≤ 0.6 倍均量）', DT: '量價背離：價創高、量縮', DB: '量價背離：價創低、量縮', N: '量能正常' };
 const KLOC = { S: '接近支撐', R: '接近壓力', M: '區間中段', A: '突破壓力上方', B: '跌破支撐下方' };
@@ -5553,7 +5569,7 @@ function kbarSignals(cs, etf, tickOf) {
   const seen = new Set();
   return out.filter(valid).filter((s) => { const k = s.st + s.bull; if (seen.has(k)) return false; seen.add(k); return true; }).sort((a, b) => a.age - b.age || b.conf - a.conf);
 }
-/** 以 K 棒策略訊號修正進場建議（與 App refineEntry 相同） */
+/** 以 K 棒策略訊號修正進場評估（與 App refineEntry 相同） */
 function refineEntry(r, sigs, etf) {
   const e = r.entry; const f = fmtPx;
   const now = sigs.filter((s) => s.age <= 1 && s.status !== 'WAITING' && s.conf >= 70);
@@ -5562,11 +5578,11 @@ function refineEntry(r, sigs, etf) {
   const tag = (s) => '【' + KS_ST[s.st] + '｜' + KS_TM[s.tm][0] + '】' + s.desc;
   if (bull && (!bear || bull.conf > bear.conf + 5)) {
     const lv = r.dir === -2 && !(etf && bull.st === 'PANIC') ? Math.max(e.level, -1) : e.level >= 1 && bull.conf >= 80 && r.dir > 0 ? 2 : Math.min(2, Math.max(e.level + 1, etf ? 1 : 0));
-    return { label: { 2: '建議進場', 1: '可分批進場', 0: '等回測再進' }[lv] || '等待止跌確認', level: lv, reason: tag(bull) + ' 停損 ' + f(bull.sl) + '。' + e.reason, tip: lv >= 1 ? '續抱，可依訊號加碼' : e.tip };
+    return { label: { 2: '訊號偏多', 1: '訊號略偏多', 0: '待回測' }[lv] || '等待止跌確認', level: lv, reason: tag(bull) + ' 停損 ' + f(bull.sl) + '。' + e.reason, tip: lv >= 1 ? '續抱，可依訊號加碼' : e.tip };
   }
-  if (bear) { const lv = Math.min(e.level, r.dir > 0 ? 0 : -1); return { label: { 0: '觀望', '-1': '暫不進場' }[lv] || '不宜進場', level: lv, reason: tag(bear) + ' ' + e.reason, tip: '減碼，跌破 ' + f(Math.min(bear.sl, r.x.support)) + ' 防守' }; }
+  if (bear) { const lv = Math.min(e.level, r.dir > 0 ? 0 : -1); return { label: { 0: '觀望', '-1': '訊號偏弱' }[lv] || '訊號轉弱', level: lv, reason: tag(bear) + ' ' + e.reason, tip: '減碼，跌破 ' + f(Math.min(bear.sl, r.x.support)) + ' 防守' }; }
   if (etf && e.level <= -2) { const rsi = rsiAt(r.cs.map((x) => x.c)); if (rsi < 32) return { label: '等待止跌確認', level: -1, reason: 'ETF 已超賣（RSI ' + rsi.toFixed(0) + '），不追殺；等止跌 K 棒或缺口回補再分批。' + e.reason, tip: '暫不加碼，勿殺低' }; }
-  if (wait && e.level >= -1 && e.level <= 1) return { label: e.level >= 1 ? e.label : wait.tm === 'BRK' ? '等突破觸發' : '等回測再進', level: Math.max(e.level, 0), reason: tag(wait) + ' ' + e.reason, tip: e.tip };
+  if (wait && e.level >= -1 && e.level <= 1) return { label: e.level >= 1 ? e.label : wait.tm === 'BRK' ? '等突破觸發' : '待回測', level: Math.max(e.level, 0), reason: tag(wait) + ' ' + e.reason, tip: e.tip };
   return e;
 }
 /** 波動：近 20 日年化波動、相對一年中位數的倍數、ATR(14)／股價 */
@@ -5583,20 +5599,20 @@ function volaOf(cs) {
   const series = []; for (let k = Math.max(20, r.length - 250); k <= r.length; k++) series.push([cs[k].d, sd(r.slice(k - 20, k)) * Math.sqrt(250) * 100]);
   return { atrPct: atr, annual: cur * 100, regime, label, med: med * 100, series };
 }
-/** 一年光譜：近一年收盤線性迴歸 ±1σ／±2σ，回傳區位 0（特價）～5（極貴） */
+/** 一年價格位階：近一年收盤線性迴歸 ±1σ／±2σ，回傳區位 0（低檔）～5（高檔） */
 function bandInfo(b, price) {
   const cl = b.slice(-250).map((x) => x.c); const n = cl.length; if (n < 60) return null;
   const mx = (n - 1) / 2, my = cl.reduce((a, v) => a + v, 0) / n; let sxy = 0, sxx = 0; cl.forEach((v, i) => { sxy += (i - mx) * (v - my); sxx += (i - mx) ** 2; });
   const slope = sxy / sxx, a0 = my - slope * mx; const sigma = Math.sqrt(cl.reduce((acc, v, i) => acc + (v - (a0 + slope * i)) ** 2, 0) / n); const t = a0 + slope * (n - 1);
   const lines = [-2, -1, 0, 1, 2].map((k) => t + k * sigma); const i = lines.findIndex((v) => price < v); const zone = i < 0 ? 5 : i;
-  return { zone, name: ['特價', '便宜', '合理偏低', '合理偏高', '昂貴', '極貴'][zone], trend: t, lines, z: sigma > 0 ? (price - t) / sigma : 0 };
+  return { zone, name: ['低檔', '偏低', '中低', '中高', '偏高', '高檔'][zone], trend: t, lines, z: sigma > 0 ? (price - t) / sigma : 0 };
 }
 /**
- * 光譜（網頁版自有樣式）：「趨勢偏離走勢」＋「價格階梯」。
+ * 位階（網頁版自有樣式）：「趨勢偏離走勢」＋「價格階梯」。
  * 偏離走勢：近一年每日收盤相對迴歸趨勢的偏離（σ），以單線呈現，±1σ 為常態區、±2σ 為極端區；
  * 價格階梯：由高到低列出各區的價格門檻，標出現價所在的一階與距離上下一階的漲跌幅。
  */
-const BZ_N = ['特價', '便宜', '合理偏低', '合理偏高', '昂貴', '極貴'];
+const BZ_N = ['低檔', '偏低', '中低', '中高', '偏高', '高檔'];
 function bandSeries(b) {
   const bb = b.slice(-250); const cl = bb.map((x) => x.c); const n = cl.length; if (n < 60) return null;
   const mx = (n - 1) / 2, my = cl.reduce((a, v) => a + v, 0) / n; let sxy = 0, sxx = 0; cl.forEach((v, i) => { sxy += (i - mx) * (v - my); sxx += (i - mx) ** 2; });
@@ -5682,9 +5698,9 @@ async function investAnalysis(sym, bars) {
   // 風險
   if (c.length >= 30) { const r = []; for (let i = 1; i < c.length; i++) r.push(Math.log(c[i] / c[i - 1])); const m = r.reduce((a, v) => a + v, 0) / r.length; const vol = Math.sqrt(r.reduce((a, v) => a + (v - m) ** 2, 0) / (r.length - 1)) * Math.sqrt(252) * 100;
     add('風險', vol < 15 ? 80 : vol < 25 ? 65 : vol < 35 ? 50 : vol < 50 ? 35 : 25, 5, '年化波動 ' + vol.toFixed(1) + '%'); }
-  // 股價光譜
+  // 價格位階
   const band = bandInfo(bars, price);
-  if (band) add('股價光譜', [90, 75, 60, 45, 25, 10][band.zone], 20, `一年光譜「${band.name}」區，偏離趨勢 ${(band.z >= 0 ? '+' : '') + band.z.toFixed(1)}σ（便宜價 ${f2(band.lines[1])}、趨勢價 ${f2(band.trend)}、昂貴價 ${f2(band.lines[3])}）`);
+  if (band) add('價格位階', [90, 75, 60, 45, 25, 10][band.zone], 20, `一年價格位階「${band.name}」區，偏離趨勢 ${(band.z >= 0 ? '+' : '') + band.z.toFixed(1)}σ（便宜價 ${f2(band.lines[1])}、趨勢價 ${f2(band.trend)}、偏高價 ${f2(band.lines[3])}）`);
   // 分析師（個股）或 ETF 指標
   let analyst = null, etfInfo = null;
   if (!etf) { try { const fd = (await ys(sym, 'financialData')).financialData || {}; const raw0 = (k) => { const v = fd[k] && fd[k].raw; return v > 0 ? v : null; };
@@ -5714,14 +5730,14 @@ async function investAnalysis(sym, bars) {
   const W = F.reduce((a, x) => a + x.weight, 0); const score = Math.round(F.reduce((a, x) => a + x.score * x.weight, 0) / W);
   const [label, advice] = score >= 70 ? ['偏多', '多數指標正向，可考慮分批布局；仍需設定停損與控制部位'] : score >= 58 ? ['中性偏多', '趨勢或基本面略佔優勢，適合拉回分批或續抱'] : score >= 45 ? ['中性', '多空訊號互見，建議觀望或維持原部位'] : score >= 33 ? ['中性偏空', '弱勢指標較多，新資金宜保守，持有者留意支撐'] : ['偏空', '趨勢與籌碼偏弱，宜降低部位或等待轉強訊號'];
   const ratioOf = (s) => (s >= 70 ? 80 : s >= 58 ? 60 : s >= 45 ? 40 : s >= 33 ? 25 : 10);
-  const where = band ? `股價位於一年光譜「${band.name}」區（趨勢價 ${f2(band.trend)}）` : '無股價光譜資料'; const z = band ? band.zone : null;
-  const vd = z == null ? (score >= 58 ? ['可分批買進', `指數 ${score} 偏多；${where}`, ratioOf(score), 1] : score >= 45 ? ['觀望', `指數 ${score} 中性；${where}`, ratioOf(score), 0] : ['暫不建議買進', `指數 ${score} 偏弱；${where}`, 10, -1])
-    : z <= 1 && score >= 45 ? ['推薦買進（分批）', `價格便宜且指標不弱：${where}、指數 ${score}`, score >= 58 ? 80 : 60, 1]
-    : z <= 1 ? ['便宜但偏弱：小量分批', `${where}，但指數 ${score} 趨勢與籌碼偏弱，宜小量分批或等止跌訊號`, 25, 0]
-    : z <= 3 && score >= 58 ? ['推薦買進（分批）', `價格合理、指數 ${score} 偏多；${where}`, 60, 1]
-    : z <= 3 && score >= 45 ? ['觀望／定期定額', `價格合理、指數 ${score} 中性；${where}`, 30, 0]
-    : z <= 3 ? ['暫不建議買進', `價格不算便宜、指數 ${score} 偏弱；${where}`, 10, -1]
-    : score >= 70 ? ['可續抱，新資金等拉回', `${where}，偏貴但指數 ${score} 強勢`, 10, 0] : ['不建議追高', `${where}，價格偏貴且指數 ${score} 不夠強`, 0, -1];
+  const where = band ? `股價位於一年價格位階「${band.name}」區（趨勢價 ${f2(band.trend)}）` : '無價格位階資料'; const z = band ? band.zone : null;
+  const vd = z == null ? (score >= 58 ? ['指標偏多', `指數 ${score} 偏多；${where}`, ratioOf(score), 1] : score >= 45 ? ['中性觀察', `指數 ${score} 中性；${where}`, ratioOf(score), 0] : ['指標偏弱', `指數 ${score} 偏弱；${where}`, 10, -1])
+    : z <= 1 && score >= 45 ? ['價格偏低・指標偏多', `價格便宜且指標不弱：${where}、指數 ${score}`, score >= 58 ? 80 : 60, 1]
+    : z <= 1 ? ['價格偏低・指標偏弱', `${where}，但指數 ${score} 趨勢與籌碼偏弱，可留意是否出現止跌訊號`, 25, 0]
+    : z <= 3 && score >= 58 ? ['價格合理・指標偏多', `價格合理、指數 ${score} 偏多；${where}`, 60, 1]
+    : z <= 3 && score >= 45 ? ['價格合理・指標中性', `價格合理、指數 ${score} 中性；${where}`, 30, 0]
+    : z <= 3 ? ['指標偏弱', `價格不算便宜、指數 ${score} 偏弱；${where}`, 10, -1]
+    : score >= 70 ? ['價格偏高・指標強勢', `${where}，偏貴但指數 ${score} 強勢`, 10, 0] : ['價格偏高・指標不強', `${where}，價格偏貴且指數 ${score} 不夠強`, 0, -1];
   return { score, label, advice, factors: F, analyst, etf: etfInfo, band, verdict: { title: vd[0], reason: vd[1], ratio: vd[2], tone: vd[3] }, isEtf: etf };
 }
 /** 個股日 K（2 年）並以即時報價補上今日 K 棒 */
@@ -6005,14 +6021,14 @@ function chartPatterns(cs, tick = () => 0.01) {
   return Object.values(by).sort((a, b) => ((b.state !== 'F') - (a.state !== 'F')) || b.conf - a.conf || b.at - a.at).slice(0, 4)
     .map((p) => ({ ...p, id: 'cp:' + p.type, name: cpName(p) }));
 }
-/** 經典型態修正進場建議（與 App withPatterns 相同） */
+/** 經典型態修正進場評估（與 App withPatterns 相同） */
 function withPatterns(r, e, pats) {
   const n = r.cs.length; const f = fmtPx; const fresh = (p) => p.state !== 'F' && n - 1 - p.at <= 3 && p.conf >= 68;
   const best = (l) => l.reduce((a, p) => (!a || p.conf > a.conf ? p : a), null);
   const bull = best(pats.filter((p) => p.bull && fresh(p))), bear = best(pats.filter((p) => !p.bull && fresh(p)));
   const tag = (p) => '【' + p.name + '｜' + CP_ST[p.state] + '】' + cpAction(p);
   if (bear && (!bull || bear.conf >= bull.conf)) { if (e.level <= 0) return { ...e, reason: tag(bear) + ' ' + e.reason }; return { label: '觀望', level: 0, reason: tag(bear) + ' ' + e.reason, tip: '減碼，站回 ' + f(bear.stop) + ' 前不加碼' }; }
-  if (bull && e.level >= -1 && e.level <= 1 && r.dir !== -2) { let lv = Math.min(2, Math.max(e.level + 1, 1)); if (bull.rr < 1.2) lv = Math.min(lv, 1); return { label: lv >= 2 ? '建議進場' : '可分批進場', level: lv, reason: tag(bull) + ' ' + e.reason, tip: '續抱，跌破 ' + f(bull.stop) + ' 減碼' }; }
+  if (bull && e.level >= -1 && e.level <= 1 && r.dir !== -2) { let lv = Math.min(2, Math.max(e.level + 1, 1)); if (bull.rr < 1.2) lv = Math.min(lv, 1); return { label: lv >= 2 ? '訊號偏多' : '訊號略偏多', level: lv, reason: tag(bull) + ' ' + e.reason, tip: '續抱，跌破 ' + f(bull.stop) + ' 減碼' }; }
   return e;
 }
 /** 支撐壓力計畫：近 20 根低點為支撐、高點為壓力（空頭走勢改為持股防守） */
@@ -6127,7 +6143,7 @@ function kaCardHtml(r, weekly, sym, o = {}) {
       <div class="small text2" style="margin-top:4px">${esc(p.trigger)}</div>${kvRows([[p.bull ? '布局區間' : '減碼區間', f(p.e0) + ' ～ ' + f(p.e1)], ['停損／防守', f(p.stop)], ['目標一', f(p.tp1)], ['目標二', f(p.tp2)]])}<div class="small muted">${esc(p.note)}</div></div>`
       : '<div class="small muted" style="margin-top:8px">訊號中性：建議觀望，等待帶量突破壓力或跌破支撐再決定方向。</div>'}
     ${older.length ? `<details style="margin-top:8px"><summary class="small" style="cursor:pointer;color:var(--primary)">近 40 根其他形態（${older.length}）</summary>${older.map(hit).join('')}</details>` : ''}
-    <div class="small muted" style="margin-top:6px">形態辨識依據 K 棒實體、影線、前趨勢、量能與前 20 根高低點；勝率為此股過去 ${weekly ? '5 年週 K' : '2 年日 K'} 同形態出現後 ${r.forward} 根的結果。經典型態回測為台美股 37 檔近 2 年統計。僅供參考，不構成投資建議。</div>`;
+    <div class="small muted" style="margin-top:6px">形態辨識依據 K 棒實體、影線、前趨勢、量能與前 20 根高低點；勝率為此股過去 ${weekly ? '5 年週 K' : '2 年日 K'} 同形態出現後 ${r.forward} 根的結果。經典型態回測為台美股 37 檔近 2 年統計。僅為分析成果，不構成投資建議；投資有風險，請自行評估並自負盈虧。</div>`;
 }
 function ksCardHtml(sigs, etf) {
   const f = fmtPx;
@@ -6138,23 +6154,23 @@ function ksCardHtml(sigs, etf) {
       <div class="grid g4" style="margin-top:6px;gap:6px">${[['進場', f(s.entry)], ['停損', f(s.sl)], ['停利', f(s.tp1) + (s.tp2 ? '／' + f(s.tp2) : '')], ['風報比', '1 : ' + s.rr.toFixed(2)]].map(([k, v]) => `<div><div class="small muted">${k}</div><div class="num">${v}</div></div>`).join('')}</div>
       <div class="small" style="margin-top:6px"><span class="tag">${KS_TM[s.tm][0]}</span> ${esc(s.desc)}</div><div class="small muted">${KS_TM[s.tm][1]}</div>${s.trailing ? `<div class="small muted">${esc(s.trailing)}</div>` : ''}</div>`).join('')
       : '<div class="small muted">近 3 日沒有成立中的策略訊號（已跌破停損的訊號自動排除）。</div>'}
-    <div class="small muted" style="margin-top:6px">每個訊號附進場時機、停損、停利與風報比；成立後收盤跌破停損即失效。僅供參考，不構成投資建議。</div>`;
+    <div class="small muted" style="margin-top:6px">每個訊號附進場時機、停損、停利與風報比；成立後收盤跌破停損即失效。僅為分析成果，不構成投資建議；投資有風險，請自行評估並自負盈虧。</div>`;
 }
 function iaCardHtml(a) {
   const col = a.score >= 58 ? 'up' : a.score < 45 ? 'down' : ''; const v = a.verdict;
   return `<h2>投資分析指數<span class="r tag ${col}">${esc(a.label)}</span></h2>
     <div class="row" style="gap:16px;align-items:center"><div class="num ${col}" style="font-size:38px;font-weight:800">${a.score}</div><div class="sp"><div class="bar"><div style="width:${a.score}%;background:${css(a.score >= 50 ? '--up' : '--down')}"></div></div><div class="small text2" style="margin-top:6px">${esc(a.advice)}</div></div></div>
-    <div class="tile" style="margin-top:10px;border-left:3px solid ${css(v.tone > 0 ? '--up' : v.tone < 0 ? '--down' : '--muted')}"><div class="row"><b class="${v.tone > 0 ? 'up' : v.tone < 0 ? 'down' : ''}" style="flex:1;font-size:15px">${esc(v.title)}</b><span class="small muted">參考投入 ${v.ratio}%</span></div><div class="small text2">${esc(v.reason)}</div></div>
+    <div class="tile" style="margin-top:10px;border-left:3px solid ${css(v.tone > 0 ? '--up' : v.tone < 0 ? '--down' : '--muted')}"><div class="row"><b class="${v.tone > 0 ? 'up' : v.tone < 0 ? 'down' : ''}" style="flex:1;font-size:15px">${esc(v.title)}</b><span class="small muted">模型試算 ${v.ratio}%</span></div><div class="small text2">${esc(v.reason)}</div></div>
     <div class="scroll-x" style="margin-top:10px"><table class="tbl"><thead><tr><th style="text-align:left">因子</th><th>分數</th><th>權重</th><th style="text-align:left">依據</th></tr></thead><tbody>${a.factors.map((x) => `<tr><td style="text-align:left">${esc(x.name)}</td><td class="num ${x.score >= 58 ? 'up' : x.score < 45 ? 'down' : ''}">${x.score}</td><td class="num">${x.weight}</td><td class="small" style="text-align:left;white-space:normal">${esc(x.note)}</td></tr>`).join('')}</tbody></table></div>
     ${a.analyst ? `<div class="small muted" style="margin-top:6px">分析師：${esc(a.analyst.rating || '—')}　目標價 ${fmtPx(a.analyst.target)}（${fmtPx(a.analyst.low)}～${fmtPx(a.analyst.high)}）</div>` : ''}
-    <div class="small muted" style="margin-top:6px">${a.isEtf ? 'ETF 依趨勢、動能、52 週位置、法人籌碼、配息與填息、流動性、規模費用、折溢價、大盤環境與波動度計算' : '依趨勢、動能、估值、52 週位置、法人籌碼、分析師、大盤環境與波動度計算'}的參考分數，缺資料的項目不計入。僅供參考，不構成投資建議。</div>`;
+    <div class="small muted" style="margin-top:6px">${a.isEtf ? 'ETF 依趨勢、動能、52 週位置、法人籌碼、配息與填息、流動性、規模費用、折溢價、大盤環境與波動度計算' : '依趨勢、動能、估值、52 週位置、法人籌碼、分析師、大盤環境與波動度計算'}的參考分數，缺資料的項目不計入。僅為分析成果，不構成投資建議；投資有風險，請自行評估並自負盈虧。</div>`;
 }
 function voCardHtml(v, plan) {
   const c = v.regime >= 1.25 ? 'down' : v.regime <= 0.7 ? 'up' : '';
   return `<h2>波動<span class="r tag ${c}">${esc(v.label)}</span></h2>
     <div class="grid g3" style="gap:8px">${[['近 20 日年化波動', v.annual.toFixed(0) + '%'], ['一年中位數', v.med.toFixed(0) + '%（目前 ×' + v.regime.toFixed(1) + '）'], ['ATR(14)／股價', v.atrPct.toFixed(2) + '%（每日平均振幅）']].map(([k, x]) => `<div class="tile"><div class="k">${k}</div><div class="num" style="font-size:16px;font-weight:700;margin-top:4px">${x}</div></div>`).join('')}</div>
     <div class="chart-wrap" id="voChart" style="margin-top:10px"><canvas></canvas><div class="chart-tip"></div></div>
-    ${v.regime > 1 ? '<div class="small text2" style="margin-top:6px">波動越大，建議投入比例越低（綜合進場建議已自動打折）。</div>' : ''}
+    ${v.regime > 1 ? '<div class="small text2" style="margin-top:6px">波動越大，建議投入比例越低（綜合進場評估已自動打折）。</div>' : ''}
     ${plan ? `<div style="margin-top:8px"><b>操作參考（日 K）</b>${kvRows([['布局區間', fmtPx(plan.e0) + ' ～ ' + fmtPx(plan.e1)], ['停損', fmtPx(plan.stop)], ['目標一／二', fmtPx(plan.tp1) + ' ／ ' + fmtPx(plan.tp2)]])}</div>` : ''}
     <div class="small muted" style="margin-top:6px">年化波動＝近 20 日日報酬標準差 × √250；倍數為目前波動相對近一年中位數。</div>`;
 }
@@ -6168,15 +6184,14 @@ function loginView(msg, mode) {
     ${msg ? `<div class="notice err" style="margin-top:14px">${esc(msg)}</div>` : ''}
     ${mode === 'reg' ? `<div class="text2" style="margin-top:12px">${tr}，用 Google 帳號一鍵建立會員（不需手機 App）</div>
       <div class="steps" style="text-align:left;margin:14px auto 0;max-width:330px">${[['1', '同意使用條款', '勾選下方同意事項'], ['2', 'Google 帳號驗證', '不需另設密碼，帳號即會員身分'], ['3', '填寫暱稱與聯絡方式', '方便管理員開通與聯繫'], ['4', '開始使用', '不需要手機也能使用；之後下載 App 用同一帳號登入即可綁定同步']].map(([n, t, d]) => `<div class="row" style="gap:10px;margin-bottom:8px;align-items:flex-start"><span class="badge" style="min-width:22px;text-align:center">${n}</span><div><b>${t}</b><div class="small muted">${d}</div></div></div>`).join('')}</div>
-      <label class="row small" style="justify-content:center;margin-top:10px;cursor:pointer"><input type="checkbox" id="agree" style="width:auto" ${store.get('agree', false) ? 'checked' : ''}> 我已閱讀並同意<a href="/web/terms.html" target="_blank" rel="noopener">使用者條款</a>與<a href="/web/privacy.html" target="_blank" rel="noopener">隱私權政策</a>（含個人資料蒐集目的與境外儲存），同意以 Google 帳號識別會員身分，並了解本服務內容僅供參考、不構成投資建議</label>`
+      <label class="row small" style="justify-content:center;margin-top:10px;cursor:pointer"><input type="checkbox" id="agree" style="width:auto" ${store.get('agree', false) ? 'checked' : ''}> 我已閱讀並同意<a href="/web/risk.html" target="_blank" rel="noopener">投資風險聲明</a>、<a href="/web/terms.html" target="_blank" rel="noopener">使用者條款</a>與<a href="/web/privacy.html" target="_blank" rel="noopener">隱私權政策</a>（含個人資料蒐集目的與境外儲存），同意以 Google 帳號識別會員身分，並了解本服務內容僅供參考、不構成投資建議</label>`
     : `<div class="text2" style="margin-top:12px">用註冊時的 Google 帳號登入（與手機 App 相同帳號）</div>
-      <div class="feat"><div>📈 自選行情牆、指數、今日漲跌停</div><div>💼 持股損益、資產配置、交易記帳</div><div>📊 個股 K 線、進場建議、籌碼與財務</div><div>🔄 與手機 App 自動同步</div></div>`}
+      <div class="feat"><div>📈 自選行情牆、指數、今日漲跌停</div><div>💼 持股損益、資產配置、交易記帳</div><div>📊 個股 K 線、進場評估、籌碼與財務</div><div>🔄 與手機 App 自動同步</div></div>`}
     ${QR_HINT ? `<div class="notice" style="margin-top:14px;text-align:left">這是電腦登入用的 QR Code：請打開手機「台美股資產」App › 會員 › 帳號與同步 ›「掃描登入網頁版」來掃描，不是用相機開啟。</div>` : ''}
     <div id="gbtn" class="gbtn" style="margin-top:14px">${p.gClient || MOCK ? '' : '<div class="notice">管理員尚未開放網頁登入（Google 登入未設定）。</div>'}</div>
     ${mode === 'login' ? `<div style="margin-top:12px"><button class="btn" id="qrBtn" style="min-width:280px">📱 用 App 掃描登入</button><div class="small muted" style="margin-top:4px">手機 App 已登入帳號時，掃描 QR Code 即可登入，免在電腦輸入 Google 帳號</div></div>` : ''}
     <div id="lerr" class="small up" style="margin-top:10px"></div>
-    <div class="small" style="margin-top:8px"><a href="/web/privacy.html" target="_blank" rel="noopener">隱私權政策</a>・<a href="/web/terms.html" target="_blank" rel="noopener">使用者條款</a>・<a href="/web/notice.html" target="_blank" rel="noopener">資料來源與授權</a></div>
-    ${lineOaId() ? `<div style="margin-top:14px">${lineJoinHtml()}</div>` : ''}
+    <div class="small" style="margin-top:8px"><a href="/web/risk.html" target="_blank" rel="noopener">投資風險聲明</a>・<a href="/web/privacy.html" target="_blank" rel="noopener">隱私權政策</a>・<a href="/web/terms.html" target="_blank" rel="noopener">使用者條款</a>・<a href="/web/notice.html" target="_blank" rel="noopener">資料來源與授權</a></div>
     <div class="small muted" style="margin-top:18px">${mode === 'reg' ? '已經在手機 App 用 Google 登入過？直接按「登入」即可，不需重新註冊。' : '還沒有帳號？按上方「註冊新帳號」。'}同一帳號網頁同時只能在一個瀏覽器使用。</div>${webVerHtml()}</div></div>`;
   $$('[data-lm]').forEach((b) => b.onclick = () => { store.set('lmode', b.dataset.lm); loginView('', b.dataset.lm); });
   const ready = () => mode !== 'reg' || ($('#agree') && $('#agree').checked);
@@ -6362,7 +6377,7 @@ async function route() {
   markNav(S.route in PARENT ? PARENT[S.route] : S.route);
   $$('.bottom [data-r]').forEach((a) => a.classList.toggle('on', a.dataset.r === (BOTTOM.includes(PARENT[S.route] ?? S.route) ? (PARENT[S.route] ?? S.route) : 'more')));
   document.title = (v === VIEWS.s ? D.name(arg) + ' ' + arg : v.title) + '｜台美股資產';
-  $('#view').innerHTML = v.render(decodeURIComponent(arg || ''));
+  $('#view').innerHTML = v.render(decodeURIComponent(arg || '')) + riskFootHtml();
   if (v.bind) v.bind();
   await v.fill(); renderSync();
   refreshQuotes(v.syms()).then(() => { if (cur === v) v.fill(); });
@@ -6408,6 +6423,7 @@ async function start(meResp) {
   loadDir().then(() => cur && cur.fill());
   skLoad();
   await route();
+  riskAck();
   tick();
   S.timers.push(setInterval(() => { if (Date.now() - (S.lastTick || 0) >= (twOpen() ? (S.pref.refresh || 10) : 60) * 1000 - 500) tick(); }, 5000));
   // 每分鐘檢查雲端是否有手機的新變更；每 10 分鐘確認登入狀態
@@ -6500,7 +6516,7 @@ async function promoDraw(out, o) {
   c.fillStyle = th.sub; c.font = `500 30px ${F}`;
   const url = (o.url || o.link).replace(/^https?:\/\//, '').replace(/\/$/, ''); promoWrap(c, url, tx).slice(0, 2).forEach((ln, i) => c.fillText(ln, P, qy + 108 + i * 40));
   if (o.code) { c.fillStyle = th.acc; c.font = `700 36px ${F}`; c.fillText('推薦碼 ' + o.code, P, qy + qs - 10); }
-  c.fillStyle = th.sub; c.globalAlpha = 0.8; c.font = `400 22px ${F}`; c.fillText('資訊與記帳工具，內容不構成投資建議', P, H - 34); c.globalAlpha = 1;
+  c.fillStyle = th.sub; c.globalAlpha = 0.8; c.font = `400 22px ${F}`; c.fillText('資產管理與分析工具，不構成投資建議；投資有風險，請自行評估', P, H - 34); c.globalAlpha = 1;
   if (tok !== out._tok) return;
   out.width = W; out.height = H; out.getContext('2d').drawImage(cv, 0, 0);
 }
