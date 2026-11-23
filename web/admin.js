@@ -68,7 +68,7 @@ async function logout(msg) {
 
 // ───────── 主畫面 ─────────
 /** 網頁版本（發布時由 .github/public/sync.sh 填入） */
-const WEB_VER = /*WEBVER*/{"v":"v1.1.405","sha":"9324981","at":"2026-11-23 16:40"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"5890da1","at":"2026-11-23 16:55"};
 const verText = () => (WEB_VER ? (WEB_VER.v ? (/^v/i.test(WEB_VER.v) ? WEB_VER.v : 'v' + WEB_VER.v) + ' · ' : '') + WEB_VER.sha + (WEB_VER.at ? ' · ' + WEB_VER.at : '') : '開發版');
 const TABS = [['home', '總覽'], ['req', '申請'], ['trade', '交易'], ['msg', '訊息'], ['mem', '會員'], ['pol', '政策'], ['tier', '會員等級'], ['rel', '發布'], ['line', 'LINE'], ['forum', '討論區'], ['job', '工作紀錄']];
 /** 功能位元（與 App License.Feature 順序相同，不可調整） */
@@ -1009,6 +1009,31 @@ async function renderMsg(v) {
     ${r.messages.length ? `<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>時間</th><th>會員</th><th>管道</th><th>內容</th><th>狀態</th></tr></thead><tbody>${r.messages.map((x) => `<tr><td class="small muted">${tsText(x.at)}</td><td>${esc(x.no)} ${esc(x.name)}</td><td>${x.channel === 'line' ? 'LINE' : 'Email'}</td><td>${esc(x.subject || x.template)}</td><td class="${MSG_ST[x.status][1]}">${MSG_ST[x.status][0]}${x.err ? '<div class="small muted">' + esc(x.err) + '</div>' : ''}</td></tr>`).join('')}</tbody></table></div>` : '<div class="small muted">尚無訊息。</div>'}</div>`;
   $('#mNew', v).onclick = async () => { if (await sendMsgDialog()) renderMsg(v); };
 }
+/** 社群推廣文案：10 套 × 脆／臉書／LINE／IG（與管理員 App 共用 web/adminpromo/copy.json），{link} 換成網站網址 */
+async function socialCopy(link) {
+  let d; try { d = await (await fetch('/web/adminpromo/copy.json', { cache: 'no-store' })).json(); } catch (e) { return toast('讀不到文案資料：' + e.message); }
+  const P = d.platforms || [['threads', '脆 Threads'], ['facebook', '臉書'], ['line', 'LINE'], ['ig', 'IG']];
+  const tip = { threads: '「開啟」會帶入文案到脆的發文畫面（單篇上限 500 字）。', facebook: '臉書不接受預先帶入文字：請先複製，再到臉書貼上；「開啟」會分享網址。', line: '「開啟」會用 LINE 分享給好友或群組；要給官方帳號全體好友，請用「LINE 群發」。', ig: 'IG 貼文的連結不能點，建議把網址放在個人檔案；請複製後到 IG 貼上。' };
+  const x = await dialog('社群推廣文案', `<div class="small muted" style="margin-bottom:8px">共 ${d.sets.length} 套，選主題與平台後可直接修改，再複製或開啟。網址：${esc(link)}</div>
+    <div class="grid g2" style="gap:8px"><div class="field" style="margin:0"><label>主題</label><select id="scS">${d.sets.map((t, i) => `<option value="${i}">${i + 1}. ${esc(t.name)}</option>`).join('')}</select></div>
+    <div class="field" style="margin:0"><label>平台</label><select id="scP">${P.map(([k, n]) => `<option value="${k}">${esc(n)}</option>`).join('')}</select></div></div>
+    <div class="field" style="margin-top:8px"><label id="scL">文案</label><textarea id="scT" rows="14" maxlength="3000"></textarea></div><div id="scTip" class="small muted"></div>
+    <div class="row wrap" style="gap:6px;margin-top:8px"><button class="btn sm primary" id="scCopy">複製</button><button class="btn sm" id="scOpen">開啟</button><button class="btn sm" id="scAll">複製本主題四個平台</button></div>`,
+    [['', '關閉']], (bg) => {
+      const fill = () => { const t = d.sets[+$('#scS', bg).value]; const k = $('#scP', bg).value; $('#scT', bg).value = String(t[k] || '').split('{link}').join(link); cnt(); $('#scTip', bg).textContent = tip[k] || ''; };
+      const cnt = () => { const k = $('#scP', bg).value; const n = $('#scT', bg).value.length; $('#scL', bg).innerHTML = '文案（' + n + ' 字）' + (k === 'threads' && n > 500 ? ' <span class="up">超過脆 500 字上限</span>' : ''); };
+      const cp = (t, m) => navigator.clipboard.writeText(t).then(() => toast(m || '已複製文案'), () => toast('複製失敗，請手動選取'));
+      $('#scS', bg).onchange = fill; $('#scP', bg).onchange = fill; $('#scT', bg).oninput = cnt;
+      $('#scCopy', bg).onclick = () => cp($('#scT', bg).value);
+      $('#scAll', bg).onclick = () => { const t = d.sets[+$('#scS', bg).value]; cp(P.map(([k, n]) => '【' + n + '】\n' + String(t[k] || '').split('{link}').join(link)).join('\n\n────────\n\n'), '已複製四個平台的文案'); };
+      $('#scOpen', bg).onclick = () => { const k = $('#scP', bg).value; const t = $('#scT', bg).value;
+        const u = k === 'threads' ? 'https://www.threads.net/intent/post?text=' + encodeURIComponent(t) : k === 'line' ? 'https://line.me/R/share?text=' + encodeURIComponent(t) : k === 'facebook' ? 'https://www.facebook.com/sharer/sharer.php?u=' + encodeURIComponent(link) : 'https://www.instagram.com/';
+        if (k === 'facebook' || k === 'ig') cp(t, '已複製文案，請在' + (k === 'ig' ? ' IG ' : '臉書') + '貼上');
+        window.open(u, '_blank', 'noopener'); };
+      fill(); return () => null;
+    });
+  return x;
+}
 /** 以官方帳號發訊給會員（顯示綁定狀態與本月剩餘額度）；no、subject、text 可預先帶入。回傳是否已送出 */
 async function sendMsgDialog(no, subject, text) {
   const ms = S.d.members || [];
@@ -1121,7 +1146,7 @@ async function regBox(el, act) {
       <div class="field" style="margin:0"><label>額滿時</label><select id="rcMode"><option value="wait" ${c.mode === 'wait' ? 'selected' : ''}>登記候補，開放時 Email 通知</option><option value="reject" ${c.mode === 'reject' ? 'selected' : ''}>不受理新註冊</option></select></div>
       <div class="field" style="margin:0"><label>額滿提示文字（選填）</label><input id="rcMsg" maxlength="200" value="${esc(c.msg)}" placeholder="目前試用名額已滿"></div></div>
     <div class="field" style="margin-top:8px"><label>推薦獎勵說明（顯示在會員的「邀請好友」卡，選填）</label><input id="rcNote" maxlength="300" value="${esc(c.refNote)}" placeholder="例：成功推薦 1 位好友註冊，加贈 7 天"></div>
-    <button class="btn sm primary" id="rcSave">儲存設定</button>
+    <button class="btn sm primary" id="rcSave">儲存設定</button> <button class="btn sm" id="rcSocial">社群推廣文案（脆／臉書／LINE／IG，10 套）</button>
     <h3 style="margin:14px 0 6px">候補名單（${r.waitN} 位待通知）</h3>
     ${r.waitlist.length ? `<div class="scroll-x"><table class="tbl"><thead><tr><th><input type="checkbox" id="rcAll" style="width:auto"></th><th>登記</th><th>名稱</th><th>Email</th><th>推薦碼</th><th>來源</th><th>狀態</th><th></th></tr></thead><tbody>
       ${r.waitlist.map((w) => `<tr><td>${w.notified ? '' : `<input type="checkbox" data-rcw="${w.id}" style="width:auto">`}</td><td class="small">${fmt(w.at)}</td><td>${esc(w.name)}</td><td class="small">${esc(w.email)}</td><td>${esc(w.ref || '—')}</td><td class="small">${esc(w.src)}</td>
@@ -1130,6 +1155,7 @@ async function regBox(el, act) {
     <h3 style="margin:14px 0 6px">推薦排行（累計 ${r.refTotal} 位）</h3>
     ${r.refs.length ? `<table class="tbl"><thead><tr><th>推薦人</th><th style="text-align:right">成功推薦</th><th>最近一次</th></tr></thead><tbody>${r.refs.map((x) => `<tr><td><b>${esc(x.no)}</b> ${esc(x.name || '')}</td><td style="text-align:right">${x.n}</td><td class="small">${fmt(x.last)}</td></tr>`).join('')}</tbody></table>`
       : '<div class="small muted">尚無推薦紀錄。會員在 App 或網頁「邀請好友」分享專屬連結（' + esc(pub.replace(/\/?$/, '/')) + 'r/會員代號），朋友註冊後會記在這裡；獎勵請在「開通」頁手動加贈天數。</div>'}`;
+  $('#rcSocial', el).onclick = () => socialCopy(pub.replace(/\/?$/, '/'));
   $('#rcSave', el).onclick = () => regBox(el, { act: 'set', max: $('#rcMax', el).value, scope: $('#rcScope', el).value, mode: $('#rcMode', el).value, msg: $('#rcMsg', el).value, refNote: $('#rcNote', el).value }).then(() => toast('✓ 已儲存註冊名額設定'));
   if ($('#rcAll', el)) $('#rcAll', el).onchange = (e) => $$('[data-rcw]', el).forEach((x) => { x.checked = e.target.checked; });
   if ($('#rcNotify', el)) $('#rcNotify', el).onclick = () => { const ids = $$('[data-rcw]:checked', el).map((x) => +x.dataset.rcw); if (!ids.length) return toast('請先勾選候補'); regBox(el, { act: 'notify', ids, link: pub.replace(/\/?$/, '/') + 'web' }); };
