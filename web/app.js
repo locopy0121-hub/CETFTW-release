@@ -896,7 +896,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"b7b0d4a","at":"2026-11-23 09:23"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"1d2a374","at":"2026-11-23 09:38"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -6501,8 +6501,8 @@ async function promoDraw(out, o) {
   out.width = W; out.height = H; out.getContext('2d').drawImage(cv, 0, 0);
 }
 async function promoCardModal(link, code = '') {
-  // 圖卡只顯示網站網址，不印會員代號；QR Code 帶推薦連結（掃描註冊仍會記在推薦名單）
-  const o = { theme: 0, square: false, qr: true, title: '台股・美股・ETF\n一個 App 管好', sub: '行情、記帳、股息、分析一次搞定', lines: PROMO_LINES.slice(), link, code, url: promoBase(), cta: S.policy.payOn === false ? '試運作中，免費使用' : '立即免費試用', freeRun: S.policy.payOn === false };
+  // 圖卡不另外印推薦碼，只顯示一行網址（推薦網址：短網址/r/會員代號，手動輸入也會記在推薦名單）；QR Code 同一個網址
+  const o = { theme: 0, square: false, qr: true, title: '台股・美股・ETF\n一個 App 管好', sub: '行情、記帳、股息、分析一次搞定', lines: PROMO_LINES.slice(), link, code, url: link, cta: S.policy.payOn === false ? '試運作中，免費使用' : '立即免費試用', freeRun: S.policy.payOn === false };
   let cv;
   await dialog('推廣圖卡', `<div class="row wrap" style="gap:6px">${PROMO_THEMES.map((t, i) => `<button class="btn sm ${i ? '' : 'primary'}" data-pth="${i}">${t.n}</button>`).join('')}
       <button class="btn sm" id="pSq">改為方形 1080×1080</button><label class="row small" style="gap:4px;cursor:pointer"><input type="checkbox" id="pQr" checked style="width:auto"> QR Code</label></div>
