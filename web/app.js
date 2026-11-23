@@ -896,7 +896,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"v1.1.399","sha":"79d0288","at":"2026-11-23 09:04"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"b7b0d4a","at":"2026-11-23 09:23"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -6433,7 +6433,7 @@ function promoBind(me) {
   const link = promoLink(me.no);
   if ($('#prCopy')) $('#prCopy').onclick = () => { navigator.clipboard.writeText(PROMO_TEXT + '\n' + link).then(() => toast('已複製推廣文字與連結'), () => { $('#prLink').select(); toast('請長按複製'); }); };
   if ($('#prShare')) $('#prShare').onclick = () => navigator.share({ title: '台美股資產', text: PROMO_TEXT, url: link }).catch(() => {});
-  if ($('#prCard')) $('#prCard').onclick = () => promoCardModal(link, me.no || '');
+  if ($('#prCard')) $('#prCard').onclick = () => promoCardModal(link);
 }
 /** 推廣圖卡：1080×1350（IG／Threads 直式）或 1080×1080，三種配色，可改標題與重點，含 QR Code 與推薦碼 */
 const PROMO_THEMES = [
@@ -6494,14 +6494,15 @@ async function promoDraw(out, o) {
   const tx = (o.qr ? qx - 50 : W - P) - P;
   c.fillStyle = th.fg; c.font = `800 46px ${F}`; c.fillText(promoWrap(c, o.cta || '立即免費試用', tx)[0], P, qy + 46);
   c.fillStyle = th.sub; c.font = `500 30px ${F}`;
-  const url = o.link.replace(/^https?:\/\//, ''); promoWrap(c, url, tx).slice(0, 2).forEach((ln, i) => c.fillText(ln, P, qy + 108 + i * 40));
+  const url = (o.url || o.link).replace(/^https?:\/\//, '').replace(/\/$/, ''); promoWrap(c, url, tx).slice(0, 2).forEach((ln, i) => c.fillText(ln, P, qy + 108 + i * 40));
   if (o.code) { c.fillStyle = th.acc; c.font = `700 36px ${F}`; c.fillText('推薦碼 ' + o.code, P, qy + qs - 10); }
   c.fillStyle = th.sub; c.globalAlpha = 0.8; c.font = `400 22px ${F}`; c.fillText('資訊與記帳工具，內容不構成投資建議', P, H - 34); c.globalAlpha = 1;
   if (tok !== out._tok) return;
   out.width = W; out.height = H; out.getContext('2d').drawImage(cv, 0, 0);
 }
-async function promoCardModal(link, code) {
-  const o = { theme: 0, square: false, qr: true, title: '台股・美股・ETF\n一個 App 管好', sub: '行情、記帳、股息、分析一次搞定', lines: PROMO_LINES.slice(), link, code, cta: S.policy.payOn === false ? '試運作中，免費使用' : '立即免費試用', freeRun: S.policy.payOn === false };
+async function promoCardModal(link, code = '') {
+  // 圖卡只顯示網站網址，不印會員代號；QR Code 帶推薦連結（掃描註冊仍會記在推薦名單）
+  const o = { theme: 0, square: false, qr: true, title: '台股・美股・ETF\n一個 App 管好', sub: '行情、記帳、股息、分析一次搞定', lines: PROMO_LINES.slice(), link, code, url: promoBase(), cta: S.policy.payOn === false ? '試運作中，免費使用' : '立即免費試用', freeRun: S.policy.payOn === false };
   let cv;
   await dialog('推廣圖卡', `<div class="row wrap" style="gap:6px">${PROMO_THEMES.map((t, i) => `<button class="btn sm ${i ? '' : 'primary'}" data-pth="${i}">${t.n}</button>`).join('')}
       <button class="btn sm" id="pSq">改為方形 1080×1080</button><label class="row small" style="gap:4px;cursor:pointer"><input type="checkbox" id="pQr" checked style="width:auto"> QR Code</label></div>
