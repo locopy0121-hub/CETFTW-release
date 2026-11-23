@@ -342,3 +342,6 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--primary); o
 @media (min-width: 901px) { :root[data-side="mini"] .nav-g { justify-content: center; margin: 8px 0 2px; padding: 0; height: 1px; background: var(--border); font-size: 0; } :root[data-side="mini"] .nav-g i { display: none; } :root[data-side="mini"] .nav-g.fold + .nav-gl a:not(.on) { display: flex; } }
 
 .mg-warn{color:var(--warn)}
+/* 拖曳排序把手（版面設定、分頁列排版） */
+.draghd{cursor:grab;user-select:none;touch-action:none;font-size:20px;line-height:1;padding:6px 8px;color:var(--muted,#888)}
+.it.dragging{opacity:.85;outline:2px solid var(--primary,#34d399);border-radius:8px;background:var(--card2,rgba(255,255,255,.05))}
