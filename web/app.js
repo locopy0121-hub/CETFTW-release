@@ -900,7 +900,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"v1.1.407","sha":"33eeba5","at":"2026-11-23 18:53"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"a1eb602","at":"2026-11-23 18:58"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -1624,21 +1624,19 @@ async function importTrades(text) {
 
 // ───────── 對話框 ─────────
 /** buttons: [[值, 文字, 樣式]]；setup(root, close) 可回傳驗證函式（回傳錯誤訊息則不關閉） */
-// ───────── 投資風險聲明：每頁底部提示＋首次使用確認（聲明更新時 RISK_VER 加 1，會請使用者重新確認） ─────────
+// ───────── 投資風險告知書：首次使用確認；確認後只在會員中心顯示（聲明更新時 RISK_VER 加 1，會請使用者重新確認） ─────────
 const RISK_VER = 1;
+const RISK_POINTS = ['進場評估、綜合結論、模型試算比例、選股、回測、AI 體檢與組合診斷，都是程式依指標計算的結果，未考量你的個人財務狀況與風險承受度。', '資料可能延遲或有誤，歷史績效不代表未來表現；融資融券與槓桿商品可能放大虧損。', '本服務不是證券投資顧問，不提供個別化建議；所有投資決定由你自行判斷並承擔結果。'];
 const RISK_TEXT = '本服務僅提供資產管理與分析成果，不構成投資建議；投資有風險，請依自身財務狀況與風險承受度自行判斷，並自負盈虧。';
-function riskFootHtml() { return `<div class="small muted riskfoot" style="margin:24px 0 8px;padding-top:10px;border-top:1px solid var(--line);line-height:1.6">⚠ ${RISK_TEXT}<a href="/web/risk.html" target="_blank" rel="noopener" style="margin-left:4px">投資風險聲明</a></div>`; }
+/** 會員中心的「投資風險告知書」卡：確認日期、重點與全文連結（其他頁面不放） */
+function riskCardHtml() { const at = store.get('riskAckAt', 0); return `<div class="card"><h2>投資風險告知書</h2>${at ? `<div class="small" style="color:var(--primary);margin-bottom:6px">✓ 已於 ${new Date(at).toLocaleDateString('zh-TW')} 閱讀並確認</div>` : ''}<div class="notice" style="line-height:1.7">${RISK_TEXT}</div><ul class="small text2" style="padding-left:18px;margin:10px 0 6px;line-height:1.7">${RISK_POINTS.map((x) => '<li>' + x + '</li>').join('')}</ul><a href="/web/risk.html" target="_blank" rel="noopener" class="small">閱讀告知書全文 ›</a></div>`; }
 async function riskAck() {
   if ((store.get('riskAck', 0) || 0) >= RISK_VER || $('.modal-bg')) return;
   const html = `<div class="notice" style="line-height:1.7">${RISK_TEXT}</div>
-    <ul class="small text2" style="padding-left:18px;margin:10px 0;line-height:1.7">
-      <li>進場評估、綜合結論、模型試算比例、選股、回測、AI 體檢與組合診斷，都是程式依指標計算的結果，未考量你的個人財務狀況與風險承受度。</li>
-      <li>資料可能延遲或有誤，歷史績效不代表未來表現；融資融券與槓桿商品可能放大虧損。</li>
-      <li>本服務不是證券投資顧問，不提供個別化建議；所有投資決定由你自行判斷並承擔結果。</li>
-    </ul>
-    <label class="row small" style="gap:6px;cursor:pointer;justify-content:flex-start"><input type="checkbox" id="rkOk" style="width:auto"> 我已閱讀並了解<a href="/web/risk.html" target="_blank" rel="noopener">投資風險聲明</a>，願自行承擔投資風險</label><div id="merr" class="small up"></div>`;
-  const v = await dialog('使用前請先閱讀：投資風險聲明', html, [['ok', '我了解並同意', 'primary']], (b) => () => ($('#rkOk', b).checked ? null : '請先勾選確認'));
-  if (v === 'ok') store.set('riskAck', RISK_VER); else setTimeout(riskAck, 400);
+    <ul class="small text2" style="padding-left:18px;margin:10px 0;line-height:1.7">${RISK_POINTS.map((x) => '<li>' + x + '</li>').join('')}</ul>
+    <label class="row small" style="gap:6px;cursor:pointer;justify-content:flex-start"><input type="checkbox" id="rkOk" style="width:auto"> 我已閱讀並了解<a href="/web/risk.html" target="_blank" rel="noopener">投資風險告知書</a>，願自行承擔投資風險</label><div id="merr" class="small up"></div>`;
+  const v = await dialog('使用前請先閱讀：投資風險告知書', html, [['ok', '我了解並同意', 'primary']], (b) => () => ($('#rkOk', b).checked ? null : '請先勾選確認'));
+  if (v === 'ok') { store.set('riskAck', RISK_VER); store.set('riskAckAt', Date.now()); } else setTimeout(riskAck, 400);
 }
 function dialog(title, html, buttons, setup) {
   return new Promise((resolve) => {
@@ -4543,6 +4541,7 @@ VIEWS.member = {
         ${lineOaId() ? `<div class="tile" style="margin-top:12px"><div class="row" style="gap:12px;align-items:center"><img class="line-qr" src="https://qr-official.line.me/sid/L/${encodeURIComponent(lineOaId().slice(1))}.png" alt="LINE QR Code" data-linejoin style="cursor:pointer" onerror="this.remove()">
           <div class="sp"><b>LINE 官方帳號</b><div class="small text2" style="margin-top:2px">開通、續約或方案問題可直接在 LINE 詢問管理員，也能接收每日盤後報告。</div><div style="margin-top:6px">${lineJoinHtml()}</div></div></div></div>` : ''}
         ${(me.requests || []).length ? `<div class="list" style="margin-top:10px">${me.requests.slice().reverse().map((r) => `<div class="it" style="cursor:default"><div class="l"><div class="t1">${esc({ new: '開通', renew: '續約', change: '變更方案' }[r.kind] || r.kind)} ${reqStateTag(r)}</div><div class="t2">${esc(r.at)}　${esc(String(r.message || '').replace(/^［網頁］\S*\s?/, ''))}</div></div></div>`).join('')}</div>` : ''}</div>
+      ${riskCardHtml()}
       <div class="card"><h2>會員帳號</h2><div class="row"><div class="logo" style="width:42px;height:42px;font-size:20px;border-radius:50%">${esc((me.name || me.email || '?').slice(0, 1).toUpperCase())}</div>
         <div class="sp"><div><b>${esc(me.name || '會員')}</b>${me.no ? ' <span class="muted">（' + esc(me.no) + '）</span>' : ''}</div><div class="small muted">${esc(me.email || '')}</div></div>
         <button class="btn" id="pfE">編輯</button><button class="btn" id="lo">登出</button></div>
@@ -4569,7 +4568,7 @@ VIEWS.member = {
     $('#lo').onclick = async () => { let ck = false;
       if ((await dialog('登出', '登出後這個瀏覽器的投資資料會清除（雲端資料保留），重新登入即可恢復。<label class="row small" style="gap:6px;margin-top:10px;cursor:pointer;justify-content:flex-start"><input type="checkbox" id="loK" style="width:auto"> 同時清除這個瀏覽器保存的 API 金鑰（共用電腦建議勾選）</label>',
         [['', '取消'], ['ok', '登出', 'primary']], (b) => () => { ck = $('#loK', b).checked; return null; })) === 'ok') logout(undefined, ck); };
-    $('#pfE').closest('.card').insertAdjacentHTML('beforeend', '<div class="row" style="margin-top:12px;gap:16px"><a href="/web/risk.html" target="_blank" rel="noopener" class="small">投資風險聲明</a><a href="/web/privacy.html" target="_blank" rel="noopener" class="small">隱私權政策</a><a href="/web/terms.html" target="_blank" rel="noopener" class="small">使用者條款</a><a href="/web/notice.html" target="_blank" rel="noopener" class="small">資料來源與授權</a><a href="javascript:void 0" id="delAcc" class="small muted">刪除帳號</a></div>');
+    $('#pfE').closest('.card').insertAdjacentHTML('beforeend', '<div class="row" style="margin-top:12px;gap:16px"><a href="/web/risk.html" target="_blank" rel="noopener" class="small">投資風險告知書</a><a href="/web/privacy.html" target="_blank" rel="noopener" class="small">隱私權政策</a><a href="/web/terms.html" target="_blank" rel="noopener" class="small">使用者條款</a><a href="/web/notice.html" target="_blank" rel="noopener" class="small">資料來源與授權</a><a href="javascript:void 0" id="delAcc" class="small muted">刪除帳號</a></div>');
     $('#delAcc').onclick = () => deleteAccountModal(me);
     $('#syn').onclick = async () => { await syncNow(); this.fill(); };
     $('#dl').onclick = async () => { if ((await dialog('從雲端重新下載', '以雲端資料取代這個網頁的資料？（尚未上傳的變更會遺失）', [['', '取消'], ['ok', '下載', 'primary']])) !== 'ok') return; S.dirty = false; await pull(true); toast('已下載雲端資料'); route(); };
@@ -6184,14 +6183,14 @@ function loginView(msg, mode) {
     ${msg ? `<div class="notice err" style="margin-top:14px">${esc(msg)}</div>` : ''}
     ${mode === 'reg' ? `<div class="text2" style="margin-top:12px">${tr}，用 Google 帳號一鍵建立會員（不需手機 App）</div>
       <div class="steps" style="text-align:left;margin:14px auto 0;max-width:330px">${[['1', '同意使用條款', '勾選下方同意事項'], ['2', 'Google 帳號驗證', '不需另設密碼，帳號即會員身分'], ['3', '填寫暱稱與聯絡方式', '方便管理員開通與聯繫'], ['4', '開始使用', '不需要手機也能使用；之後下載 App 用同一帳號登入即可綁定同步']].map(([n, t, d]) => `<div class="row" style="gap:10px;margin-bottom:8px;align-items:flex-start"><span class="badge" style="min-width:22px;text-align:center">${n}</span><div><b>${t}</b><div class="small muted">${d}</div></div></div>`).join('')}</div>
-      <label class="row small" style="justify-content:center;margin-top:10px;cursor:pointer"><input type="checkbox" id="agree" style="width:auto" ${store.get('agree', false) ? 'checked' : ''}> 我已閱讀並同意<a href="/web/risk.html" target="_blank" rel="noopener">投資風險聲明</a>、<a href="/web/terms.html" target="_blank" rel="noopener">使用者條款</a>與<a href="/web/privacy.html" target="_blank" rel="noopener">隱私權政策</a>（含個人資料蒐集目的與境外儲存），同意以 Google 帳號識別會員身分，並了解本服務內容僅供參考、不構成投資建議</label>`
+      <label class="row small" style="justify-content:center;margin-top:10px;cursor:pointer"><input type="checkbox" id="agree" style="width:auto" ${store.get('agree', false) ? 'checked' : ''}> 我已閱讀並同意<a href="/web/risk.html" target="_blank" rel="noopener">投資風險告知書</a>、<a href="/web/terms.html" target="_blank" rel="noopener">使用者條款</a>與<a href="/web/privacy.html" target="_blank" rel="noopener">隱私權政策</a>（含個人資料蒐集目的與境外儲存），同意以 Google 帳號識別會員身分，並了解本服務內容僅供參考、不構成投資建議</label>`
     : `<div class="text2" style="margin-top:12px">用註冊時的 Google 帳號登入（與手機 App 相同帳號）</div>
       <div class="feat"><div>📈 自選行情牆、指數、今日漲跌停</div><div>💼 持股損益、資產配置、交易記帳</div><div>📊 個股 K 線、進場評估、籌碼與財務</div><div>🔄 與手機 App 自動同步</div></div>`}
     ${QR_HINT ? `<div class="notice" style="margin-top:14px;text-align:left">這是電腦登入用的 QR Code：請打開手機「台美股資產」App › 會員 › 帳號與同步 ›「掃描登入網頁版」來掃描，不是用相機開啟。</div>` : ''}
     <div id="gbtn" class="gbtn" style="margin-top:14px">${p.gClient || MOCK ? '' : '<div class="notice">管理員尚未開放網頁登入（Google 登入未設定）。</div>'}</div>
     ${mode === 'login' ? `<div style="margin-top:12px"><button class="btn" id="qrBtn" style="min-width:280px">📱 用 App 掃描登入</button><div class="small muted" style="margin-top:4px">手機 App 已登入帳號時，掃描 QR Code 即可登入，免在電腦輸入 Google 帳號</div></div>` : ''}
     <div id="lerr" class="small up" style="margin-top:10px"></div>
-    <div class="small" style="margin-top:8px"><a href="/web/risk.html" target="_blank" rel="noopener">投資風險聲明</a>・<a href="/web/privacy.html" target="_blank" rel="noopener">隱私權政策</a>・<a href="/web/terms.html" target="_blank" rel="noopener">使用者條款</a>・<a href="/web/notice.html" target="_blank" rel="noopener">資料來源與授權</a></div>
+    <div class="small" style="margin-top:8px"><a href="/web/risk.html" target="_blank" rel="noopener">投資風險告知書</a>・<a href="/web/privacy.html" target="_blank" rel="noopener">隱私權政策</a>・<a href="/web/terms.html" target="_blank" rel="noopener">使用者條款</a>・<a href="/web/notice.html" target="_blank" rel="noopener">資料來源與授權</a></div>
     <div class="small muted" style="margin-top:18px">${mode === 'reg' ? '已經在手機 App 用 Google 登入過？直接按「登入」即可，不需重新註冊。' : '還沒有帳號？按上方「註冊新帳號」。'}同一帳號網頁同時只能在一個瀏覽器使用。</div>${webVerHtml()}</div></div>`;
   $$('[data-lm]').forEach((b) => b.onclick = () => { store.set('lmode', b.dataset.lm); loginView('', b.dataset.lm); });
   const ready = () => mode !== 'reg' || ($('#agree') && $('#agree').checked);
@@ -6377,7 +6376,7 @@ async function route() {
   markNav(S.route in PARENT ? PARENT[S.route] : S.route);
   $$('.bottom [data-r]').forEach((a) => a.classList.toggle('on', a.dataset.r === (BOTTOM.includes(PARENT[S.route] ?? S.route) ? (PARENT[S.route] ?? S.route) : 'more')));
   document.title = (v === VIEWS.s ? D.name(arg) + ' ' + arg : v.title) + '｜台美股資產';
-  $('#view').innerHTML = v.render(decodeURIComponent(arg || '')) + riskFootHtml();
+  $('#view').innerHTML = v.render(decodeURIComponent(arg || ''));
   if (v.bind) v.bind();
   await v.fill(); renderSync();
   refreshQuotes(v.syms()).then(() => { if (cur === v) v.fill(); });
