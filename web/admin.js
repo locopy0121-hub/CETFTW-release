@@ -68,7 +68,7 @@ async function logout(msg) {
 
 // ───────── 主畫面 ─────────
 /** 網頁版本（發布時由 .github/public/sync.sh 填入） */
-const WEB_VER = /*WEBVER*/{"v":"v1.1.398","sha":"71436c3","at":"2026-11-23 07:57"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"79d0288","at":"2026-11-23 08:09"};
 const verText = () => (WEB_VER ? (WEB_VER.v ? (/^v/i.test(WEB_VER.v) ? WEB_VER.v : 'v' + WEB_VER.v) + ' · ' : '') + WEB_VER.sha + (WEB_VER.at ? ' · ' + WEB_VER.at : '') : '開發版');
 const TABS = [['home', '總覽'], ['req', '申請'], ['trade', '交易'], ['msg', '訊息'], ['mem', '會員'], ['pol', '政策'], ['tier', '會員等級'], ['rel', '發布'], ['line', 'LINE'], ['forum', '討論區'], ['job', '工作紀錄']];
 /** 功能位元（與 App License.Feature 順序相同，不可調整） */
@@ -226,8 +226,8 @@ function render() {
       <div class="scroll-x"><table class="tbl"><thead><tr><th>代號</th><th>名稱</th><th>等級</th><th>狀態</th><th>到期</th><th>聯絡／Email</th><th>裝置</th><th>最後上線</th></tr></thead><tbody>
       ${ms.map((m) => `<tr class="click" data-no="${esc(m.no)}"><td><b>${esc(m.no)}</b></td><td>${esc(m.name)}</td><td>${esc(m.tier || '—')}</td><td style="color:${/有效/.test(m.status) ? '#22c55e' : /停用|到期/.test(m.status) ? '#ef4444' : 'inherit'}">${esc(m.status || '—')}</td><td class="small">${esc(m.expiry || '—')}</td>
         <td class="small">${esc(m.contact || '')}${m.email ? '<br>' + esc(m.email) : ''}</td><td class="small">${m.device ? esc(m.device) : '💻 網頁'}${m.google ? ' · G' : ''}</td><td class="small">${esc(String(m.seen || '').slice(0, 16))}</td></tr>`).join('')}</tbody></table></div>
-      <div class="small muted" style="margin-top:6px">共 ${ms.length} 位 · 點一列查看與管理</div></div>${d.d1 ? '<div class="card" id="delBox" style="margin-top:12px"></div>' : ''}`;
-    if (d.d1) delBox($('#delBox', v));
+      <div class="small muted" style="margin-top:6px">共 ${ms.length} 位 · 點一列查看與管理</div></div>${d.d1 ? '<div class="card" id="regBox" style="margin-top:12px"><h2>註冊名額與推廣</h2><div class="small muted">讀取中…</div></div><div class="card" id="delBox" style="margin-top:12px"></div>' : ''}`;
+    if (d.d1) { regBox($('#regBox', v)); delBox($('#delBox', v)); }
     const mq = $('#mq'); mq.oninput = () => { S.q = mq.value; const pos = mq.selectionStart; render(); const n = $('#mq'); n.focus(); n.setSelectionRange(pos, pos); };
     $('#newm').onclick = () => issueDialog({});
     $('#msync').onclick = () => job('sync', {}, '已送出同步');
@@ -764,11 +764,13 @@ const lineKit = {
 /** 訂閱方案價格與活動折扣（由管理員 App 簽章回傳；App 與網頁版會員頁顯示） */
 function priceEditor(box, p) {
   if (!S.prices) S.prices = JSON.parse(JSON.stringify(p.prices && p.prices.length ? p.prices : [{ n: '1 個月', m: 1, p: 199, t: 0 }, { n: '3 個月', m: 3, p: 499, t: 0 }, { n: '6 個月', m: 6, p: 799, t: 0 }, { n: '1 年', m: 12, p: 1099, t: 0 }]));
-  if (!S.discEd) S.discEd = { disc: p.disc || 0, discUntil: p.discUntil || '', discLabel: p.discLabel || '' };
+  if (!S.discEd) S.discEd = { disc: p.disc || 0, discUntil: p.discUntil || '', discLabel: p.discLabel || '', payOn: p.payOn !== false };
   const P = S.prices, D0 = S.discEd;
   const draw = () => {
     const on = D0.disc > 0 && (!D0.discUntil || new Date().toISOString().slice(0, 10).replace(/-/g, '/') <= D0.discUntil.replace(/-/g, '/'));
-    box.innerHTML = `<h2>訂閱方案與價格<span class="r small muted">價格可隨時調整</span></h2>
+    box.innerHTML = `<h2>收費功能</h2><label class="row small" style="gap:6px;cursor:pointer"><input type="checkbox" id="payOn" style="width:auto" ${D0.payOn ? 'checked' : ''}> ${D0.payOn ? '開啟：顯示方案價格與申請，試用期滿鎖定進階功能' : '關閉（試運作）：免費使用試用等級功能、不限天數，隱藏價格與申請'}</label>
+      <div class="small muted" style="margin:4px 0 12px">試運作時可在「會員」頁「註冊名額」控管試用人數；已開通的會員照常依等級使用。</div>
+      <h2>訂閱方案與價格<span class="r small muted">價格可隨時調整</span></h2>
       ${P.map((x, i) => `<div class="row" style="gap:8px;margin-top:8px;align-items:flex-end"><div class="field" style="flex:1.4;margin:0"><label>名稱</label><input data-pi="${i}" data-pk2="n" value="${esc(x.n)}" maxlength="12"></div>
         <div class="field" style="flex:.7;margin:0"><label>月數</label><input data-pi="${i}" data-pk2="m" type="number" min="1" max="120" value="${x.m}"></div>
         <div class="field" style="flex:1;margin:0"><label>原價（元）</label><input data-pi="${i}" data-pk2="p" type="number" min="1" value="${x.p}"></div>
@@ -782,12 +784,13 @@ function priceEditor(box, p) {
     $$('[data-pd]', box).forEach((b) => b.onclick = () => { if (P.length <= 1) return toast('至少要有一個方案'); P.splice(+b.dataset.pd, 1); draw(); });
     $('#padd', box).onclick = () => { if (P.length >= 8) return; P.push({ n: '新方案', m: 1, p: 199, t: 0 }); draw(); };
     $('#pdef', box).onclick = () => { S.prices = null; p = { ...p, prices: null }; priceEditor(box, p); };
+    $('#payOn', box).onchange = (e) => { D0.payOn = e.target.checked; draw(); };
     $('#dPct', box).onchange = (e) => { D0.disc = Math.max(0, Math.min(90, parseInt(e.target.value, 10) || 0)); draw(); };
     $('#dUntil', box).onchange = (e) => { D0.discUntil = e.target.value.replace(/-/g, '/'); draw(); };
     $('#dLbl', box).oninput = (e) => { D0.discLabel = e.target.value; };
     $('#psave2', box).onclick = async () => {
       if (P.some((x) => !String(x.n).trim())) return toast('請輸入每個方案的名稱');
-      if (await job('policy', { prices: P.map((x) => ({ n: String(x.n).trim(), m: x.m, p: x.p, t: x.t || 0 })), disc: D0.disc, discUntil: D0.discUntil, discLabel: D0.discLabel.trim() }, '已送出價格與折扣')) { S.prices = null; S.discEd = null; }
+      if (await job('policy', { prices: P.map((x) => ({ n: String(x.n).trim(), m: x.m, p: x.p, t: x.t || 0 })), disc: D0.disc, discUntil: D0.discUntil, discLabel: D0.discLabel.trim(), payOn: D0.payOn }, '已送出收費設定、價格與折扣')) { S.prices = null; S.discEd = null; }
     };
   };
   draw();
@@ -1080,4 +1083,37 @@ async function useBox(el) {
     <div class="scroll-x" style="margin-top:8px"><table class="tbl"><thead><tr><th>日期</th><th style="text-align:right">總請求</th>${kinds.map((k) => `<th style="text-align:right">${USE_N[k]}</th>`).join('')}</tr></thead><tbody>
       ${Object.keys(r.days).sort().reverse().map((dd) => `<tr><td>${esc(dd)}</td><td style="text-align:right">${fmtN(r.days[dd].req || 0)}</td>${kinds.map((k) => `<td style="text-align:right">${fmtN(r.days[dd][k] || 0)}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="9" class="small muted">部署新版轉送站後開始記錄</td></tr>`}</tbody></table></div>
     <div class="small muted" style="margin-top:6px">免費額度以 Cloudflare、LINE、Google 公告為準；用量每分鐘彙總一次。</div>`;
+}
+
+// ───────── 註冊名額（試運作控管試用人數）、候補名單、推薦排行 ─────────
+async function regBox(el, act) {
+  let r;
+  if (!act && S.regL && Date.now() - S.regAt < 30000) r = S.regL;
+  else try { r = await call('regAdmin', act || {}); if (!r.ok) throw new Error(r.err); S.regL = r; S.regAt = Date.now(); } catch (e) { el.innerHTML = `<h2>註冊名額與推廣</h2><div class="small muted">讀取失敗：${esc(e.message)}${/未知|不支援/.test(e.message) ? '（請在管理員 App 重新部署轉送站）' : ''}</div>`; return; }
+  if (!el.isConnected) return;
+  if (act && act.act === 'notify') toast('已通知 ' + (r.sent || 0) + ' 位' + (r.fail ? '，失敗 ' + r.fail + ' 位' : ''));
+  const c = r.cfg; const full = c.max && r.count >= c.max;
+  const fmt = (t) => { if (!t) return ''; const d = new Date(t + 8 * 3600000).toISOString(); return d.slice(5, 10).replace('-', '/') + ' ' + d.slice(11, 16); };
+  const pub = (S.d.app && S.d.app.policy && (S.d.app.policy.pub || S.d.app.policy.dist)) || location.origin + '/';
+  el.innerHTML = `<h2>註冊名額與推廣<span class="r small ${full ? 'up' : 'muted'}">目前 ${r.count}${c.max ? ' / ' + c.max : ''} 位${c.scope === 'trial' ? '（不含已開通會員，全部 ' + r.countAll + ' 位）' : ''}${full ? '・已額滿' : ''}</span></h2>
+    <div class="small muted" style="margin-bottom:8px">試運作時用來控管試用人數：上限 0＝不限制。額滿時可登記候補（之後以 Email 通知開放）或直接不受理。已註冊的會員不受影響。</div>
+    <div class="grid g2" style="gap:8px">
+      <div class="field" style="margin:0"><label>註冊上限（0＝不限）</label><input id="rcMax" type="number" min="0" value="${c.max}"></div>
+      <div class="field" style="margin:0"><label>計算範圍</label><select id="rcScope"><option value="all" ${c.scope === 'all' ? 'selected' : ''}>所有註冊會員</option><option value="trial" ${c.scope === 'trial' ? 'selected' : ''}>只算試用（不含已開通會員）</option></select></div>
+      <div class="field" style="margin:0"><label>額滿時</label><select id="rcMode"><option value="wait" ${c.mode === 'wait' ? 'selected' : ''}>登記候補，開放時 Email 通知</option><option value="reject" ${c.mode === 'reject' ? 'selected' : ''}>不受理新註冊</option></select></div>
+      <div class="field" style="margin:0"><label>額滿提示文字（選填）</label><input id="rcMsg" maxlength="200" value="${esc(c.msg)}" placeholder="目前試用名額已滿"></div></div>
+    <div class="field" style="margin-top:8px"><label>推薦獎勵說明（顯示在會員的「邀請好友」卡，選填）</label><input id="rcNote" maxlength="300" value="${esc(c.refNote)}" placeholder="例：成功推薦 1 位好友註冊，加贈 7 天"></div>
+    <button class="btn sm primary" id="rcSave">儲存設定</button>
+    <h3 style="margin:14px 0 6px">候補名單（${r.waitN} 位待通知）</h3>
+    ${r.waitlist.length ? `<div class="scroll-x"><table class="tbl"><thead><tr><th><input type="checkbox" id="rcAll" style="width:auto"></th><th>登記</th><th>名稱</th><th>Email</th><th>推薦碼</th><th>來源</th><th>狀態</th><th></th></tr></thead><tbody>
+      ${r.waitlist.map((w) => `<tr><td>${w.notified ? '' : `<input type="checkbox" data-rcw="${w.id}" style="width:auto">`}</td><td class="small">${fmt(w.at)}</td><td>${esc(w.name)}</td><td class="small">${esc(w.email)}</td><td>${esc(w.ref || '—')}</td><td class="small">${esc(w.src)}</td>
+        <td class="small">${w.notified ? '<span class="muted">已通知 ' + fmt(w.notified) + '</span>' : '待通知'}</td><td><button class="btn sm" data-rcdel="${w.id}">移除</button></td></tr>`).join('')}</tbody></table></div>
+      <div class="row" style="gap:8px;margin-top:6px"><button class="btn sm primary" id="rcNotify">通知勾選的候補（Email）</button><span class="small muted">建議先調高上限再通知；通知後仍需本人註冊，先註冊先使用。</span></div>` : '<div class="small muted">目前沒有候補。</div>'}
+    <h3 style="margin:14px 0 6px">推薦排行（累計 ${r.refTotal} 位）</h3>
+    ${r.refs.length ? `<table class="tbl"><thead><tr><th>推薦人</th><th style="text-align:right">成功推薦</th><th>最近一次</th></tr></thead><tbody>${r.refs.map((x) => `<tr><td><b>${esc(x.no)}</b> ${esc(x.name || '')}</td><td style="text-align:right">${x.n}</td><td class="small">${fmt(x.last)}</td></tr>`).join('')}</tbody></table>`
+      : '<div class="small muted">尚無推薦紀錄。會員在 App 或網頁「邀請好友」分享專屬連結（' + esc(pub.replace(/\/?$/, '/')) + 'r/會員代號），朋友註冊後會記在這裡；獎勵請在「開通」頁手動加贈天數。</div>'}`;
+  $('#rcSave', el).onclick = () => regBox(el, { act: 'set', max: $('#rcMax', el).value, scope: $('#rcScope', el).value, mode: $('#rcMode', el).value, msg: $('#rcMsg', el).value, refNote: $('#rcNote', el).value }).then(() => toast('✓ 已儲存註冊名額設定'));
+  if ($('#rcAll', el)) $('#rcAll', el).onchange = (e) => $$('[data-rcw]', el).forEach((x) => { x.checked = e.target.checked; });
+  if ($('#rcNotify', el)) $('#rcNotify', el).onclick = () => { const ids = $$('[data-rcw]:checked', el).map((x) => +x.dataset.rcw); if (!ids.length) return toast('請先勾選候補'); regBox(el, { act: 'notify', ids, link: pub.replace(/\/?$/, '/') + 'web' }); };
+  $$('[data-rcdel]', el).forEach((b) => b.onclick = () => regBox(el, { act: 'remove', id: b.dataset.rcdel }));
 }

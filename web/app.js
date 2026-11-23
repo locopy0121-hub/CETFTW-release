@@ -136,7 +136,7 @@ async function loadPolicy(cfg) {
     return { ...DEFAULT_POLICY, ...p, tiers: (p.tiers || []).map((t) => ({ name: t.n, features: t.f, id: t.id || 0, days: t.d == null ? 30 : t.d, color: t.c || 0xFF3B82F6, desc: t.ds || '',
       hidden: t.h != null ? !!t.h : (/^admin$/i.test(t.n || '') || /管理員/.test(t.ds || '')) })),
       plans: Array.isArray(p.plans) && p.plans.length ? p.plans.filter((x) => x.m > 0 && x.p > 0).map((x) => ({ name: x.n, months: x.m, price: x.p, tier: x.t || 0 })) : PLANS_DEFAULT,
-      disc: Math.max(0, Math.min(90, p.disc || 0)), discUntil: p.discUntil || '', discLabel: p.discLabel || '' };
+      disc: Math.max(0, Math.min(90, p.disc || 0)), discUntil: p.discUntil || '', discLabel: p.discLabel || '', payOn: p.pay !== false };
   } catch (e) { return { ...DEFAULT_POLICY }; }
 }
 
@@ -176,6 +176,8 @@ function member() {
         color: t ? t.color : 0xFF3B82F6, exp, left: perm ? null : exp - today, grace, tierId: t && t.id, perm };
     }
   }
+  // 試運作（收費關閉）：沒有授權碼的人不限天數，一律使用試用等級功能
+  if (p.payOn === false) return { status: 'TRIAL', features: p.trialFeatures, name: p.trialName || 'USER', desc: '試運作會員', color: TRIAL_COLOR, left: null, freeRun: true };
   const start = Number((S.me && S.me.trialStart) || 0) || today;
   const trialLeft = Math.max(0, start + p.trialDays - today);
   if (trialLeft > 0) return { status: 'TRIAL', features: p.trialFeatures, name: p.trialName || 'USER', desc: '試用會員', color: TRIAL_COLOR, left: trialLeft };
@@ -187,7 +189,7 @@ function stateLine(m = member()) {
     case 'OPEN': return '全部功能開放';
     case 'MEMBER': return m.perm ? '永久有效' : '到期 ' + dayDate(m.exp) + '（剩 ' + m.left + ' 天）';
     case 'GRACE': return '已於 ' + dayDate(m.exp) + ' 到期，寬限期剩 ' + Math.max(0, m.left + (S.policy.grace || 0)) + ' 天，請盡快續約';
-    case 'TRIAL': return '試用剩 ' + m.left + ' 天（共 ' + S.policy.trialDays + ' 天）';
+    case 'TRIAL': return m.freeRun ? '試運作期間免費使用，不限天數' : '試用剩 ' + m.left + ' 天（共 ' + S.policy.trialDays + ' 天）';
     case 'FREE': return '試用期已結束，進階功能已鎖定';
     default: return '會員已到期，進階功能已鎖定';
   }
@@ -894,7 +896,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"v1.1.398","sha":"71436c3","at":"2026-11-23 07:57"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"79d0288","at":"2026-11-23 08:09"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -1008,7 +1010,7 @@ VIEWS[''] = {
     const has = D.trades().length || D.quotes().length || holdings().length;
     let top = '';
     if (!has) top += `<div class="notice" style="margin-bottom:12px">網頁還沒有資料。請在手機 App「會員與授權 › 會員帳號」開啟「手機⇄網頁資料同步」，或直接在「行情」「交易」頁新增。</div>`;
-    if (m.status === 'GRACE' || m.locked || (m.status === 'MEMBER' && m.left != null && m.left <= S.policy.remind) || (m.status === 'TRIAL' && m.left <= 2))
+    if (m.status === 'GRACE' || m.locked || (m.status === 'MEMBER' && m.left != null && m.left <= S.policy.remind) || (m.status === 'TRIAL' && !m.freeRun && m.left <= 2))
       top += `<div class="notice ${m.locked || m.status === 'GRACE' ? 'err' : ''}" style="margin-bottom:12px">${badge(m)} ${esc(stateLine(m))}　<a href="#/member">${m.status === 'TRIAL' || m.status === 'FREE' ? '升級' : '續約'} ›</a></div>`;
     const nav = kjson('nav', {}), mvc = kjson('mvCost', {});
     const days = Object.keys(nav).sort();
@@ -4498,13 +4500,13 @@ VIEWS.member = {
   render() { return head('會員中心') + '<div id="dyn"></div>'; },
   fill() {
     const m = member(); const p = S.policy; const me = S.me || {};
-    const prog = m.status === 'TRIAL' ? 1 - m.left / Math.max(1, p.trialDays) : m.status === 'MEMBER' && m.left != null && S.code ? 1 - m.left / Math.max(1, (m.exp - S.code.issued)) : null;
+    const prog = m.status === 'TRIAL' && !m.freeRun ? 1 - m.left / Math.max(1, p.trialDays) : m.status === 'MEMBER' && m.left != null && S.code ? 1 - m.left / Math.max(1, (m.exp - S.code.issued)) : null;
     const cols = [];
     if (p.trialDays > 0) cols.push([p.trialName || 'USER', '試用 ' + p.trialDays + ' 天', TRIAL_COLOR, p.trialFeatures, m.status === 'TRIAL']);
     publicTiers(p, m.tierId).forEach((t) => cols.push([t.name, t.desc || '會員', t.color, t.features, (m.status === 'MEMBER' || m.status === 'GRACE') && m.tierId === t.id]));
     cols.push(['到期', '鎖定後', LOCK_COLOR, p.freeFeatures, !!m.locked]);
     const dOn = discActive(p); const base = (() => { const x = p.plans.slice().sort((a, b) => a.months - b.months)[0]; return x ? planPrice(p, x) / x.months : 0; })();
-    const priceHtml = p.plans.length ? `<div class="card" style="margin-top:12px"><h2>訂閱方案${dOn ? `<span class="r" style="color:var(--up);font-size:13px">🎉 ${esc(p.discLabel || '限時優惠')} ${offText(p.disc)}${p.discUntil ? '・至 ' + esc(p.discUntil) : ''}</span>` : ''}</h2>
+    const priceHtml = p.plans.length && p.payOn !== false ? `<div class="card" style="margin-top:12px"><h2>訂閱方案${dOn ? `<span class="r" style="color:var(--up);font-size:13px">🎉 ${esc(p.discLabel || '限時優惠')} ${offText(p.disc)}${p.discUntil ? '・至 ' + esc(p.discUntil) : ''}</span>` : ''}</h2>
       <div class="grid g4" style="gap:10px">${p.plans.map((x) => { const pr = planPrice(p, x); const save = x.months > 1 && base > 0 ? Math.max(0, Math.round((1 - pr / (base * x.months)) * 100)) : 0;
         return `<div class="tile" style="text-align:center;cursor:pointer" data-plan="${esc(x.name)}"><div style="font-weight:700">${esc(x.name)}${save ? ` <span class="small" style="color:var(--up)">省 ${save}%</span>` : ''}</div>
           ${pr !== x.price ? `<div class="small muted" style="text-decoration:line-through;margin-top:4px">NT$${x.price}</div>` : '<div style="height:4px"></div>'}<div class="num" style="font-size:24px;font-weight:800;color:${pr !== x.price ? 'var(--up)' : 'var(--text)'}">NT$${pr}</div>
@@ -4517,7 +4519,7 @@ VIEWS.member = {
         ${termHtml(m, me)}
         ${S.code ? `<div class="small muted" style="margin-top:8px">授權編號 ${S.code.idText}${S.code.rel ? '　（網頁以簽發日起算；實際以手機啟用日為準）' : ''}</div>` : ''}
         ${p.notice ? `<div class="notice" style="margin-top:10px">📢 ${esc(p.notice)}</div>` : ''}
-        <div class="row wrap" style="margin-top:12px"><button class="btn primary" id="apBtn">${m.status === 'MEMBER' ? '升級／變更方案' : m.status === 'EXPIRED' || m.status === 'GRACE' ? '申請續約' : '申請開通會員'}</button><span class="small muted">也可以在手機 App「會員與授權」申請；開通後網頁自動套用。</span></div>
+        ${p.payOn === false ? '<div class="small text2" style="margin-top:12px">🎉 目前為試運作期間，免費使用；正式收費前會另行公告。</div>' : ''}<div class="row wrap ${p.payOn === false ? 'hide' : ''}" style="margin-top:12px"><button class="btn primary" id="apBtn">${m.status === 'MEMBER' ? '升級／變更方案' : m.status === 'EXPIRED' || m.status === 'GRACE' ? '申請續約' : '申請開通會員'}</button><span class="small muted">也可以在手機 App「會員與授權」申請；開通後網頁自動套用。</span></div>
         ${lineOaId() ? `<div class="tile" style="margin-top:12px"><div class="row" style="gap:12px;align-items:center"><img class="line-qr" src="https://qr-official.line.me/sid/L/${encodeURIComponent(lineOaId().slice(1))}.png" alt="LINE QR Code" data-linejoin style="cursor:pointer" onerror="this.remove()">
           <div class="sp"><b>LINE 官方帳號</b><div class="small text2" style="margin-top:2px">開通、續約或方案問題可直接在 LINE 詢問管理員，也能接收每日盤後報告。</div><div style="margin-top:6px">${lineJoinHtml()}</div></div></div></div>` : ''}
         ${(me.requests || []).length ? `<div class="list" style="margin-top:10px">${me.requests.slice().reverse().map((r) => `<div class="it" style="cursor:default"><div class="l"><div class="t1">${esc({ new: '開通', renew: '續約', change: '變更方案' }[r.kind] || r.kind)} ${reqStateTag(r)}</div><div class="t2">${esc(r.at)}　${esc(String(r.message || '').replace(/^［網頁］\S*\s?/, ''))}</div></div></div>`).join('')}</div>` : ''}</div>
@@ -4538,6 +4540,7 @@ VIEWS.member = {
         <tbody>${FEATURES.map(([k, t]) => `<tr><td>${esc(t)}</td>${cols.map(([, , c, mask]) => `<td style="color:${mask & F[k] ? argb(c) : 'var(--border)'};font-weight:700">${mask & F[k] ? '✓' : '—'}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
         <div class="small muted" style="margin-top:6px">自選、持股記帳、個股行情等基本功能各等級皆可使用。</div></div>`;
     $('#pfE').onclick = () => onboarding(false);
+    if (me.no) { $('#pfE').closest('.card').insertAdjacentHTML('afterend', promoHtml(me)); promoBind(me); }
     if (lineOaId()) { $('#pfE').closest('.card').insertAdjacentHTML('beforeend', '<div id="lineBind"></div>'); lineBindFill(); }
     $('#e2e').onclick = () => e2eeModal();
     $('#sAuto').onchange = (e) => { S.pref.syncAuto = e.target.checked; savePref(); toast(e.target.checked ? '已改為自動同步' : '已改為手動同步：按「立即同步」才會上傳／下載'); renderSync(); };
@@ -6249,11 +6252,13 @@ async function qrLogin() {
 async function onCredential(resp, reg) {
   $('#lerr').textContent = reg ? '註冊中…' : '登入中…';
   try {
-    const r = await api('login', { idToken: resp.credential, web: true, version: 'web', trialStart: dayNum(), register: !!reg });
+    const r = await api('login', { idToken: resp.credential, web: true, version: 'web', trialStart: dayNum(), register: !!reg, ref: store.get('ref', '') });
+    store.del('ref');
     if (!r.session) throw new Error('伺服器未回傳登入資訊（請管理員更新雲端伺服器程式為第 4 版）');
     await loginWith(r, reg);
   } catch (e) {
     if (e.data && e.data.pendingDelete) { $('#lerr').textContent = ''; return restoreModal(e.data); }
+    if (e.data && e.data.full) { $('#lerr').textContent = ''; return dialog(e.data.waitlisted ? '已登記候補' : '名額已滿', `<div class="small text2" style="line-height:1.7">${esc(e.message)}</div>`, [['', '確定', 'primary']]); }
     $('#lerr').textContent = e.message === '裝置碼錯誤' ? '雲端會員伺服器版本過舊（需第 4 版），請管理員更新 Apps Script 程式碼後重新部署。' : e.message; }
 }
 /** 取得網頁工作階段後（Google 登入或 App 掃描登入）：保存並進入 */
@@ -6276,12 +6281,13 @@ async function loginWith(r, reg) {
 /** 會員中心「使用期限」：等級、起算日、到期日、剩餘天數 */
 function termHtml(m, me) {
   const c = S.code; const rows = [];
-  if (m.status === 'TRIAL') { const st = Number(me.trialStart || 0); rows.push(['方案', (m.name || '試用') + '（試用）'], ['開始日', st ? dayDate(st) : '—'], ['到期日', dayDate(dayNum() + m.left)], ['剩餘', m.left + ' 天']); }
+  if (m.status === 'TRIAL' && m.freeRun) rows.push(['方案', (m.name || 'USER') + '（試運作）'], ['費用', '免費'], ['到期日', '不限'], ['剩餘', '—']);
+  else if (m.status === 'TRIAL') { const st = Number(me.trialStart || 0); rows.push(['方案', (m.name || '試用') + '（試用）'], ['開始日', st ? dayDate(st) : '—'], ['到期日', dayDate(dayNum() + m.left)], ['剩餘', m.left + ' 天']); }
   else if (m.status === 'MEMBER' || m.status === 'GRACE') {
     rows.push(['方案', m.name], ['開始日', c ? dayDate(c.issued) : '—'], ['到期日', m.perm ? '永久有效' : dayDate(m.exp)], ['剩餘', m.perm ? '—' : m.grace ? '已過期（寬限 ' + Math.max(0, (S.policy.grace || 0) + m.left) + ' 天）' : m.left + ' 天']);
   } else if (m.status === 'EXPIRED' || m.status === 'FREE') rows.push(['方案', m.desc], ['到期日', c && c.expiry !== 0xFFFF ? dayDate(c.rel ? c.issued + c.expiry : c.expiry) : '—'], ['剩餘', '0 天']);
   if (!rows.length) return '';
-  const warn = (m.status === 'MEMBER' && !m.perm && m.left <= (S.policy.remind || 7)) || m.status === 'GRACE' || m.status === 'TRIAL' && m.left <= 3;
+  const warn = (m.status === 'MEMBER' && !m.perm && m.left <= (S.policy.remind || 7)) || m.status === 'GRACE' || m.status === 'TRIAL' && !m.freeRun && m.left <= 3;
   return `<div class="tile" style="margin-top:12px"><div class="row" style="justify-content:space-between"><b>使用期限</b>${warn ? '<span class="tag up">即將到期，請記得續約</span>' : ''}</div>
     <div class="grid g4" style="gap:8px;margin-top:6px">${rows.map(([k, v]) => `<div><div class="small muted">${k}</div><div class="num" style="font-weight:600">${esc(v)}</div></div>`).join('')}</div></div>`;
 }
@@ -6404,7 +6410,125 @@ async function start(meResp) {
   S.timers.push(setInterval(async () => { if (!autoSync() || document.hidden || S.syncing) return; try { if ((await pull()) === 'applied' && cur) route(); } catch (e) {} }, 60000));
   S.timers.push(setInterval(async () => { try { const m = await api('me', { session: S.session, web: true }); if (m.kicked) logout('你的帳號已在其他瀏覽器登入，這裡已自動登出'); else { S.me = m; S.code = m.code ? await verifyCode(m.code) : null; } } catch (e) {} }, 600000));
 }
+
+// ───────── 社群推廣：推薦連結（/r/會員代號）、分享按鈕、推廣圖卡 ─────────
+function promoBase() { return ((S.policy && S.policy.pub) || location.origin + '/').replace(/\/?$/, '/'); }
+function promoLink(no) { return no ? promoBase() + 'r/' + no : promoBase(); }
+const PROMO_TEXT = '我在用「台美股資產」管理台股、美股與 ETF：即時行情、持股損益、股息日曆、K 線與 AI 個股體檢，手機和網頁同步。';
+function promoHtml(me) {
+  const link = promoLink(me.no); const t = encodeURIComponent(PROMO_TEXT); const u = encodeURIComponent(link);
+  return `<div class="card"><h2>邀請好友<span class="r small muted">已成功推薦 <b style="color:var(--primary)">${me.refCount || 0}</b> 位</span></h2>
+    ${me.refNote ? `<div class="notice" style="margin-bottom:8px">🎁 ${esc(me.refNote)}</div>` : ''}
+    <div class="small text2">分享你的專屬連結，朋友透過連結註冊就會記在你的推薦名單（推薦碼＝你的會員代號 <b>${esc(me.no || '')}</b>）。</div>
+    <div class="row" style="gap:6px;margin-top:8px"><input id="prLink" value="${esc(link)}" readonly style="flex:1"><button class="btn sm" id="prCopy">複製</button></div>
+    <div class="row wrap" style="gap:6px;margin-top:8px">
+      <a class="btn sm" target="_blank" rel="noopener" href="https://social-plugins.line.me/lineit/share?url=${u}&text=${t}">LINE</a>
+      <a class="btn sm" target="_blank" rel="noopener" href="https://www.facebook.com/sharer/sharer.php?u=${u}">Facebook</a>
+      <a class="btn sm" target="_blank" rel="noopener" href="https://www.threads.net/intent/post?text=${t}%20${u}">Threads</a>
+      <a class="btn sm" target="_blank" rel="noopener" href="https://twitter.com/intent/tweet?text=${t}&url=${u}">X</a>
+      ${navigator.share ? '<button class="btn sm" id="prShare">更多…</button>' : ''}
+      <button class="btn sm primary" id="prCard">製作推廣圖卡</button></div></div>`;
+}
+function promoBind(me) {
+  const link = promoLink(me.no);
+  if ($('#prCopy')) $('#prCopy').onclick = () => { navigator.clipboard.writeText(PROMO_TEXT + '\n' + link).then(() => toast('已複製推廣文字與連結'), () => { $('#prLink').select(); toast('請長按複製'); }); };
+  if ($('#prShare')) $('#prShare').onclick = () => navigator.share({ title: '台美股資產', text: PROMO_TEXT, url: link }).catch(() => {});
+  if ($('#prCard')) $('#prCard').onclick = () => promoCardModal(link, me.no || '');
+}
+/** 推廣圖卡：1080×1350（IG／Threads 直式）或 1080×1080，三種配色，可改標題與重點，含 QR Code 與推薦碼 */
+const PROMO_THEMES = [
+  { n: '深夜藍', bg: ['#0B1220', '#1E3A8A'], fg: '#F8FAFC', sub: '#BFD3F5', acc: '#60A5FA', box: 'rgba(255,255,255,.08)' },
+  { n: '曜金', bg: ['#14100A', '#3A2A0C'], fg: '#FFF8EC', sub: '#E8D6B0', acc: '#F5B942', box: 'rgba(255,255,255,.07)' },
+  { n: '清新白', bg: ['#FFFFFF', '#E6EEFF'], fg: '#0F172A', sub: '#475569', acc: '#2563EB', box: 'rgba(37,99,235,.07)' },
+];
+const PROMO_LINES = ['即時行情與自選清單', '持股損益、交易紀錄、已實現損益', '股息日曆與預估入帳', 'K 線分析、進場參考與 AI 個股體檢', '手機與網頁資料同步'];
+async function promoQr(text) {
+  if (!window.qrcode) await new Promise((ok, no) => { const sc = document.createElement('script'); sc.src = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js'; sc.onload = ok; sc.onerror = no; document.head.appendChild(sc); });
+  const q = window.qrcode(0, 'M'); q.addData(text); q.make(); return q;
+}
+function promoWrap(ctx, text, maxW) {
+  const out = []; for (const para of String(text).split('\n')) { let line = ''; for (const ch of para) { if (ctx.measureText(line + ch).width > maxW && line) { out.push(line); line = ch; } else line += ch; } out.push(line); }
+  return out;
+}
+async function promoDraw(out, o) {
+  // 先畫在離屏畫布，只有最後一次繪製會貼到畫面上（避免快速切換時互相覆蓋）
+  const tok = (out._tok = (out._tok || 0) + 1);
+  const W = 1080, H = o.square ? 1080 : 1350; const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const c = cv.getContext('2d'); const th = PROMO_THEMES[o.theme] || PROMO_THEMES[0];
+  const F = '"PingFang TC","Noto Sans TC","Microsoft JhengHei","Heiti TC",sans-serif';
+  const g = c.createLinearGradient(0, 0, W, H); g.addColorStop(0, th.bg[0]); g.addColorStop(1, th.bg[1]); c.fillStyle = g; c.fillRect(0, 0, W, H);
+  // 裝飾：右上光暈與 K 線（只在標題上方的品牌列右側）
+  const rg = c.createRadialGradient(W - 120, 140, 10, W - 120, 140, 420); rg.addColorStop(0, th.acc + '55'); rg.addColorStop(1, th.acc + '00'); c.fillStyle = rg; c.fillRect(0, 0, W, H);
+  c.globalAlpha = 0.22; [[0.66, 0.55, 0.85], [0.72, 0.4, 0.75], [0.78, 0.48, 0.62], [0.84, 0.28, 0.55], [0.9, 0.22, 0.42], [0.96, 0.08, 0.3]].forEach(([x, top, bot], i) => {
+    c.fillStyle = i % 3 === 2 ? th.sub : th.acc; const X = W * x, T = 40 + top * 170, B = 40 + bot * 170; c.fillRect(X - 3, T - 22, 6, B - T + 44); c.fillRect(X - 16, T, 32, Math.max(10, B - T));
+  }); c.globalAlpha = 1;
+  const P = 84; let y = 110;
+  // 品牌
+  c.fillStyle = th.acc; c.beginPath(); c.arc(P + 34, y, 34, 0, Math.PI * 2); c.fill();
+  c.fillStyle = '#fff'; c.font = `800 34px ${F}`; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('台', P + 34, y + 2); c.textAlign = 'left';
+  c.fillStyle = th.fg; c.font = `700 40px ${F}`; c.fillText('台美股資產', P + 84, y + 2);
+  if (o.freeRun) { c.font = `700 28px ${F}`; const t = '試運作・免費使用'; const tw = c.measureText(t).width + 36; c.fillStyle = th.acc; c.beginPath(); c.roundRect(W - P - tw, y + 46, tw, 50, 25); c.fill(); c.fillStyle = '#fff'; c.fillText(t, W - P - tw + 18, y + 72); }
+  // 版面：底部區塊（QR、行動呼籲）固定在下方，重點區塊依剩餘高度調整
+  const qs = o.square ? 220 : 250, bottomTop = H - 70 - qs - 18;
+  // 標題
+  y = o.square ? 210 : 250; c.textBaseline = 'alphabetic'; c.fillStyle = th.fg; const tf = o.square ? 74 : 86; c.font = `900 ${tf}px ${F}`;
+  for (const ln of promoWrap(c, o.title, W - P * 2).slice(0, 3)) { y += Math.round(tf * 1.12); c.fillText(ln, P, y); }
+  if (o.sub) { c.fillStyle = th.sub; c.font = `500 34px ${F}`; for (const ln of promoWrap(c, o.sub, W - P * 2).slice(0, 2)) { y += 52; c.fillText(ln, P, y); } }
+  // 重點
+  y += 40; const lines = o.lines.filter(Boolean).slice(0, o.square ? 4 : 5);
+  if (lines.length) {
+    const room = bottomTop - 30 - y - 30; const rowH = Math.max(46, Math.min(o.square ? 62 : 74, Math.floor(room / lines.length))); const fs = Math.min(38, rowH - 24);
+    const shown = lines.slice(0, Math.max(1, Math.floor(room / rowH)));
+    c.fillStyle = th.box; c.beginPath(); c.roundRect(P - 20, y, W - (P - 20) * 2, shown.length * rowH + 30, 28); c.fill();
+    c.font = `600 ${fs}px ${F}`;
+    shown.forEach((t, i) => { const cy = y + 15 + i * rowH + rowH / 2; c.fillStyle = th.acc; c.beginPath(); c.arc(P + 14, cy, 10, 0, Math.PI * 2); c.fill(); c.fillStyle = th.fg; c.textBaseline = 'middle'; c.fillText(promoWrap(c, t, W - P * 2 - 80)[0], P + 46, cy + 1); c.textBaseline = 'alphabetic'; });
+  }
+  // QR 與推薦碼
+  const qx = W - P - qs, qy = bottomTop + 18;
+  if (o.qr) {
+    c.fillStyle = '#fff'; c.beginPath(); c.roundRect(qx - 18, qy - 18, qs + 36, qs + 36, 24); c.fill();
+    try { const q = await promoQr(o.link); const n = q.getModuleCount(); const cell = qs / n; c.fillStyle = '#0F172A';
+      for (let r = 0; r < n; r++) for (let k = 0; k < n; k++) if (q.isDark(r, k)) c.fillRect(qx + k * cell, qy + r * cell, Math.ceil(cell), Math.ceil(cell)); }
+    catch (e) { c.fillStyle = '#64748B'; c.font = `500 26px ${F}`; c.textAlign = 'center'; c.fillText('掃描連結', qx + qs / 2, qy + qs / 2); c.textAlign = 'left'; }
+  }
+  const tx = (o.qr ? qx - 50 : W - P) - P;
+  c.fillStyle = th.fg; c.font = `800 46px ${F}`; c.fillText(promoWrap(c, o.cta || '立即免費試用', tx)[0], P, qy + 46);
+  c.fillStyle = th.sub; c.font = `500 30px ${F}`;
+  const url = o.link.replace(/^https?:\/\//, ''); promoWrap(c, url, tx).slice(0, 2).forEach((ln, i) => c.fillText(ln, P, qy + 108 + i * 40));
+  if (o.code) { c.fillStyle = th.acc; c.font = `700 36px ${F}`; c.fillText('推薦碼 ' + o.code, P, qy + qs - 10); }
+  c.fillStyle = th.sub; c.globalAlpha = 0.8; c.font = `400 22px ${F}`; c.fillText('資訊與記帳工具，內容不構成投資建議', P, H - 34); c.globalAlpha = 1;
+  if (tok !== out._tok) return;
+  out.width = W; out.height = H; out.getContext('2d').drawImage(cv, 0, 0);
+}
+async function promoCardModal(link, code) {
+  const o = { theme: 0, square: false, qr: true, title: '台股・美股・ETF\n一個 App 管好', sub: '行情、記帳、股息、分析一次搞定', lines: PROMO_LINES.slice(), link, code, cta: S.policy.payOn === false ? '試運作中，免費使用' : '立即免費試用', freeRun: S.policy.payOn === false };
+  let cv;
+  await dialog('推廣圖卡', `<div class="row wrap" style="gap:6px">${PROMO_THEMES.map((t, i) => `<button class="btn sm ${i ? '' : 'primary'}" data-pth="${i}">${t.n}</button>`).join('')}
+      <button class="btn sm" id="pSq">改為方形 1080×1080</button><label class="row small" style="gap:4px;cursor:pointer"><input type="checkbox" id="pQr" checked style="width:auto"> QR Code</label></div>
+    <div class="field" style="margin-top:8px"><label>標題（可換行）</label><textarea id="pT" rows="2" maxlength="40">${esc(o.title)}</textarea></div>
+    <div class="field"><label>副標</label><input id="pS" maxlength="40" value="${esc(o.sub)}"></div>
+    <div class="field"><label>重點（每行一項，最多 5 項）</label><textarea id="pL" rows="5" maxlength="200">${esc(o.lines.join('\n'))}</textarea></div>
+    <div class="field"><label>行動呼籲</label><input id="pC" maxlength="20" value="${esc(o.cta)}"></div>
+    <canvas id="pCv" style="width:100%;max-width:360px;display:block;margin:8px auto;border-radius:12px;box-shadow:0 4px 18px #0003"></canvas>
+    <div class="row wrap" style="gap:6px;justify-content:center"><button class="btn primary" id="pDl">下載圖片</button>${navigator.canShare ? '<button class="btn" id="pSh">分享圖片</button>' : ''}</div>`,
+    [['', '關閉']], (root) => {
+      cv = $('#pCv', root); const redraw = () => promoDraw(cv, o).catch((e) => toast('繪製失敗：' + e.message));
+      $$('[data-pth]', root).forEach((b) => b.onclick = () => { o.theme = +b.dataset.pth; $$('[data-pth]', root).forEach((x) => x.classList.toggle('primary', x === b)); redraw(); });
+      $('#pSq', root).onclick = (e) => { o.square = !o.square; e.target.textContent = o.square ? '改為直式 1080×1350' : '改為方形 1080×1080'; redraw(); };
+      $('#pQr', root).onchange = (e) => { o.qr = e.target.checked; redraw(); };
+      $('#pT', root).oninput = (e) => { o.title = e.target.value; redraw(); }; $('#pS', root).oninput = (e) => { o.sub = e.target.value; redraw(); };
+      $('#pL', root).oninput = (e) => { o.lines = e.target.value.split('\n').map((x) => x.trim()); redraw(); }; $('#pC', root).oninput = (e) => { o.cta = e.target.value; redraw(); };
+      const blob = () => new Promise((ok) => cv.toBlob(ok, 'image/png'));
+      $('#pDl', root).onclick = async () => { const a = document.createElement('a'); a.href = URL.createObjectURL(await blob()); a.download = '台美股資產-推廣圖卡' + (code ? '-' + code : '') + '.png'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 3000); };
+      if ($('#pSh', root)) $('#pSh', root).onclick = async () => { const f = new File([await blob()], '台美股資產推廣.png', { type: 'image/png' });
+        if (navigator.canShare({ files: [f] })) navigator.share({ files: [f], text: PROMO_TEXT + '\n' + link }).catch(() => {}); else toast('這個瀏覽器不支援分享圖片，請改用下載'); };
+      redraw(); return null;
+    });
+}
+
 async function boot() {
+  // 推薦連結 /r/代號 → ?ref=代號：記住推薦碼，註冊時送出
+  try { const rf = new URLSearchParams(location.search).get('ref'); if (rf && /^[A-Za-z0-9]{3,12}$/.test(rf)) store.set('ref', rf.toUpperCase()); } catch (e) {}
   applyLook();
   try { S.cfg = await (await fetch('/api/cfg')).json(); } catch (e) { S.cfg = { policy: '', pubkey: '' }; }
   S.policy = await loadPolicy(S.cfg);
