@@ -1084,7 +1084,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"v1.1.416","sha":"01bc29c","at":"2026-11-25 15:13"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"5f04e27","at":"2026-11-25 15:28"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -4580,7 +4580,7 @@ async function entryAdvice(sym) {
   return { level, label, tip, total, score: Math.round((total + 2) / 4 * 100), confidence, ratio, src: src.slice().sort((a, b2) => Math.abs(b2.score * b2.share) - Math.abs(a.score * a.share)),
     pros: sorted.filter((s) => s.score >= 0.4).slice(0, 4), cons: sorted.slice().reverse().filter((s) => s.score <= -0.4).slice(0, 4), guards, atrPct,
     stop: Math.min(px0 - atr14, m20 && m20 < px0 ? Math.max(m20 - atr14 * 0.5, px0 - atr14 * 3) : px0 - atr14 * 2),
-    plan: (() => { try { const kr = klineAnalyze(b); return kr && kr.plan; } catch (e) { return null; } })(), px: px0 };
+    plan: (() => { try { const kr = klineAnalyze(b); return kr && (kr.longPlan || kr.plan); } catch (e) { return null; } })(), px: px0 };
 }
 /**
  * 進場評估總結（與 App TradeDecision 同算法）：條件符合（level ≥ 1 且現價風報比 ≥ 1.5）／等待回測（附風報比 1:2 參考價＝(目標＋2×停損)÷3）／條件未符合（附重新評估價）。
@@ -4611,8 +4611,21 @@ function tdCardHtml(sym, a) {
   if (t.state !== 'NOT' && t.stop != null) cells.push(['參考停損', fmtPrice(t.stop)]);
   if (t.state !== 'NOT' && t.target != null) cells.push(['參考目標', fmtPrice(t.target)]);
   if (t.rr != null) cells.push(['現價風報比', '1:' + t.rr.toFixed(1)]);
+  // 試算配置（醒目標示）：每檔預計投入 × 試算比例，依現價換算股數（台股另列張數＋零股）
+  const budget = +(S.pref.budget || 0); const price = (S.q[sym] || {}).price || a.px; const us = isUs(sym); const fx = us ? usdTwd() : 1;
+  const alloc = (px) => { if (!(budget > 0) || !(px > 0) || !(t.ratio > 0)) return null; const sh = Math.floor(budget * t.ratio / 100 / (px * fx) + 1e-9); const cost = sh * px * fx; return { sh, lots: us ? 0 : Math.floor(sh / 1000), odd: us ? sh : sh % 1000, cost, pct: cost / budget * 100 }; };
+  const shTxt = (x) => fmt(x.sh, 0) + ' 股' + (!us && x.lots > 0 ? '（' + x.lots + ' 張' + (x.odd > 0 ? '＋零股 ' + x.odd + ' 股' : '') + '）' : '');
+  const now = t.state === 'NOT' ? null : alloc(price); const atRef = t.ref != null && t.state !== 'NOT' ? alloc(t.ref) : null;
+  const allocHtml = `<div style="margin-top:8px;padding:12px;border-radius:12px;background:${col}22">
+      <div class="row between" style="align-items:center"><b>試算配置</b><span style="font-size:22px;font-weight:900;color:${col}">${t.state === 'NOT' ? 0 : t.ratio}%</span></div>
+      ${!(budget > 0) ? '<div class="small muted">設定每檔預計投入金額，即可依目前價格換算可配置的股數與比例。</div>'
+        : t.state === 'NOT' ? `<div style="font-weight:700;color:${col}">條件未符合：試算 0%，暫不配置</div>`
+        : now && now.sh > 0 ? `<div style="font-size:20px;font-weight:900;color:${col}">可配置 ${shTxt(now)}</div><div class="small">以現價 ${fmtPrice(price)} 計約 NT$${fmt(now.cost, 0)}，占預計投入 ${now.pct.toFixed(1)}%（預計投入 NT$${fmt(budget, 0)}，其餘 ${(100 - now.pct).toFixed(1)}% 保留）</div>`
+        : `<div style="font-weight:700;color:${col}">試算金額不足 1 股</div>`}
+      ${atRef && atRef.sh > 0 ? `<div class="small" style="margin-top:4px;font-weight:700;color:#f2b544">回測到參考價 ${fmtPrice(t.ref)} 時：可配置 ${shTxt(atRef)}，約 NT$${fmt(atRef.cost, 0)}（${atRef.pct.toFixed(1)}%）</div>` : ''}
+      <div class="row" style="gap:6px;margin-top:6px"><input id="tdBudget" type="number" min="0" step="1000" placeholder="每檔預計投入（台幣）" value="${budget > 0 ? budget : ''}" style="max-width:200px"><button class="btn sm" id="tdBudgetS">儲存</button></div></div>`;
   return `<div class="card"><h2>進場評估總結<span class="r"><span class="tag" style="background:${col};color:#fff">${t.label}</span></span></h2>
-    <div class="small">${esc(t.note)}</div>
+    <div class="small">${esc(t.note)}</div>${allocHtml}
     <div class="grid g3" style="margin-top:8px;gap:8px">${cells.map(([k, v]) => `<div class="tile"><div class="small muted">${k}</div><div class="num" style="font-weight:700">${v}</div></div>`).join('')}</div>
     <details style="margin-top:8px"><summary class="small muted" style="cursor:pointer">評估依據</summary><div class="small text2" style="margin-top:4px">進場評估：${esc(a.label)}（評分 ${a.score}、信心 ${a.confidence}%）${a.plan ? '；K 線操作計畫：' + esc(a.plan.title) : ''}<br>條件符合：評估偏多且現價風報比 ≥ 1.5；等待回測：方向未轉弱但風報比不足，參考價＝(目標＋2×停損)÷3，在此價位風報比為 1:2；條件未符合：評估轉弱，站回重新評估價後再看。</div></details>
     <div class="small muted" style="margin-top:6px">依規則計算的分析成果，不構成投資建議；投資有風險，請自行評估並自負盈虧。</div></div>`;
@@ -4656,6 +4669,7 @@ async function advCard(el, sym) {
     <details style="margin-top:8px"><summary class="small muted" style="cursor:pointer">全部指標與權重</summary><table class="tbl" style="margin-top:6px"><thead><tr><th>指標</th><th>類別</th><th>分數</th><th>影響</th><th>說明</th></tr></thead><tbody>
       ${a.src.map((s) => `<tr><td>${esc(s.name)}</td><td class="small">${esc(s.group)}</td><td class="num ${cls(s.score)}">${s.score > 0 ? '+' : ''}${s.score.toFixed(1)}</td><td class="num">${(s.share * 100).toFixed(0)}%</td><td class="small text2" style="text-align:left">${s.note}</td></tr>`).join('')}</tbody></table></details>
     <div class="small muted" style="margin-top:6px">每項指標換算成 −2～+2 再加權（單項上限 18%），信心度看各指標方向是否一致；僅為分析成果，不構成投資建議；投資有風險，請自行評估並自負盈虧。</div></div>`;
+  const tb = $('#tdBudgetS', el); if (tb) tb.onclick = () => { S.pref.budget = Math.max(0, +($('#tdBudget', el).value || 0)); savePref(); advCard(el, sym); };
 }
 
 // ───────── 指令面板（Ctrl＋K）：跳頁、找個股、常用動作 ─────────
@@ -5739,7 +5753,11 @@ function klineAnalyze(cs, forward = 5) {
   const dir = score >= 2.2 ? 2 : score >= 0.8 ? 1 : score <= -2.2 ? -2 : score <= -0.8 ? -1 : 0;
   const strength = Math.max(3, Math.min(97, Math.round(50 + score * 14)));
   const plan = kaPlan(cur, dir, latest, x);
-  return { cs, dir, strength, score, latest, recent, x, plan, stats, forward, reasons, entry: kaEntry(dir, plan, x, latest, last) };
+  // 兩套計畫：不論目前方向都算出做多與做空（與 App longPlan／shortPlan 同算法）
+  const lp0 = kaPlan(cur, 1, latest, x), sp0 = kaPlan(cur, -1, latest, x);
+  const longPlan = lp0 && { ...lp0, title: dir > 0 ? '做多計畫（順勢，偏多操作參考）' : dir < 0 ? '做多計畫（逆勢，等止跌再分批）' : '做多計畫（方向未明，宜小量）' };
+  const shortPlan = sp0 && { ...sp0, title: dir < 0 ? '做空計畫（持股減碼／防守參考）' : '做空計畫（逆勢，僅供防守參考）' };
+  return { cs, dir, strength, score, latest, recent, x, plan, longPlan, shortPlan, stats, forward, reasons, entry: kaEntry(dir, plan, x, latest, last) };
 }
 /** 週 K：由日 K 合併（週一為一週起點） */
 function weeklyBars(b) {
@@ -6306,14 +6324,22 @@ function cpOv(id, title, bull, start, entry, stop, target, segs = [], marks = []
     prices: [entry, stop, target].concat(segs.flatMap((s) => [s.v1, s.v2]), marks.map((m) => m.v), box ? [box.lo, box.hi] : []) };
 }
 const KS_SIGID = (s) => 'ks:' + s.st + (s.bull ? '+' : '-');
-/** 可畫在圖上的交易計畫：經典型態＋K 棒策略訊號＋K 線操作計畫＋支撐壓力 */
+/** 交易計畫方向（S.pref.planSide：long 做多（預設）／short 做空／auto 依訊號），與 App planSide 相同 */
+function kaSide() { return S.pref.planSide || 'long'; }
+function kaPick(r) { const sd = kaSide(); return sd === 'short' ? (r.shortPlan || r.plan) : sd === 'auto' ? (r.plan || r.longPlan) : (r.longPlan || r.plan); }
+function kaSideHtml() {
+  const sd = kaSide(); const b = (v, t) => `<button class="${sd === v ? 'on' : ''}" data-ps="${v}">${t}</button>`;
+  return `<div class="seg" style="margin-top:10px">${b('long', '做多計畫')}${b('short', '做空計畫')}${b('auto', '依訊號')}</div>`;
+}
+document.addEventListener('click', (e) => { const b = e.target.closest('[data-ps]'); if (!b) return; S.pref.planSide = b.dataset.ps; savePref(); if (S.kaFocus) S.kaFocus = {}; route(); });
+/** 可畫在圖上的交易計畫：經典型態＋K 棒策略訊號＋K 線操作計畫＋支撐壓力（依做多／做空篩選） */
 function kaOverlays(r, tick) {
   const n = r.cs.length; const out = (r.pats || []).map((p) => cpOv(p.id, p.name + '・' + CP_ST[p.state], p.bull, p.at, p.entry, p.stop, p.target, p.segs, p.marks, p.box));
   (r.sigs || []).forEach((s) => out.push(cpOv(KS_SIGID(s), KS_ST[s.st] + '・' + KS_STA[s.status], s.bull, Math.max(0, Math.min(n - 1, n - 1 - s.age)), s.entry, s.sl, s.tp1)));
-  const p = r.plan; if (p) { const e = (p.e0 + p.e1) / 2; const ok = p.bull ? p.stop < e && p.tp1 > e : p.stop > e && p.tp1 < e;
+  const p = kaPick(r); if (p) { const e = (p.e0 + p.e1) / 2; const ok = p.bull ? p.stop < e && p.tp1 > e : p.stop > e && p.tp1 < e;
     if (ok) out.push(cpOv('plan', 'K 線操作計畫・' + p.title, p.bull, n - 1, e, p.stop, p.tp1, [{ i1: Math.max(0, n - 20), v1: r.x.support, i2: n - 1, v2: r.x.support, kind: 'L', label: '支撐' }, { i1: Math.max(0, n - 20), v1: r.x.resistance, i2: n - 1, v2: r.x.resistance, kind: 'L', label: '壓力' }])); }
   const sp = cpSimplePlan(r.cs, tick); if (sp) out.push(sp);
-  return out;
+  const sd = kaSide(); return sd === 'auto' ? out : out.filter((o) => !!o.bull === (sd === 'long'));
 }
 /** 目前要畫的計畫：使用者點選的優先，否則取已突破的型態 → 策略訊號 → 成形中的型態 → 操作計畫 */
 function kaFocus(sym, r, all) {
@@ -6321,10 +6347,10 @@ function kaFocus(sym, r, all) {
   if (id === 'off') return null;
   if (id) { const o = all.find((x) => x.id === id); if (o) return o; }
   const pats = r.pats || []; const pick = (pid) => all.find((x) => x.id === pid);
-  const pb = pats.find((p) => p.state !== 'F'); if (pb) return pick(pb.id);
-  if ((r.sigs || []).length) return pick(KS_SIGID(r.sigs[0]));
-  if (pats.length) return pick(pats[0].id);
-  return pick('plan') || all[0] || null;
+  // 只在符合目前做多／做空選擇的計畫中挑選（all 已依方向篩選）
+  const pb = pats.filter((p) => p.state !== 'F').map((p) => pick(p.id)).find(Boolean); if (pb) return pb;
+  const sg = (r.sigs || []).map((s2) => pick(KS_SIGID(s2))).find(Boolean); if (sg) return sg;
+  return pick('plan') || pats.map((p) => pick(p.id)).find(Boolean) || all[0] || null;
 }
 /** 圖上交易計畫：獲利區（綠）、風險區（紅）、進場／停損／目標線、型態線段與標記；回傳右側標籤 */
 const PLAN_C = { profit: '#2EBD85', risk: '#E5484D', target: '#3B82F6' };
@@ -6364,7 +6390,7 @@ function kaCardHtml(r, weekly, sym, o = {}) {
     <div class="row small muted"><span style="flex:1">${esc(r.cs[h.i].d)}</span><span>可信度 ${Math.round(h.conf * 100)}%</span></div><div class="small text2">${esc(h.note)}</div>
     ${st && st.count >= 2 ? `<div class="small ${st.win >= 0.55 ? 'up' : st.win < 0.45 ? 'down' : 'muted'}">此股歷史出現 ${st.count} 次，${r.forward} 根後符合方向 ${(st.win * 100).toFixed(0)}%，平均 ${(st.avg >= 0 ? '+' : '') + st.avg.toFixed(2)}%</div>` : ''}</div>`; };
   const older = r.recent.filter((h) => h.i < n - 3).sort((a, b) => b.i - a.i);
-  const p = r.plan; const e = r.entry; const ec = LVC[e.level] || '';
+  const p = kaPick(r); const e = r.entry; const ec = LVC[e.level] || '';
   const pill = (t, bull) => `<span class="cp-pill ${bull ? 'up' : 'down'}">${t}</span>`;
   const selSt = (id) => (ov && ov.id === id ? 'border-color:' + PLAN_C.target + ';box-shadow:0 0 0 1px ' + PLAN_C.target : '');
   const sigHtml = !r.sigs ? '' : `<div class="tile" style="margin-top:10px"><div class="row"><b style="flex:1">K 棒策略訊號</b><span class="tag" style="color:var(--primary);border-color:var(--primary)">${r.etf ? 'ETF 引擎' : '普通股引擎'}</span></div>
@@ -6397,7 +6423,7 @@ function kaCardHtml(r, weekly, sym, o = {}) {
     <div class="chart-wrap" id="kaChart" style="margin-top:10px"><canvas></canvas><div class="chart-tip"></div></div>${legend}
     <div style="margin-top:10px"><b>最新形態（近 3 根）</b>${r.latest.length ? Array.from(new Map(r.latest.map((h) => [h.k + h.i, h])).values()).map(hit).join('') : '<div class="small muted">近 3 根沒有明顯的 K 線形態，以趨勢與量價為主。</div>'}</div>
     <div class="tile" style="margin-top:10px"><b>判斷依據</b>${r.reasons.map((t) => `<div class="small text2">・${esc(t)}</div>`).join('')}</div>
-    ${p ? `<div class="tile" style="margin-top:10px;background:${css(p.bull ? '--up' : '--down')}14"><div class="row"><b class="${p.bull ? 'up' : 'down'}" style="flex:1">${esc(p.title)}</b><span class="small muted">盈虧比</span> <b class="num ${p.rr >= 2 ? 'up' : p.rr < 1.2 ? 'down' : ''}">1 : ${p.rr.toFixed(2)}</b></div>
+    ${kaSideHtml()}${p ? `<div class="tile" style="margin-top:10px;background:${css(p.bull ? '--up' : '--down')}14"><div class="row"><b class="${p.bull ? 'up' : 'down'}" style="flex:1">${esc(p.title)}</b><span class="small muted">盈虧比</span> <b class="num ${p.rr >= 2 ? 'up' : p.rr < 1.2 ? 'down' : ''}">1 : ${p.rr.toFixed(2)}</b></div>
       <div class="small text2" style="margin-top:4px">${esc(p.trigger)}</div>${kvRows([[p.bull ? '布局區間' : '減碼區間', f(p.e0) + ' ～ ' + f(p.e1)], ['停損／防守', f(p.stop)], ['目標一', f(p.tp1)], ['目標二', f(p.tp2)]])}<div class="small muted">${esc(p.note)}</div></div>`
       : '<div class="small muted" style="margin-top:8px">訊號中性：建議觀望，等待帶量突破壓力或跌破支撐再決定方向。</div>'}
     ${older.length ? `<details style="margin-top:8px"><summary class="small" style="cursor:pointer;color:var(--primary)">近 40 根其他形態（${older.length}）</summary>${older.map(hit).join('')}</details>` : ''}
