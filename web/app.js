@@ -543,12 +543,168 @@ function fgStats() {
   if (!fgWanted()) return '證交所 MIS 即時（約每 ' + (S.pref.refresh || 10) + ' 秒）';
   return (FG.status || '富果串流（盤中自動連線）') + (FG.authed ? ' · 訂閱 ' + FG.subs.size + ' 檔' + (FG.rej.size ? '（' + FG.rej.size + ' 檔超出上限，改用證交所）' : '') + ' · 已收 ' + FG.msgs + ' 則' : '');
 }
+// ───────── Alpaca 美股（選填，使用者自己的金鑰）：IEX 逐筆串流、快照、全市場歷史 K ─────────
+// 金鑰以瀏覽器加密保存；串流與查詢由瀏覽器直連 Alpaca，瀏覽器擋跨網域查詢時才經本站轉送（只轉送、不保存、不快取）。
+// 免費方案：即時只有 IEX 一家交易所；全市場（SIP）歷史須為 15 分鐘前；同一組金鑰同時只能一條串流。資料不可再散布。
+const AP_WS = 'wss://stream.data.alpaca.markets/v2/iex';
+const AP = { ws: null, authed: false, status: '', subs: new Set(), want: [], at: {}, msgs: 0, retry: 0, authFail: '', dupUntil: 0, timer: 0, direct: null, prev: {}, cc: {} };
+const AP_RE = /^[A-Za-z][A-Za-z.\-]{0,9}$/;
+function apHas() { return aiHas('alpacaId') && aiHas('alpacaSec'); }
+function apOk(sym) { return apHas() && !!sym && isUs(sym) && AP_RE.test(sym); }
+async function apKeys() { const [id, sec] = await Promise.all([aiKeyGet('alpacaId'), aiKeyGet('alpacaSec')]); return id && sec ? { id, sec } : null; }
+const apA = (s) => String(s).toUpperCase().replace(/-/g, '.');
+const apY = (s) => String(s).replace(/\./g, '-');
+function nyDate(ms) { return new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); }
+function nyHm(ms) { return new Date(ms).toLocaleTimeString('en-GB', { timeZone: 'America/New_York', hour12: false }).slice(0, 5); }
+/** 美股正常交易時段（美東 09:25–16:05，週一至週五；休市日串流只是沒有成交） */
+function usOpen() {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date()).map((x) => [x.type, x.value]));
+  const m = +p.hour * 60 + +p.minute; return p.weekday !== 'Sat' && p.weekday !== 'Sun' && m >= 565 && m <= 965;
+}
+async function apGet(path, k) {
+  k = k || await apKeys(); if (!k) throw new Error('未設定 Alpaca 金鑰');
+  const fail = async (r) => { const j = await r.json().catch(() => ({})); return Object.assign(new Error(j.message || j.err || ('HTTP ' + r.status)), { http: r.status }); };
+  if (AP.direct !== false) {
+    try {
+      const r = await fetch('https://data.alpaca.markets' + path, { headers: { 'APCA-API-KEY-ID': k.id, 'APCA-API-SECRET-KEY': k.sec } });
+      AP.direct = true; if (!r.ok) throw await fail(r); return await r.json();
+    } catch (e) { if (e.http || AP.direct === true) throw e; AP.direct = false; }
+  }
+  const r = await fetch('/api/ap?p=' + encodeURIComponent(path), { headers: { 'x-ap-id': k.id, 'x-ap-sec': k.sec } });
+  if (!r.ok) throw await fail(r); return r.json();
+}
+/** 前一交易日全市場收盤（SIP 日 K），每檔一小時快取 */
+async function apPrev(syms) {
+  const now = Date.now(); const need = syms.filter((s) => !(AP.prev[s] && now - AP.prev[s].at < 3600000));
+  if (need.length) {
+    const st = new Date(now - 10 * 864e5).toISOString().slice(0, 10); const end = new Date(now - 16 * 60000).toISOString(); const today = nyDate(now);
+    const j = await apGet(`/v2/stocks/bars?symbols=${encodeURIComponent(need.map(apA).join(','))}&timeframe=1Day&start=${st}&end=${encodeURIComponent(end)}&feed=sip&adjustment=split&limit=10000`);
+    Object.entries(j.bars || {}).forEach(([k, arr]) => { const p = (arr || []).filter((b) => nyDate(Date.parse(b.t)) < today).pop(); if (p) AP.prev[apY(k)] = { c: p.c, at: now }; });
+  }
+  return Object.fromEntries(syms.filter((s) => AP.prev[s]).map((s) => [s, AP.prev[s].c]));
+}
+/** 批次快照：IEX 最新成交＋全市場昨收（漲跌以官方收盤計算；高低量為 IEX 當日 K） */
+async function apQuotes(syms) {
+  syms = Array.from(new Set(syms.filter(apOk))); if (!syms.length) return {};
+  const [j, prev] = await Promise.all([apGet('/v2/stocks/snapshots?symbols=' + encodeURIComponent(syms.map(apA).join(',')) + '&feed=iex'), apPrev(syms).catch(() => ({}))]);
+  const out = {};
+  Object.entries(j || {}).forEach(([k, s]) => {
+    if (!s) return; const sym = apY(k); const lt = s.latestTrade || {}, db = s.dailyBar || {}, pb = s.prevDailyBar || {};
+    const price = lt.p || db.c; if (!price) return;
+    out[sym] = { price, prev: prev[sym] || pb.c || price, open: db.o, high: db.h, low: db.l, vol: db.v, time: Date.parse(lt.t || db.t) || Date.now(), src: 'alpaca' };
+  });
+  return out;
+}
+/** 走勢／K 線換成 Yahoo 格式：1d（IEX 5 分 K）、5d（IEX 15 分 K）、1mo～2y（全市場日 K）、5 年以上（全市場週 K） */
+async function apChart(sym, range, interval) {
+  if (!apOk(sym)) return null;
+  const ck = sym + '|' + range + '|' + interval; const c0 = AP.cc[ck]; const life = range === '1d' ? 60000 : range === '5d' ? 300000 : 1800000;
+  if (c0 && Date.now() - c0.at < life) return c0.v;
+  const now = Date.now(); const d = (n) => new Date(now - n * 864e5).toISOString().slice(0, 10);
+  let tf, st, feed = 'sip';
+  if (range === '1d') { tf = '5Min'; st = d(4); feed = 'iex'; }
+  else if (range === '5d') { tf = '15Min'; st = d(9); feed = 'iex'; }
+  else if (interval === '1wk' || interval === '1mo' || /^(5y|10y|max)$/.test(range)) { tf = '1Week'; st = d(range === '5y' ? 1830 : 3660); }
+  else { const m = { '1mo': 35, '3mo': 100, '6mo': 190, ytd: 370, '1y': 370, '2y': 740 }[range]; if (!m) return null; tf = '1Day'; st = d(m); }
+  try {
+    let bars = [], tok = '', pg = 0;
+    do {
+      const j = await apGet(`/v2/stocks/bars?symbols=${encodeURIComponent(apA(sym))}&timeframe=${tf}&start=${st}${feed === 'sip' ? '&end=' + encodeURIComponent(new Date(now - 16 * 60000).toISOString()) : ''}&feed=${feed}&adjustment=split&limit=10000&sort=asc${tok ? '&page_token=' + encodeURIComponent(tok) : ''}`);
+      bars = bars.concat((j.bars || {})[apA(sym)] || []); tok = j.next_page_token || '';
+    } while (tok && ++pg < 10);
+    if (range === '1d') { const last = bars.length ? nyDate(Date.parse(bars[bars.length - 1].t)) : ''; bars = bars.filter((b) => { const t = Date.parse(b.t); const hm = nyHm(t); return nyDate(t) === last && hm >= '09:30' && hm < '16:00'; }); }
+    if (bars.length < 2) return null;
+    const prev = range === '1d' || range === '5d' ? (await apPrev([sym]).catch(() => ({})))[sym] : null;
+    const snap = range === '1d' ? (await apQuotes([sym]).catch(() => ({})))[sym] : null; const last = bars[bars.length - 1];
+    const meta = { symbol: sym, regularMarketPrice: snap ? snap.price : last.c, chartPreviousClose: prev || bars[0].o, previousClose: prev || undefined,
+      regularMarketDayHigh: snap ? snap.high : last.h, regularMarketDayLow: snap ? snap.low : last.l, regularMarketVolume: snap ? snap.vol : last.v,
+      regularMarketTime: Math.floor((snap ? snap.time : Date.parse(last.t)) / 1000), instrumentType: 'EQUITY', dataSource: 'alpaca' };
+    const v = { meta, timestamp: bars.map((b) => Math.floor(Date.parse(b.t) / 1000)),
+      indicators: { quote: [{ open: bars.map((b) => b.o), high: bars.map((b) => b.h), low: bars.map((b) => b.l), close: bars.map((b) => b.c), volume: bars.map((b) => b.v) }] } };
+    AP.cc[ck] = { at: Date.now(), v }; return v;
+  } catch (e) { return null; }
+}
+/** 合規模式（或 Yahoo 失敗）時的美股報價：一次快照全部，再補當日走勢小圖 */
+async function apUs(us) {
+  const q = await apQuotes(us).catch(() => ({}));
+  return Promise.all(us.map(async (s) => {
+    if (!q[s]) return [s, null];
+    const r = await apChart(s, '1d', '5m'); const cl = r ? r.indicators.quote[0].close.filter((v) => v != null) : null;
+    return [s, { ...q[s], ...(cl && cl.length ? { spark: cl } : {}) }];
+  }));
+}
+function apWanted() { return apHas() && S.pref.apStream !== '0'; }
+function apFresh(sym) { return AP.authed && Date.now() - (AP.at[sym] || 0) < 30000; }
+function apStop(msg) { const w = AP.ws; AP.ws = null; AP.authed = false; AP.subs = new Set(); if (w) try { w.close(1000, 'bye'); } catch (e) {} if (msg != null) AP.status = msg; }
+function apSubs(syms) {
+  const want = new Set(syms.slice(0, 30).map(apA));
+  const add = [...want].filter((s) => !AP.subs.has(s)); const drop = [...AP.subs].filter((s) => !want.has(s));
+  const send = (o) => { try { AP.ws && AP.ws.readyState === 1 && AP.ws.send(JSON.stringify(o)); } catch (e) {} };
+  if (drop.length) send({ action: 'unsubscribe', trades: drop }); if (add.length) send({ action: 'subscribe', trades: add });
+  AP.subs = want;
+}
+let apRT = 0;
+function apMsg(o) {
+  AP.msgs++;
+  if (o.T === 'success' && o.msg === 'authenticated') { AP.authed = true; AP.retry = 0; AP.authFail = ''; AP.status = 'Alpaca IEX 串流已連線'; apSubs(AP.want); return; }
+  if (o.T === 'error') {
+    const c = +o.code;
+    if (c === 401 || c === 402 || c === 403) { AP.authFail = AP.key || 'x'; apStop('Alpaca 金鑰驗證失敗，改用輪詢'); return; }
+    if (c === 406) { AP.dupUntil = Date.now() + 60000; apStop('Alpaca：同一組金鑰已有其他串流（例如手機 App 開著），1 分鐘後重試，期間改用輪詢'); return; }
+    AP.status = 'Alpaca：' + (o.msg || c) + (c === 405 ? '（免費方案最多 30 檔，已優先訂閱正在看的個股與持股）' : ''); return;
+  }
+  if (o.T === 't' && o.S && +o.p > 0) {
+    const sym = apY(o.S); const q = S.q[sym]; if (!q || !q.prev) return; const t = Date.parse(o.t) || Date.now();
+    if (q.src === 'alpaca' && q.time && t < q.time) return;
+    S.q[sym] = { ...q, price: +o.p, time: t, src: 'alpaca' }; AP.at[sym] = Date.now();
+    AP.status = 'Alpaca IEX 逐筆串流同步中（' + AP.subs.size + ' 檔）';
+    if (!apRT) apRT = setTimeout(() => { apRT = 0; softFill(); }, 2000);
+  }
+}
+function apConnect(k) {
+  AP.key = k.id; AP.status = 'Alpaca 串流連線中…';
+  let w; try { w = new WebSocket(AP_WS); } catch (e) { AP.status = '無法建立 Alpaca 連線：' + e.message; return; }
+  AP.ws = w;
+  w.onopen = () => w.send(JSON.stringify({ action: 'auth', key: k.id, secret: k.sec }));
+  w.onmessage = (e) => { let a = []; try { a = JSON.parse(e.data); } catch (x) {} (Array.isArray(a) ? a : [a]).forEach(apMsg); };
+  w.onclose = () => {
+    if (AP.ws !== w) return; AP.ws = null; AP.authed = false; AP.subs = new Set();
+    if (AP.authFail || Date.now() < AP.dupUntil) return;
+    const dl = Math.min(60000, 2000 << Math.min(AP.retry++, 5)); AP.status = 'Alpaca 串流中斷，' + Math.round(dl / 1000) + ' 秒後重連（期間用輪詢）';
+    clearTimeout(AP.timer); AP.timer = setTimeout(() => { if (!AP.ws) tick(); }, dl);
+  };
+}
+/** 每次更新行情時呼叫：美股盤中且有 Alpaca 金鑰時維持串流（正在看的個股 → 持股 → 其他，最多 30 檔） */
+async function apSync(syms) {
+  const on = apWanted() && usOpen() && (!document.hidden || S.pref.bgRefresh === '1');
+  if (!on) { if (AP.ws) apStop(apWanted() ? '非美股交易時間，Alpaca 串流已暫停' : ''); else if (!apWanted()) AP.status = ''; return; }
+  AP.want = fgPriority(Array.from(new Set(syms.filter(apOk))));
+  if (!AP.ws) {
+    if (Date.now() < AP.dupUntil) return; const k = await apKeys(); if (!k) return;
+    if (k.id === AP.authFail) { AP.status = 'Alpaca 金鑰驗證失敗，請到「設定 › 即時行情」更新金鑰'; return; }
+    apConnect(k); return;
+  }
+  if (AP.authed) apSubs(AP.want);
+}
+/** 測試 Alpaca 金鑰：查 AAPL 最新成交 */
+async function apTest(k) {
+  try { const j = await apGet('/v2/stocks/AAPL/trades/latest?feed=iex', k); return [true, '連線成功：AAPL 最新成交 ' + fmt(j.trade && j.trade.p, 2) + '（IEX）' + (AP.direct === false ? '・經本站轉送' : '')]; }
+  catch (e) { return [false, '驗證失敗：' + (e.http === 401 || e.http === 403 ? '金鑰無效或沒有權限' : e.message)]; }
+}
+function apStats() {
+  if (!apHas()) return '';
+  return '美股 Alpaca：' + (AP.status || (usOpen() ? '串流準備中' : '非交易時間，盤中自動連線')) + (AP.authed ? ' · 訂閱 ' + AP.subs.size + ' 檔 · 已收 ' + AP.msgs + ' 則' : '');
+}
 /** Yahoo 走勢（美股報價、台股與美股的當日走勢小圖） */
 async function fetchYahoo(sym, range = '1d', interval = '5m', ttl = 30, prePost = false) {
+  // 美股有 Alpaca 金鑰：合規模式優先用 Alpaca；一般模式在 Yahoo 失敗時備援
+  const ap = apOk(sym);
+  if (ap && compOn()) { const a = await apChart(sym, range, interval); if (a) return a; }
   try {
     const j = await px(YC + encodeURIComponent(sym) + '?range=' + range + '&interval=' + interval + '&includePrePost=' + (prePost ? 'true' : 'false'), ttl);
-    return (j.chart && j.chart.result && j.chart.result[0]) || null;
-  } catch (e) { return null; }
+    const r = (j.chart && j.chart.result && j.chart.result[0]) || null; if (r) return r;
+  } catch (e) {}
+  return ap && !compOn() ? apChart(sym, range, interval) : null;
 }
 async function fetchUs(sym) {
   // 含盤前盤後的分時：盤中價看 meta，盤前（04:00–09:30 美東）／盤後（16:00–20:00）取該時段最後一筆成交
@@ -580,11 +736,18 @@ async function refreshQuotes(syms) {
   syms = Array.from(new Set(syms.filter(Boolean)));
   const tw = syms.filter((s) => !isUs(s)); const usIv = (S.pref.usRefresh || 0) * 1000; S.usAt = S.usAt || {};
   const us = syms.filter((s) => isUs(s) && (!usIv || !(S.q[s] && S.q[s].price) || Date.now() - (S.usAt[s] || 0) >= usIv - 500)); us.forEach((s) => { S.usAt[s] = Date.now(); });
-  const [twq, usq] = await Promise.all([tw.length ? fetchTw(tw) : {}, Promise.all(us.map(async (s) => [s, await fetchUs(s)]))]);
+  const apFirst = apHas() && compOn(); // 合規模式：美股改用 Alpaca 快照（一次一個請求）
+  const [twq, usq] = await Promise.all([tw.length ? fetchTw(tw) : {}, apFirst ? apUs(us.filter(apOk)) : Promise.all(us.map(async (s) => [s, await fetchUs(s)]))]);
+  // Yahoo 抓不到的美股：有 Alpaca 金鑰時補上
+  if (!apFirst && apHas()) { const miss = usq.filter(([s, v]) => !v && apOk(s)).map(([s]) => s); if (miss.length) { const m = Object.fromEntries(await apUs(miss)); usq.forEach((x) => { if (!x[1] && m[x[0]]) x[1] = m[x[0]]; }); } }
   Object.entries(twq).forEach(([k, v]) => {
     if (fgFresh(k)) { const o = S.q[k] || {}; S.q[k] = { ...o, name: o.name || v.name, up: v.up, down: v.down, otc: v.otc, book: o.book || v.book }; return; } // 富果串流較新，只補漲跌停價等欄位
     S.q[k] = { ...(S.q[k] || {}), ...v, src: 'twse' }; });
-  usq.forEach(([s, v]) => { if (v) S.q[s] = { ...(S.q[s] || {}), ...v }; });
+  usq.forEach(([s, v]) => {
+    if (!v) return; const o = S.q[s] || {};
+    // Alpaca 串流的逐筆成交較新：保留串流價格，只更新昨收、高低、盤前盤後等欄位
+    S.q[s] = apFresh(s) && o.src === 'alpaca' && (o.time || 0) >= (v.time || 0) ? { ...o, ...v, price: o.price, time: o.time, src: 'alpaca' } : { ...o, ...v };
+  });
   // 連線狀態：要查的都沒拿到 → 顯示提示
   const got = Object.keys(twq).length + usq.filter(([, v]) => v).length;
   netState(syms.length === 0 || got > 0 || !navigator.onLine ? (navigator.onLine ? 'ok' : 'off') : 'fail');
@@ -593,7 +756,7 @@ function netState(st) {
   let el = $('#net');
   if (st === 'ok') { if (el) el.remove(); return; }
   if (!el) { el = document.createElement('div'); el.id = 'net'; el.className = 'netbar'; document.body.appendChild(el); }
-  el.textContent = st === 'off' ? '⚠ 目前離線，顯示的是上次的資料' : compOn() && !aiHas('fugle') ? '⚠ 商業合規模式：盤中即時報價請到「設定 › 即時行情」填入自己的富果金鑰' : '⚠ 暫時無法取得行情，稍後自動重試';
+  el.textContent = st === 'off' ? '⚠ 目前離線，顯示的是上次的資料' : compOn() && (!aiHas('fugle') || !apHas()) ? '⚠ 商業合規模式：即時報價請到「設定 › 即時行情」填入自己的金鑰（台股：富果；美股：Alpaca）' : '⚠ 暫時無法取得行情，稍後自動重試';
 }
 window.addEventListener('online', () => { netState('ok'); tick(); });
 window.addEventListener('offline', () => netState('off'));
@@ -921,7 +1084,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"v1.1.413","sha":"35094da","at":"2026-11-23 21:54"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"1a149b2","at":"2026-11-25 14:13"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -940,7 +1103,7 @@ async function webVerCheck(silent) {
 document.addEventListener('click', (e) => { if (e.target.closest('[data-webver]')) webVerCheck(false); });
 function rtStatusText() {
   const tw = twOpen() ? '台股盤中：' + fgStats() : '台股非交易時間（每分鐘更新收盤資料）' + (fgWanted() ? '；盤中自動連線富果串流' : '');
-  const us = '美股：Yahoo Finance，' + (S.pref.usRefresh ? '每 ' + (S.pref.usRefresh >= 60 ? S.pref.usRefresh / 60 + ' 分鐘' : S.pref.usRefresh + ' 秒') : '與台股同步更新');
+  const us = (apHas() ? apStats() + '\n美股報價補充：' + (compOn() ? 'Alpaca 快照（商業合規模式）' : 'Yahoo Finance') + '，' : '美股：Yahoo Finance，') + (S.pref.usRefresh ? '每 ' + (S.pref.usRefresh >= 60 ? S.pref.usRefresh / 60 + ' 分鐘' : S.pref.usRefresh + ' 秒') : '與台股同步更新');
   return tw + '\n' + us + (S.lastTick ? '\n最近更新：' + hm(S.lastTick) + (document.hidden && S.pref.bgRefresh !== '1' ? '（背景暫停中）' : '') : '');
 }
 // ───────── 版面 ─────────
@@ -5253,6 +5416,11 @@ VIEWS.settings = {
             : `<div class="row" style="gap:6px"><input id="fgK" type="password" autocomplete="off" placeholder="貼上富果 API Key"><button class="btn sm primary" id="fgS">儲存</button><button class="btn sm" id="fgT">測試</button></div>`}
           <div class="small muted" style="margin-top:4px">金鑰以瀏覽器加密保存在這台電腦，不上傳、不同步到手機（手機 App 請另外在「設置 › 行情資料來源」填寫）。<a href="https://developer.fugle.tw/" target="_blank" rel="noopener">還沒有金鑰？到富果開發者平台免費申請 ›</a></div>
           <div class="small" id="fgR" style="margin-top:4px"></div></div>
+        <div class="field" style="margin-top:10px"><label>Alpaca 美股即時（選填）</label>
+          ${apHas() ? `<div class="row wrap" style="gap:6px"><span class="tag up">已儲存</span><button class="btn sm" id="apT">測試連線</button><button class="btn sm" id="apD">清除</button><label class="small" style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="apSt" style="width:auto" ${S.pref.apStream === '0' ? '' : 'checked'}>盤中逐筆串流</label></div>`
+            : `<div class="grid g2" style="gap:6px"><input id="apI" type="password" autocomplete="off" placeholder="API Key ID"><input id="apK" type="password" autocomplete="off" placeholder="Secret Key"></div><div class="row" style="gap:6px;margin-top:6px"><button class="btn sm primary" id="apS">儲存</button><button class="btn sm" id="apT">測試</button></div>`}
+          <div class="small muted" style="margin-top:4px">填入自己的 Alpaca 金鑰後：美股盤中以 IEX 逐筆串流即時跳價（免費最多 30 檔，正在看的個股與持股優先）；Yahoo 抓不到時改用 Alpaca；商業合規模式下美股報價與 K 線改用 Alpaca（全市場歷史 K、昨收以官方收盤計算）。免費方案即時價只來自 IEX 一家交易所，可能與全市場略有差異，成交量只是 IEX 的量；同一組金鑰同時只能有一條串流（手機 App 與網頁同時開，後開的一方改用輪詢）。金鑰以瀏覽器加密保存在這台電腦，由瀏覽器直連 Alpaca；瀏覽器擋跨網域查詢時才經本站轉送（不保存、不快取）。<a href="https://app.alpaca.markets/signup" target="_blank" rel="noopener">還沒有金鑰？到 Alpaca 免費註冊 ›</a>（註冊後在 Paper Trading 首頁「API Keys」產生，Secret 只顯示一次）</div>
+          <div class="small" id="apR" style="margin-top:4px"></div></div>
         ${keySrcHtml('fmSrc', !!(S.sk && S.sk.finmind), { auto: '有填自己的 Token 時優先使用，沒填時用系統提供的 Token。', system: '只用系統提供的 Token（經本站查詢並共用快取），不使用下方自己的 Token。', own: '只用下方自己的 Token；沒填時以免費額度查詢。' })}
         <div class="field" style="margin-top:10px"><label>FinMind API Token（選填）</label>
           ${aiHas('finmind') ? `<div class="row wrap" style="gap:6px"><span class="tag up">已儲存</span><button class="btn sm" id="fmT">測試連線</button><button class="btn sm" id="fmD">清除</button></div>`
@@ -5312,6 +5480,11 @@ VIEWS.settings = {
     if ($('#fgS')) $('#fgS').onclick = async () => { const v = $('#fgK').value.trim(); if (!v) return toast('請先貼上金鑰'); await aiKeySet('fugle', v); FG.authFail = ''; fgStop(''); toast('已儲存富果金鑰'); route(); tick(); };
     if ($('#fgD')) $('#fgD').onclick = async () => { await aiKeySet('fugle', ''); fgStop(''); toast('已清除富果金鑰'); route(); };
     if ($('#fgT')) $('#fgT').onclick = async () => { const k = $('#fgK') ? $('#fgK').value.trim() : await aiKeyGet('fugle'); if (!k) return toast('請先貼上金鑰'); fgOut(true, '測試中…'); const [ok, msg] = await fgTest(k); fgOut(ok, msg); if (ok) { FG.authFail = ''; } };
+    const apOut = (ok, msg) => { const el = $('#apR'); if (el) { el.textContent = msg; el.className = 'small ' + (ok ? 'up' : 'down'); } };
+    if ($('#apS')) $('#apS').onclick = async () => { const i = $('#apI').value.trim(), k = $('#apK').value.trim(); if (!i || !k) return toast('請貼上 Key ID 與 Secret'); await aiKeySet('alpacaId', i); await aiKeySet('alpacaSec', k); AP.authFail = ''; AP.direct = null; apStop(''); toast('已儲存 Alpaca 金鑰'); route(); tick(); };
+    if ($('#apD')) $('#apD').onclick = async () => { await aiKeySet('alpacaId', ''); await aiKeySet('alpacaSec', ''); apStop(''); AP.cc = {}; AP.prev = {}; toast('已清除 Alpaca 金鑰'); route(); };
+    if ($('#apT')) $('#apT').onclick = async () => { const k = $('#apI') ? { id: $('#apI').value.trim(), sec: $('#apK').value.trim() } : await apKeys(); if (!k || !k.id || !k.sec) return toast('請貼上 Key ID 與 Secret'); apOut(true, '測試中…'); const [ok, msg] = await apTest(k); apOut(ok, msg); if (ok) AP.authFail = ''; };
+    if ($('#apSt')) $('#apSt').onchange = (e) => { S.pref.apStream = e.target.checked ? '' : '0'; savePref(); if (!e.target.checked) apStop(''); tick(); };
     $('#rtNow').onclick = async () => { S.usAt = {}; await tick(); toast('已更新行情'); };
     if ($('#instBtn')) $('#instBtn').onclick = () => installApp();
     $$('[data-layrs]').forEach((b) => b.onclick = () => { const l = { ...(S.pref.lay || {}) }; delete l[b.dataset.layrs]; S.pref.lay = l; savePref(); route(); });
@@ -6445,6 +6618,7 @@ async function tick() {
   const syms = new Set(cur.syms()); holdings().forEach((h) => syms.add(h.symbol));
   kjson('alertsV2', []).forEach((a) => { if (a.s && a.on !== false) syms.add(a.s); });
   fgSync(Array.from(syms)).catch(() => {});
+  apSync(Array.from(syms)).catch(() => {});
   await Promise.all([refreshQuotes(Array.from(syms)), refreshIndexes(), refreshLimits()]);
   try { checkAlerts(); } catch (e) {}
   softFill();
