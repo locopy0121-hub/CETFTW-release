@@ -240,7 +240,8 @@ function divFeeFor(sym) {
   const over = kjson('divFeeSym', {})[sym]; if (over != null && over !== '') return [Math.max(0, +over || 0), '個股設定'];
   const accs = D.accounts().filter((a) => a.m !== 'US'); const buys = D.trades().filter((t) => t.s === sym && t.t === 'BUY').sort((a, b) => String(b.d).localeCompare(String(a.d)));
   const acc = accs.find((a) => buys.length && Number(a.id) === Number(buys[0].acc)) || accs[0];
-  const pay = kjson('divPayBank', {})[sym] || ''; const recv = (acc && acc.dbk) || '';
+  // 撥款銀行：手動指定 → 手機 App 從股息紀錄學到的同行／跨行（同步鍵 cache_divLearn）
+  const learnt = kjson('cache_divLearn', {})[sym] || ''; const pay = kjson('divPayBank', {})[sym] || (learnt.startsWith('≠') ? '' : learnt); const recv = (acc && acc.dbk) || '';
   if (pay && recv && bankKey(pay) === bankKey(recv)) return [0, '同行免匯費（' + recv + '）'];
   if (acc) return [acc.dvf != null ? Math.max(0, +acc.dvf || 0) : divFee(), acc.n + (recv ? '：入帳 ' + recv : '')];
   return [divFee(), '預設'];
@@ -1105,7 +1106,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"c190485","at":"2026-11-25 16:47"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"4959578","at":"2026-11-25 17:13"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
