@@ -1107,7 +1107,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"v1.1.429","sha":"66dec77","at":"2026-11-25 23:32"};
+const WEB_VER = /*WEBVER*/{"v":"v1.1.430","sha":"c6c9a7c","at":"2026-11-25 23:40"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
