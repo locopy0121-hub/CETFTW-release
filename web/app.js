@@ -228,11 +228,23 @@ function gross(sym, n, p) { return isUs(sym) ? n * p : Math.floor(Math.round(n *
 /** 台股股利：股數 × 每股股利，元以下四捨五入（股務代理發放方式，與 App TwRules.dividendGross 相同；例 330 × 0.138 = 45.54 → 46） */
 function divGross(n, p) { return n > 0 && p > 0 ? Math.round(Math.round(n * p * 1e6) / 1e6) : 0; }
 /** 交易金額：台股股利用四捨五入，其餘同 gross */
-function tGross(t) { return t.t === 'DIVIDEND' && !isUs(t.s) ? divGross(t.n, t.p) : tGross(t); }
+function tGross(t) { return t.t === 'DIVIDEND' && !isUs(t.s) ? divGross(t.n, t.p) : gross(t.s, t.n, t.p); }
 /** 二代健保補充保費：應稅股利單次 ≥ 2 萬 × 2.11%，元以下四捨五入，上限 1,000 萬計 */
 function divNhi(taxable) { return taxable >= 20000 ? Math.round(Math.min(taxable, 1e7) * 0.0211) : 0; }
-/** 台股股利每筆匯費／處理費（預設 10 元，設定可改） */
-function divFee() { const v = S.pref.divFee; return v == null || v === '' ? 10 : Math.max(0, +v || 0); }
+/** 台股股利預設跨行匯費（手機同步的 divFee 優先，其次網頁設定，預設 10 元） */
+function divFee() { const k = knum('divFee', NaN); if (!isNaN(k)) return Math.max(0, k); const v = S.pref.divFee; return v == null || v === '' ? 10 : Math.max(0, +v || 0); }
+/** 銀行名稱比對（與 App bankKey 相同） */
+function bankKey(b) { return String(b || '').trim().replace(/\s/g, '').replace('商業銀行', '').replace('銀行', '').replace('商銀', '').replace('中華郵政', '郵局').replace(/臺/g, '台'); }
+/** 此股股利的銀行開票處理費／郵資／匯費：個股設定 → 同行（撥款銀行＝入帳銀行）免收 → 帳戶設定 → 預設（與 App divFeeFor 相同） */
+function divFeeFor(sym) {
+  const over = kjson('divFeeSym', {})[sym]; if (over != null && over !== '') return [Math.max(0, +over || 0), '個股設定'];
+  const accs = D.accounts().filter((a) => a.m !== 'US'); const buys = D.trades().filter((t) => t.s === sym && t.t === 'BUY').sort((a, b) => String(b.d).localeCompare(String(a.d)));
+  const acc = accs.find((a) => buys.length && Number(a.id) === Number(buys[0].acc)) || accs[0];
+  const pay = kjson('divPayBank', {})[sym] || ''; const recv = (acc && acc.dbk) || '';
+  if (pay && recv && bankKey(pay) === bankKey(recv)) return [0, '同行免匯費（' + recv + '）'];
+  if (acc) return [acc.dvf != null ? Math.max(0, +acc.dvf || 0) : divFee(), acc.n + (recv ? '：入帳 ' + recv : '')];
+  return [divFee(), '預設'];
+}
 function twFee(amount, discount = 1, min = 20) { if (amount <= 0) return 0; return Math.max(min, Math.floor(amount * 0.001425 * discount)); }
 function twTaxRate(sym) { return D.isEtf(sym) ? 0.001 : 0.003; }
 function ledger(trades = D.trades(), opt = {}) {
@@ -1093,7 +1105,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"v1.1.419","sha":"1ea6ed8","at":"2026-11-25 16:37"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"c190485","at":"2026-11-25 16:47"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -1699,7 +1711,7 @@ async function tradeModal(t0, preset = {}) {
       }
       if (type === 'DIVIDEND' && !taxEdited) $('#mtx', root).value = 0;
       // 台股股利：費用＝二代健保（應稅部分 ≥ 2 萬）＋匯費／處理費；金額為股數 × 每股股利四捨五入
-      if (type === 'DIVIDEND' && !us && s && n > 0 && p > 0 && !feeEdited) { const dg = divGross(n, p); $('#mf', root).value = Math.min(dg, divNhi(dg * taxRatioOf(s)) + divFee()); }
+      if (type === 'DIVIDEND' && !us && s && n > 0 && p > 0 && !feeEdited) { const dg = divGross(n, p); $('#mf', root).value = Math.min(dg, divNhi(dg * taxRatioOf(s)) + divFeeFor(s)[0]); }
       // 放空（台股）：賣出＝融券賣出／當沖先賣；買進＝回補
       const sh = shCalc(t0, type, s, n, p, shTouched ? $('#shc', root).checked : null, $('#shm', root).value === '1', $('#shd', root).value, $('#shi', root).value);
       $('#shw', root).style.display = sh.show ? '' : 'none'; $('#shc', root).checked = sh.on; $('#shf', root).style.display = sh.on ? '' : 'none';
@@ -4091,7 +4103,7 @@ Object.assign(VIEWS.s, {
       else { const taxable = gross * ratio; const nhi = divNhi(taxable);
         lines = [[`應稅股利所得（${Math.round(ratio * 100)}%）`, fmtInt(taxable)], ['二代健保 2.11%', taxable <= 0 ? '不扣' : nhi ? '−' + fmtInt(nhi) : '未達 2 萬免扣'],
           ['所得稅', kind === 'TW_ETF_BOND' || kind === 'TW_ETF_OVERSEAS' ? '海外所得，最低稅負制' : taxable > 0 ? '併入綜所稅（8.5% 抵減上限 8 萬）或 28% 分開計稅' : '不計']];
-        const rf = Math.min(divFee(), Math.max(0, gross - nhi)); if (rf > 0) lines.push(['匯費／處理費', '−' + fmtInt(rf)]); net = gross - nhi - rf; }
+        const [rf0, rfWhy] = divFeeFor(sym); const rf = Math.min(rf0, Math.max(0, gross - nhi)); lines.push(['銀行開票處理費／郵資／匯費', rf > 0 ? '−' + fmtInt(rf) : '0（' + rfWhy + '）']); net = gross - nhi - rf; }
       calc = `<div style="border-top:1px solid var(--card2);margin-top:10px;padding-top:10px"><div class="small muted">以最近一次配息 ${fmt(last, 4)} × 持有 ${fmtInt(h.shares)} 股試算</div>
         ${[[us ? '配息總額' : '配息總額（四捨五入）', (us ? '$' + fmt(gross, 2) : fmtInt(gross))], ...lines].map(([k, v]) => `<div class="row between" style="padding:4px 0"><span class="text2">${esc(k)}</span><span class="num">${esc(v)}</span></div>`).join('')}
         <div class="row between" style="padding:4px 0"><b>實收</b><b class="num" style="color:var(--primary)">${us ? '$' + fmt(net, 2) : fmtInt(net)}</b></div></div>`;
@@ -5400,10 +5412,12 @@ VIEWS.cash = {
     const r = await dialog(a0 ? '編輯帳戶' : '新增帳戶', `<div class="field"><label>名稱</label><input id="an" value="${esc(a.n)}" placeholder="例：元大、國泰複委託"></div>
       <div class="field"><label>市場</label><select id="am"><option value="TW" ${a.m !== 'US' ? 'selected' : ''}>台股</option><option value="US" ${a.m === 'US' ? 'selected' : ''}>美股</option></select></div>
       <div class="grid g2"><div class="field"><label>台股折扣（0.28＝2.8 折）</label><input id="ad" type="number" step="0.01" value="${a.d ?? 1}"></div><div class="field"><label>台股最低手續費</label><input id="amin" type="number" value="${a.min ?? 20}"></div></div>
-      <div class="grid g2"><div class="field"><label>美股費率（0.001＝0.1%）</label><input id="ar" type="number" step="0.0001" value="${a.r ?? 0.001}"></div><div class="field"><label>美股最低（美元）</label><input id="aumin" type="number" step="0.01" value="${a.umin ?? 0}"></div></div><div id="merr" class="small up"></div>`,
+      <div class="grid g2"><div class="field"><label>美股費率（0.001＝0.1%）</label><input id="ar" type="number" step="0.0001" value="${a.r ?? 0.001}"></div><div class="field"><label>美股最低（美元）</label><input id="aumin" type="number" step="0.01" value="${a.umin ?? 0}"></div></div>
+      <div class="grid g2"><div class="field"><label>股利入帳銀行（同行免匯費）</label><input id="adbk" value="${esc(a.dbk || '')}" placeholder="例：華南銀行" list="bankList"><datalist id="bankList">${['華南銀行', '臺灣銀行', '土地銀行', '合作金庫', '第一銀行', '彰化銀行', '兆豐銀行', '國泰世華', '中國信託', '玉山銀行', '台新銀行', '永豐銀行', '台北富邦', '凱基銀行', '元大銀行', '郵局'].map((b) => `<option>${b}</option>`).join('')}</datalist></div><div class="field"><label>股利跨行匯費（元）</label><input id="advf" type="number" min="0" step="1" value="${a.dvf ?? divFee()}"></div></div><div id="merr" class="small up"></div>`,
     (a0 ? [['del', '刪除', 'danger']] : []).concat([['', '取消'], ['ok', '儲存', 'primary']]), (root) => () => {
       const n = $('#an', root).value.trim(); if (!n) return '請輸入名稱';
-      const na = { ...a, n, m: $('#am', root).value, d: parseFloat($('#ad', root).value) || 1, min: parseFloat($('#amin', root).value) || 0, r: parseFloat($('#ar', root).value) || 0, umin: parseFloat($('#aumin', root).value) || 0 };
+      const na = { ...a, n, m: $('#am', root).value, d: parseFloat($('#ad', root).value) || 1, min: parseFloat($('#amin', root).value) || 0, r: parseFloat($('#ar', root).value) || 0, umin: parseFloat($('#aumin', root).value) || 0,
+        dbk: $('#adbk', root).value.trim(), dvf: Math.max(0, parseFloat($('#advf', root).value) || 0) };
       made = D.accounts().filter((x) => x.id !== a.id).concat([na]).sort((x, y) => x.id - y.id); return null;
     });
     if (r === 'ok' && made) { ksetJson('accounts', made); changed(); route(); }
@@ -5497,7 +5511,7 @@ VIEWS.settings = {
         <div class="small muted" style="margin-top:8px">非交易時間每分鐘更新一次。美股與指數使用 Yahoo Finance（免金鑰）；台指期等期貨資料請使用手機 App。</div></div>
       <div class="card"><h2>股息計算</h2><div class="small text2">台股股利依股務代理發放方式計算：股利總額＝股數 × 每股股利，元以下四捨五入；二代健保＝應稅股利單次 ≥ 2 萬 × 2.11%（四捨五入）；實付＝總額 − 二代健保 − 匯費／處理費。與手機 App 相同。</div>
         <div class="field" style="margin-top:8px"><label>每筆匯費／處理費（元，常見 10 元；同行或免收填 0）</label><div class="row" style="gap:6px"><input id="dvFee" type="number" min="0" step="1" value="${divFee()}" style="max-width:140px"><button class="btn sm" id="dvFeeS">儲存</button></div>
-        <div class="small muted" style="margin-top:4px">例：330 股 × 0.138 = 45.54 → 46 元，扣匯費 10 元，實付 36 元。新增台股股息時，費用欄自動帶入「二代健保＋匯費」。</div></div></div>
+        <div class="small muted" style="margin-top:4px">例：330 股 × 0.138 = 45.54 → 46 元，扣匯費 10 元，實付 36 元。新增台股股息時，費用欄自動帶入「二代健保＋銀行開票處理費／郵資／匯費」。股利入帳銀行與跨行匯費可在各帳戶設定；入帳銀行與發放單位撥款銀行相同（同行）時不扣匯費，各股撥款銀行可在手機 App「股息與稅務 › 股息設定」設定並同步。</div></div></div>
       <div class="card"><h2>融資融券</h2><div class="small text2">新增台股買進時可勾選「融資買進」：現金只扣自備款，融資金額記為負債；賣出時依比例償還並扣利息。總資產以淨值（市值＋現金−融資）計算，與手機 App 相同。</div>
         <div class="grid g2" style="margin-top:8px"><div class="field"><label>融資成數 %</label><input id="mgRt" type="number" step="1" value="${mgRatio()}"></div><div class="field"><label>融資年利率 %</label><input id="mgRr" type="number" step="0.01" value="${mgRate()}"></div></div>
         <div class="small text2" style="margin-top:10px"><b>融券與當沖先賣</b>：台股賣出勾選「放空」。融券繳保證金、價款由券商留置；當沖先賣不繳保證金、價款直接入帳（證交稅 0.15%）。回補時新增買進並勾選「回補放空部位」。</div>
