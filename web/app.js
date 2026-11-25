@@ -228,7 +228,7 @@ function gross(sym, n, p) { return isUs(sym) ? n * p : Math.floor(Math.round(n *
 /** 台股股利：股數 × 每股股利，元以下四捨五入（股務代理發放方式，與 App TwRules.dividendGross 相同；例 330 × 0.138 = 45.54 → 46） */
 function divGross(n, p) { return n > 0 && p > 0 ? Math.round(Math.round(n * p * 1e6) / 1e6) : 0; }
 /** 交易金額：台股股利用四捨五入，其餘同 gross */
-function tGross(t) { return t.t === 'DIVIDEND' && !isUs(t.s) ? divGross(t.n, t.p) : tGross(t); }
+function tGross(t) { return t.t === 'DIVIDEND' && !isUs(t.s) ? divGross(t.n, t.p) : gross(t.s, t.n, t.p); }
 /** 二代健保補充保費：應稅股利單次 ≥ 2 萬 × 2.11%，元以下四捨五入，上限 1,000 萬計 */
 function divNhi(taxable) { return taxable >= 20000 ? Math.round(Math.min(taxable, 1e7) * 0.0211) : 0; }
 /** 台股股利每筆匯費／處理費（預設 10 元，設定可改） */
@@ -1093,7 +1093,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"32cf0e6","at":"2026-11-25 15:42"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"c04a5a4","at":"2026-11-25 16:36"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
