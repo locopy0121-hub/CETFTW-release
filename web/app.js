@@ -1084,7 +1084,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"1a149b2","at":"2026-11-25 14:13"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"d626877","at":"2026-11-25 14:22"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -4579,7 +4579,43 @@ async function entryAdvice(sym) {
   const sorted = src.slice().sort((a, b2) => b2.score * b2.share - a.score * a.share);
   return { level, label, tip, total, score: Math.round((total + 2) / 4 * 100), confidence, ratio, src: src.slice().sort((a, b2) => Math.abs(b2.score * b2.share) - Math.abs(a.score * a.share)),
     pros: sorted.filter((s) => s.score >= 0.4).slice(0, 4), cons: sorted.slice().reverse().filter((s) => s.score <= -0.4).slice(0, 4), guards, atrPct,
-    stop: Math.min(px0 - atr14, m20 && m20 < px0 ? Math.max(m20 - atr14 * 0.5, px0 - atr14 * 3) : px0 - atr14 * 2) };
+    stop: Math.min(px0 - atr14, m20 && m20 < px0 ? Math.max(m20 - atr14 * 0.5, px0 - atr14 * 3) : px0 - atr14 * 2),
+    plan: (() => { try { const kr = klineAnalyze(b); return kr && kr.plan; } catch (e) { return null; } })(), px: px0 };
+}
+/**
+ * 進場評估總結（與 App TradeDecision 同算法）：條件符合（level ≥ 1 且現價風報比 ≥ 1.5）／等待回測（附風報比 1:2 參考價＝(目標＋2×停損)÷3）／條件未符合（附重新評估價）。
+ * 僅為依規則計算的分析成果，不是買賣指令。
+ */
+function tdRef(target, stop, rr = 2) { return (target + rr * stop) / (1 + rr); }
+function tdSummary(level, ratio, price, stop, target, e0, e1) {
+  const bull = stop != null && target != null && stop < price && target > stop;
+  if (!(price > 0) || level <= -1 || !bull) {
+    const re = [stop > price ? stop : null, e1 > price ? e1 : null, target > price ? target : null].filter((v) => v != null);
+    const r = re.length ? Math.min(...re) : null;
+    return { state: 'NOT', label: '條件未符合', ratio: 0, stop, target, e0, e1, rr: null, ref: null, reeval: r, note: r != null ? '評估轉弱，站回 ' + fmtPrice(r) + ' 後重新評估' : '評估轉弱，暫無符合條件的價位' };
+  }
+  const rr = price > stop && target > price ? (target - price) / (price - stop) : null;
+  if (level >= 1 && rr != null && rr >= 1.5) return { state: 'MET', label: '條件符合', ratio, stop, target, e0, e1, rr, ref: null, reeval: null, note: '評估偏多，現價風報比 1:' + rr.toFixed(1) };
+  const ref0 = tdRef(target, stop); const ref = ref0 < price && ref0 > stop ? Math.round(ref0 * 100) / 100 : null;
+  return { state: 'WAIT', label: '等待回測', ratio, stop, target, e0, e1, rr, ref, reeval: null,
+    note: ref != null ? '現價風報比 ' + (rr != null ? '1:' + rr.toFixed(1) : '不足') + '，風報比 1:2 的參考價 ' + fmtPrice(ref) : '風報比已足夠，等待評估轉為偏多' };
+}
+function tdOf(a, price) { if (!a) return null; const p = a.plan; return tdSummary(a.level, a.ratio, price || a.px, p ? p.stop : null, p ? p.tp1 : null, p ? p.e0 : null, p ? p.e1 : null); }
+function tdCardHtml(sym, a) {
+  const t = tdOf(a, (S.q[sym] || {}).price); if (!t) return '';
+  const col = t.state === 'MET' ? (S.pref.color === 'us' ? '#16a34a' : '#dc2626') : t.state === 'WAIT' ? '#f2b544' : (S.pref.color === 'us' ? '#dc2626' : '#16a34a');
+  const cells = [['試算比例', t.state === 'NOT' ? '0%' : t.ratio + '%']];
+  if (t.ref != null) cells.push(['1:2 參考價', fmtPrice(t.ref)]);
+  if (t.state === 'MET' && t.e0 != null && t.e1 != null) cells.push(['參考區間', fmtPrice(Math.min(t.e0, t.e1)) + '～' + fmtPrice(Math.max(t.e0, t.e1))]);
+  if (t.reeval != null) cells.push(['重新評估價', fmtPrice(t.reeval)]);
+  if (t.state !== 'NOT' && t.stop != null) cells.push(['參考停損', fmtPrice(t.stop)]);
+  if (t.state !== 'NOT' && t.target != null) cells.push(['參考目標', fmtPrice(t.target)]);
+  if (t.rr != null) cells.push(['現價風報比', '1:' + t.rr.toFixed(1)]);
+  return `<div class="card"><h2>進場評估總結<span class="r"><span class="tag" style="background:${col};color:#fff">${t.label}</span></span></h2>
+    <div class="small">${esc(t.note)}</div>
+    <div class="grid g3" style="margin-top:8px;gap:8px">${cells.map(([k, v]) => `<div class="tile"><div class="small muted">${k}</div><div class="num" style="font-weight:700">${v}</div></div>`).join('')}</div>
+    <details style="margin-top:8px"><summary class="small muted" style="cursor:pointer">評估依據</summary><div class="small text2" style="margin-top:4px">進場評估：${esc(a.label)}（評分 ${a.score}、信心 ${a.confidence}%）${a.plan ? '；K 線操作計畫：' + esc(a.plan.title) : ''}<br>條件符合：評估偏多且現價風報比 ≥ 1.5；等待回測：方向未轉弱但風報比不足，參考價＝(目標＋2×停損)÷3，在此價位風報比為 1:2；條件未符合：評估轉弱，站回重新評估價後再看。</div></details>
+    <div class="small muted" style="margin-top:6px">依規則計算的分析成果，不構成投資建議；投資有風險，請自行評估並自負盈虧。</div></div>`;
 }
 const ADV_COL = { 2: '#dc2626', 1: '#f97316', 0: '#64748b', '-1': '#16a34a', '-2': '#15803d' };
 /** 進場評估快取（個股頁標籤列與綜合進場評估卡共用，2 分鐘內不重算；同時只算一次） */
@@ -4608,7 +4644,7 @@ async function advCard(el, sym) {
   if (!a) { el.innerHTML = '<div class="card"><h2>綜合進場評估</h2><div class="small muted">資料不足，無法計算。</div></div>'; return; }
   const col = advColor(a.level);
   const h = holdings().find((x) => x.symbol === sym);
-  el.innerHTML = `<div class="card"><h2>綜合進場評估<span class="r small muted">${a.src.length} 項指標 · 信心度 ${a.confidence}%</span></h2>
+  el.innerHTML = tdCardHtml(sym, a) + `<div class="card"><h2>綜合進場評估<span class="r small muted">${a.src.length} 項指標 · 信心度 ${a.confidence}%</span></h2>
     <div class="row wrap" style="gap:16px;align-items:center">
       <div style="text-align:center;min-width:110px"><div style="font-size:22px;font-weight:800;color:${col}">${esc(a.label)}</div><div class="small muted" style="margin-top:2px">${h ? esc(a.tip) : '模型試算'}</div>${h ? '' : `<div class="num" style="font-size:28px;font-weight:800;color:${col}">${a.ratio}%</div>`}</div>
       <div style="flex:1;min-width:200px"><div style="position:relative;height:10px;border-radius:5px;background:linear-gradient(90deg,${S.pref.color === 'us' ? '#dc2626,#f97316,#94a3b8,#22c55e,#16a34a' : '#15803d,#22c55e,#94a3b8,#f97316,#dc2626'})"><i style="position:absolute;top:-4px;left:calc(${a.score}% - 2px);width:4px;height:18px;border-radius:2px;background:var(--text)"></i></div>
