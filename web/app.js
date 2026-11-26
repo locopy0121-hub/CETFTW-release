@@ -969,6 +969,7 @@ function drawChart(wrap, bars, opt) {
     MAS.forEach((p) => { const v = ma[p][from + i]; if (v != null) { hi = Math.max(hi, v); lo = Math.min(lo, v); } }); });
   if (opt.avg && opt.avg > lo * 0.8 && opt.avg < hi * 1.25) { hi = Math.max(hi, opt.avg); lo = Math.min(lo, opt.avg); }
   if (opt.base) { hi = Math.max(hi, opt.base); lo = Math.min(lo, opt.base); }
+  (opt.levels || []).forEach((l) => { hi = Math.max(hi, l.v); lo = Math.min(lo, l.v); });
   if (OV) OV.prices.forEach((v) => { if (v > 0 && isFinite(v)) { hi = Math.max(hi, v); lo = Math.min(lo, v); } });
   const pad = (hi - lo) * (opt.overlay ? 0.1 : 0.06) || 1; hi += pad; lo -= pad;
   const y = (v) => top + (hi - v) / (hi - lo) * mainH;
@@ -1024,6 +1025,7 @@ function drawChart(wrap, bars, opt) {
   // 持股均價線
   if (opt.avg) { const yy = y(opt.avg); if (yy > top && yy < top + mainH) { g.strokeStyle = '#10b981'; g.setLineDash([6, 4]); g.lineWidth = 1.2; g.beginPath(); g.moveTo(padL, yy); g.lineTo(W - padR, yy); g.stroke(); g.setLineDash([]);
     g.fillStyle = '#10b981'; g.fillRect(W - padR + 1, yy - 8, padR - 2, 16); g.fillStyle = '#fff'; g.fillText('均 ' + fmtPx(opt.avg), W - padR + 3, yy); } }
+  if (opt.levels) drawLevels(g, opt.levels, y, padL, W, padR, top, mainH);
   // K 棒型態標記
   const marks = {};
   if (opt.pats) { const ab = avgBodyOf(bars, n); let lastI = -9, lastDir = 0; vis.forEach((b, i) => { const ps = patAt(bars, from + i, ab); if (!ps.length) return; marks[i] = ps;
@@ -1070,13 +1072,27 @@ function drawChart(wrap, bars, opt) {
   const zi = wrap.parentElement && wrap.parentElement.querySelector('.zinfo'); if (zi) zi.textContent = z.count !== def || z.off ? `顯示 ${vis.length} 根（${vis[0].d} ～ ${vis[vis.length - 1].d}）` : '';
 }
 /** 當日走勢（分時線＋昨收基準＋成交量） */
+/** 三關價（與「進階分析」同公式：前一交易日高低）；回傳畫在圖上的參考線 */
+function keyLevelsOf(b, sym) {
+  if (!b || b.length < 2) return null; const us = isUs(sym); const etf = D.isEtf(sym);
+  const snap = (v) => { if (us) return Math.round(v * 100) / 100; const t = twTick(v, etf); return Math.round(Math.round(v / t) * t * 100) / 100; };
+  const base = b[b.length - 1].d === ymd() ? b[b.length - 2] : b[b.length - 1]; const r = base.h - base.l; if (!(r >= 0)) return null;
+  return { d: base.d, lv: [{ v: snap(base.l + r * 1.382), label: '上關', col: css('--up') }, { v: snap((base.h + base.l) / 2), label: '中關', col: '#E8B04B' }, { v: snap(base.h - r * 1.382), label: '下關', col: css('--down') }] };
+}
+/** 參考價位虛線＋右欄標籤（三關價）；used 為已占用的標籤位置，避免重疊 */
+function drawLevels(g, lv, y, padL, W, padR, top, mainH, used = []) {
+  (lv || []).forEach((l) => { const yy = y(l.v); if (!(yy >= top && yy <= top + mainH)) return;
+    g.strokeStyle = l.col; g.globalAlpha = 0.85; g.setLineDash([5, 4]); g.lineWidth = 1.2; g.beginPath(); g.moveTo(padL, yy); g.lineTo(W - padR, yy); g.stroke(); g.setLineDash([]); g.globalAlpha = 1; g.lineWidth = 1;
+    let ty = Math.min(top + mainH - 8, Math.max(top + 8, yy)); let k = 0; while (used.some((u) => Math.abs(u - ty) < 15) && k++ < 8) ty += 15; used.push(ty);
+    g.fillStyle = l.col; g.fillRect(W - padR + 1, ty - 8, padR - 2, 16); g.fillStyle = '#fff'; g.font = '10px sans-serif'; g.textBaseline = 'middle'; g.fillText(l.label.slice(0, 1) + ' ' + fmtPx(l.v), W - padR + 3, ty); g.font = '11px sans-serif'; });
+}
 function drawLine(wrap, pts, prev, us, ctype, opt = {}) {
   const cv = wrap.querySelector('canvas'); const tip = wrap.querySelector('.chart-tip');
   const W = wrap.clientWidth, H = 320, dpr = pxRatio(); cv.width = W * dpr; cv.height = H * dpr; cv.style.height = H + 'px';
   const g = cv.getContext('2d'); g.scale(dpr, dpr); g.clearRect(0, 0, W, H); g.font = '11px sans-serif'; g.textBaseline = 'middle';
   const padR = 56, padL = 6, top = 10, mainH = 220, volTop = 245, volH = 50;
   if (!pts.length) return;
-  const vals = pts.map((p) => p[1]).concat(prev ? [prev] : []);
+  const vals = pts.map((p) => p[1]).concat(prev ? [prev] : [], (opt.levels || []).map((l) => l.v));
   let hi = Math.max(...vals), lo = Math.min(...vals); const pad = (hi - lo) * 0.08 || hi * 0.01; hi += pad; lo -= pad;
   // 台股整天 270 分鐘；美股 390 分鐘
   const span = opt.span || (us ? 390 * 60000 : 270 * 60000); const t0 = opt.t0 || pts[0][0];
@@ -1086,6 +1102,7 @@ function drawLine(wrap, pts, prev, us, ctype, opt = {}) {
   for (let k = 0; k <= 4; k++) { const v = lo + (hi - lo) * k / 4; g.beginPath(); g.moveTo(padL, y(v)); g.lineTo(W - padR, y(v)); g.stroke(); g.fillText(fmtPx(v), W - padR + 4, y(v)); }
   (opt.bands || []).forEach(([a, b, lb]) => { const xa = x(a), xb = x(b); g.globalAlpha = 0.13; g.fillStyle = '#E8B04B'; g.fillRect(xa, top, xb - xa, mainH); g.globalAlpha = 1; g.fillStyle = css('--muted'); g.fillText(lb, xa + 4, top + mainH - 8); });
   if (prev) { g.setLineDash([4, 4]); g.strokeStyle = css('--muted'); g.beginPath(); g.moveTo(padL, y(prev)); g.lineTo(W - padR, y(prev)); g.stroke(); g.setLineDash([]); }
+  if (opt.levels) drawLevels(g, opt.levels, y, padL, W, padR, top, mainH);
   const grad = g.createLinearGradient(0, top, 0, top + mainH); grad.addColorStop(0, col + '55'); grad.addColorStop(1, col + '00');
   g.beginPath(); pts.forEach((p, i) => (i ? g.lineTo(x(p[0]), y(p[1])) : g.moveTo(x(p[0]), y(p[1])))); g.strokeStyle = col; g.lineWidth = 1.6; g.stroke();
   if (ctype !== 'line') { g.lineTo(x(pts[pts.length - 1][0]), top + mainH); g.lineTo(x(t0), top + mainH); g.closePath(); g.fillStyle = grad; g.fill(); }
@@ -1147,7 +1164,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"df99a3c","at":"2026-11-26 21:50"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"0fcbffa","at":"2026-11-26 22:04"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -1943,7 +1960,7 @@ VIEWS.s = {
         <div class="seg" id="ctp">${CTYPES.map(([k, n]) => `<button data-ct="${k}" class="${(S.pref.ctype || 'candle') === k ? 'on' : ''}">${n}</button>`).join('')}</div>
         <span class="sp"></span><button class="btn sm ${S.pref.boll ? 'primary' : ''}" id="boll">布林通道</button><a class="btn sm" href="#/compare/${sym}">比較</a><span class="seg" id="kopt"><button id="kpat" class="${S.pref.kpat !== false ? 'on' : ''}" title="在 K 線上標示型態">型態</button><button id="kavg" class="${S.pref.kavg !== false ? 'on' : ''}" title="顯示我的持股均價線">均價</button><button id="kxh" class="${S.pref.xh !== false ? 'on' : ''}" title="顯示十字線（價格與日期）">十字</button><button id="kma" title="設定均線週期">均線</button><button id="kfs" title="全螢幕">⛶</button><button id="kpng" title="下載圖表圖片">⤓</button></span><span class="seg" id="zm" title="滑鼠滾輪縮放、拖曳平移、雙擊還原"><button data-z="0.7">＋</button><button data-z="1.4">－</button><button data-z="0">還原</button></span>
         <div class="seg" id="sb">${['KD', 'RSI', 'MACD'].map((k) => `<button data-s="${k}" class="${S.pref.sub === k ? 'on' : ''}">${k}</button>`).join('')}</div></div>
-        <div class="chart-wrap"><canvas></canvas><div class="chart-tip"></div></div><div class="row between small muted" style="margin-top:4px"><span id="cmsg"></span><span class="zinfo"></span><span class="d-only">滾輪縮放 · 拖曳平移 · 雙擊還原</span></div></div>
+        <div class="chart-wrap"><canvas></canvas><div class="chart-tip"></div></div><div class="row between small muted" style="margin-top:4px"><span id="cmsg"></span><span class="zinfo"></span><span class="d-only">滾輪縮放 · 拖曳平移 · 雙擊還原</span></div><div id="kplan"></div></div>
       ${(S.pref.stabL || {}).pos === 'top' ? '' : stabBar(this)}
       <div id="si" class="grid g2 stack" style="margin-top:12px"></div>`;
   },
@@ -1987,7 +2004,7 @@ VIEWS.s = {
     const sym = this.sym; const [range, count, iv] = rangeOf(S.pref.range); const ctype = S.pref.ctype || 'candle';
     $('#sb').style.visibility = range === '1d' ? 'hidden' : '';
     if (range === '1d') {
-      $('#cmsg').textContent = '載入當日走勢…';
+      $('#cmsg').textContent = '載入當日走勢…'; if ($('#kplan')) $('#kplan').innerHTML = '';
       const bars5 = ctype === 'candle' || ctype === 'ohlc'; const us = isUs(sym) && !/^\^|=|-USD$/.test(sym); const ext = us && S.pref.usExt !== false;
       const r = await fetchYahoo(ysym(sym), '1d', bars5 ? '5m' : '1m', 30, ext);
       if (S.route !== 's' || this.sym !== sym) return;
@@ -2002,15 +2019,23 @@ VIEWS.s = {
       $('#cmsg').innerHTML = esc('交易日 ' + dd.getUTCFullYear() + '/' + String(dd.getUTCMonth() + 1).padStart(2, '0') + '/' + String(dd.getUTCDate()).padStart(2, '0') + '（週' + wk + '）' + (bars5 ? '・5 分 K' : '') + (ext ? '・美東 04:00–20:00' + (preOnly ? '・基準為最近收盤' : '') : ''))
         + (us ? ` <button class="btn sm" id="usExtT" style="margin-left:6px">${ext ? '含盤前盤後 ✓' : '只看盤中'}</button>` : '');
       if ($('#usExtT')) $('#usExtT').onclick = () => { S.pref.usExt = !ext; savePref(); this.chart(); };
+      // 三關價線（與 App 當日走勢的「三關」開關相同；進階圖表會員）
+      let levels = null; const klOn = S.pref.keyLv !== false;
+      if (can('CHART') && !/^\^|=|-USD$/.test(sym)) {
+        $('#cmsg').insertAdjacentHTML('beforeend', ` <button class="btn sm" id="klT" style="margin-left:6px">${klOn ? '三關 ✓' : '三關'}</button>`);
+        $('#klT').onclick = () => { S.pref.keyLv = !klOn; savePref(); this.chart(); };
+        if (klOn) { const dk = sym + '2y'; const daily = barCache[dk] || (barCache[dk] = await loadBars(sym, '2y')); if (S.route !== 's' || this.sym !== sym) return;
+          const kl = keyLevelsOf(daily, sym); if (kl) levels = kl.lv; }
+      }
       if (bars5) {
         const bs = r.timestamp.map((t, i) => (q0.close[i] == null || q0.open[i] == null ? null : { d: hm(t * 1000), t: t * 1000, o: q0.open[i], h: q0.high[i], l: q0.low[i], c: q0.close[i], v: isUs(sym) ? q0.volume[i] : (q0.volume[i] || 0) / 1000 })).filter(Boolean);
-        drawChart($('.chart-wrap'), bs, { key: sym + '1d5' + (ext ? 'x' : ''), count: 0, mas: [], type: ctype, intraday: true, base: prev });
+        drawChart($('.chart-wrap'), bs, { key: sym + '1d5' + (ext ? 'x' : ''), count: 0, mas: [], type: ctype, intraday: true, base: prev, levels });
         return;
       }
       const pts = r.timestamp.map((t, i) => [t * 1000, q0.close[i], q0.volume[i]]).filter((p) => p[1] != null);
       const full = ext && pre.start && post.end && r.timestamp[0] >= pre.start - 60;
       drawLine($('.chart-wrap'), pts, prev, isUs(sym), ctype, full ? { t0: pre.start * 1000, span: (post.end - pre.start) * 1000, bands: [[pre.start * 1000, reg.start * 1000, '盤前'], [reg.end * 1000, post.end * 1000, '盤後']],
-        baseLabel: preOnly ? '收盤' : '昨收', lab: (t) => (seg(t / 1000) ? '　<span style="color:#E8B04B">' + seg(t / 1000) + '</span>' : '') } : {});
+        baseLabel: preOnly ? '收盤' : '昨收', lab: (t) => (seg(t / 1000) ? '　<span style="color:#E8B04B">' + seg(t / 1000) + '</span>' : ''), levels } : { levels });
       return;
     }
     const key = sym + range + (iv || ''); $('#cmsg').textContent = barCache[key] ? '' : '載入 K 線…';
@@ -2026,9 +2051,52 @@ VIEWS.s = {
     }
     $('#cmsg').innerHTML = can('CHART') ? '' : '🔒 KD／RSI／MACD 副圖為會員功能（進階圖表）。<a href="#/member">查看方案 ›</a>';
     const hh = holdings().find((x) => x.symbol === sym); const fsEl = document.fullscreenElement;
-    drawChart($('.chart-wrap'), all, { key: sym + range + (iv || '') + count, count: count || all.length, type: ctype, weekly: iv === '1wk', sub: can('CHART') ? S.pref.sub : null, boll: can('CHART') && S.pref.boll, mas: S.pref.mas, pats: S.pref.kpat !== false && can('KLINE'), avg: S.pref.kavg !== false && hh ? hh.avgCost : null, H: fsEl && fsEl.contains($('.chart-wrap')) ? Math.max(400, window.innerHeight - 150) : null });
+    const ov = iv === '1wk' ? (this.planBox(null, sym), null) : await this.plan(all, sym); if (S.route !== 's' || this.sym !== sym) return;
+    drawChart($('.chart-wrap'), all, { overlay: ov, key: sym + range + (iv || '') + count, count: count || all.length, type: ctype, weekly: iv === '1wk', sub: can('CHART') ? S.pref.sub : null, boll: can('CHART') && S.pref.boll, mas: S.pref.mas, pats: S.pref.kpat !== false && can('KLINE'), avg: S.pref.kavg !== false && hh ? hh.avgCost : null, H: fsEl && fsEl.contains($('.chart-wrap')) ? Math.max(400, window.innerHeight - 150) : null });
     if (iv === '1wk') $('#cmsg').textContent = '週 K（' + all[0].d + ' 起）'; else if (S.pref.range === 'C') $('#cmsg').textContent = '自訂區間：近 ' + rcLabel(S.pref.rcDays || 365);
     if (iv !== '1wk') { this.bars = all; this.signals(); this.pro(); }
+  },
+  /** 主圖交易計畫（與 App 個股頁相同）：依近兩年日 K 算出可畫的計畫，對齊目前顯示的 K 棒後回傳 overlay */
+  async plan(shown, sym) {
+    if (!can('KLINE') || !shown.length) { this.planBox(null, sym); return null; }
+    const etf = D.isEtf(sym) || (!isUs(sym) && /^00/.test(sym)) || (S.q[sym] || {}).type === 'ETF';
+    const tickOf = (p) => (isUs(sym) ? 0.01 : twTick(p, etf));
+    let cs = await liveBars(sym, '2y'); if (this.sym !== sym) return null;
+    const d0 = cs.findIndex((b) => b.d === shown[0].d); if (d0 < 0) cs = shown;   // 對不上日期時改以畫面上的 K 棒計算
+    const off = d0 < 0 ? 0 : d0;
+    let all = [];
+    if (cs.length >= 40) { const r = klineAnalyze(cs); if (r) { r.etf = etf; r.sigs = kbarSignals(cs, etf, tickOf); try { r.pats = chartPatterns(cs, tickOf); } catch (e) { r.pats = []; } all = kaOverlays(r, tickOf); this._kpR = r; } }
+    else { const sp = cpSimplePlan(cs, tickOf); if (sp) all = [sp]; this._kpR = null; }
+    const on = S.pref.showPlan !== false;
+    const ov = !on || !all.length ? null : this._kpR ? kaFocus(sym, this._kpR, all) : all[0];
+    this.planBox({ all, ov, on }, sym);
+    if (!ov) return null;
+    // 移到畫面座標；只留畫面內的型態線段與標記，避免舊線段把縱軸拉開
+    const s = ovShift(ov, off); const segs = s.segs.filter((g) => Math.max(g.i1, g.i2) >= 0); const marks = s.marks.filter((m) => m.i >= 0);
+    return { ...s, segs, marks, prices: [s.entry, s.stop, s.target].concat(segs.flatMap((g) => [g.v1, g.v2]), marks.map((m) => m.v), s.box && s.box.i2 >= 0 ? [s.box.lo, s.box.hi] : []) };
+  },
+  planBox(o, sym) {
+    const el = $('#kplan'); if (!el) return;
+    if (!o) { el.innerHTML = can('KLINE') ? '' : ''; return; }
+    const { all, ov, on } = o; const f = fmtPx;
+    if (!all.length) { el.innerHTML = '<div class="small muted" style="margin-top:8px">交易計畫：目前沒有符合方向的計畫可畫（可切換做多／做空／依訊號）。</div>' + kaSideHtml(); return; }
+    const chips = all.map((a) => `<button class="chip ${ov && ov.id === a.id ? 'on' : ''}" data-kpo="${esc(a.id)}" style="padding:4px 10px;font-size:12px;${a.bull ? 'color:var(--up)' : 'color:var(--down)'}">${esc(a.title)}</button>`).join('');
+    el.innerHTML = `<div class="tile" style="margin-top:8px"><div class="row wrap" style="gap:8px;align-items:center"><b>交易計畫</b><button class="btn sm" id="kpT">${on ? '開 ✓' : '關'}</button><span class="sp"></span></div>
+      ${on ? `${kaSideHtml()}<div class="chips" style="margin-top:8px">${chips}</div>
+      ${ov ? `<div class="small text2" style="margin-top:8px">${ov.bull ? '進場' : '關鍵'} <b class="num">${f(ov.entry)}</b> · ${ov.bull ? '停損' : '防守'} <b class="num" style="color:${PLAN_C.risk}">${f(ov.stop)}</b> · ${ov.bull ? '目標' : '下看'} <b class="num" style="color:${PLAN_C.target}">${f(ov.target)}</b> · ${esc(ov.title)}${ov.bull ? '' : '（持股減碼參考，不建議放空）'}</div>
+        <div class="row wrap small" style="margin-top:4px;gap:6px"><span style="color:${PLAN_C.profit}">■</span> 獲利 <span style="color:${PLAN_C.risk}">■</span> 風險 <span class="muted" style="flex:1">· 盈虧比 1:${ov.rr.toFixed(1)}</span><button class="btn sm" id="kpA">＋ 設為到價提醒</button></div>` : '<div class="small muted" style="margin-top:6px">點選上方計畫，在圖上顯示獲利區與風險區。</div>'}
+      <div class="small muted" style="margin-top:4px">依近兩年日 K 計算（與「技術」分頁 K 線形態分析同一份計畫）；僅為分析試算，不構成投資建議。</div>` : '<div class="small muted" style="margin-top:4px">開啟後在 K 線圖上畫出進場、停損、目標與獲利／風險區。</div>'}</div>`;
+    $('#kpT').onclick = () => { S.pref.showPlan = !on; savePref(); this.chart(); };
+    $$('[data-kpo]', el).forEach((b) => b.onclick = () => { S.kaFocus = S.kaFocus || {}; S.kaFocus[sym] = b.dataset.kpo; this.chart(); });
+    if ($('#kpA')) $('#kpA').onclick = () => {
+      if (!can('ALERTS')) { toast('提醒為會員功能'); return; }
+      const px = (S.q[sym] || {}).price; if (!px) { toast('尚無即時價，稍後再試'); return; }
+      const list = kjson('alertsV2', []); let id = Math.max(0, ...list.map((a) => +a.id || 0)); let n = 0;
+      [ov.entry, ov.stop, ov.target].map((v) => Math.round(v * 100) / 100).forEach((v) => { if (!(v > 0)) return; const t = v >= px ? 'PRICE_ABOVE' : 'PRICE_BELOW';
+        if (list.some((a) => a.s === sym && a.t === t && Math.abs(a.v - v) < 1e-6)) return; list.push({ id: ++id, s: sym, t, v, on: true, f: '' }); n++; });
+      if (!n) { toast('這三個價位都已設過提醒'); return; }
+      ksetJson('alertsV2', list); changed(); toast('已新增 ' + n + ' 個到價提醒（進場、停損、目標），可在「提醒」頁調整');
+    };
   },
   fill() {
     const sym = this.sym; const q = S.q[sym] || {}; const us = isUs(sym); const ch = q.price && q.prev ? q.price - q.prev : 0;
