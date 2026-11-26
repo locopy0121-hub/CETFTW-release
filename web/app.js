@@ -1164,7 +1164,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"d21416c","at":"2026-11-26 22:31"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"d12396a","at":"2026-11-26 22:35"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -1954,7 +1954,6 @@ VIEWS.s = {
       <button class="btn" id="sell">賣出</button><button class="btn primary" id="buy">買進</button></div>
       <div id="stags" class="row wrap" style="gap:6px;margin:-4px 0 10px"></div>
       <div id="sq"></div>
-      <div id="vflow"></div>
       ${(S.pref.stabL || {}).pos === 'top' ? stabBar(this) : ''}
       <div class="card" style="margin-top:12px"><div class="row wrap" style="margin-bottom:8px"><div class="seg" id="rg" style="flex-wrap:nowrap;overflow-x:auto;max-width:100%;scrollbar-width:none">${Object.keys(RANGES).map((k) => `<button data-r="${k}" class="${S.pref.range === k ? 'on' : ''}" style="white-space:nowrap;flex:none;padding:6px 10px">${RANGE_N[k]}</button>`).join('')}<button data-r="C" class="${S.pref.range === 'C' ? 'on' : ''}" title="自訂區間" style="white-space:nowrap;flex:none;padding:6px 10px">${S.pref.rcDays ? '自訂 ' + rcLabel(S.pref.rcDays) : '自訂…'}</button></div>
         <div class="seg" id="ctp">${CTYPES.map(([k, n]) => `<button data-ct="${k}" class="${(S.pref.ctype || 'candle') === k ? 'on' : ''}">${n}</button>`).join('')}</div>
@@ -1997,10 +1996,10 @@ VIEWS.s = {
     this._fs = () => setTimeout(() => this.chart(), 60); document.addEventListener('fullscreenchange', this._fs);
     $$('[data-st]').forEach((b) => b.onclick = () => { this._tab = b.dataset.st; S.pref.stab = b.dataset.st; savePref(); $$('[data-st]').forEach((x) => x.classList.toggle('on', x === b)); this.info(); });
     $('#stabE').onclick = () => stabEditor();
-    this.chart(); this.info(); this.tags(); vfMount(sym);
+    this.chart(); this.info(); this.tags();
     this._rs = () => this.chart(); window.addEventListener('resize', this._rs);
   },
-  leave() { vfStop(); window.removeEventListener('resize', this._rs); document.removeEventListener('fullscreenchange', this._fs); if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); },
+  leave() { window.removeEventListener('resize', this._rs); document.removeEventListener('fullscreenchange', this._fs); if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); },
   async chart() {
     const sym = this.sym; const [range, count, iv] = rangeOf(S.pref.range); const ctype = S.pref.ctype || 'candle';
     $('#sb').style.visibility = range === '1d' ? 'hidden' : '';
@@ -7262,107 +7261,7 @@ async function starSettings() {
   const p = starPref(); STAR_MKTS.forEach(([k]) => { p.rules[k] = starSane(R[k]); }); p.anim = { ...an }; savePref();
   clearInterval(ST.loop); ST.loop = 0; STAR_MKTS.forEach(([k]) => starRecompute(k)); starMount(); starRender(); toast('已儲存星團設定');
 }
-// ───────── 買賣量粒子（與 App VolumeFlowPanel 相同：左內盤、右外盤，粒子＝成交量，聚合圈＝買賣占比，量比決定密度） ─────────
-const VF = { sym: null, raf: 0, timer: 0, io: null, vis: true, st: null, ratio: null, avg5: 0, share: 0.5, est: true, P: null };
-function vfRadius(sd, share) { return 0.16 + 0.18 * Math.sqrt(Math.min(1, Math.max(0, sd > 0 ? share : 1 - share))); }
-function vfCx(sd, asp) { return sd > 0 ? asp * 0.76 : asp * 0.24; }
-function vfStop() { cancelAnimationFrame(VF.raf); VF.raf = 0; clearInterval(VF.timer); VF.timer = 0; if (VF.io) { VF.io.disconnect(); VF.io = null; } VF.sym = null; }
-function vfVerdict(st) {
-  if (!st) return ['計算中', css('--muted')];
-  if (st.broken) return ['破停損', css('--warn')];
-  return st.level >= 3 ? ['條件成立', css('--primary')] : ['觀望', css('--muted')];
-}
-function vfLine() {
-  const el = $('#vfTxt'); if (!el) return; const [t, c] = vfVerdict(VF.st);
-  el.innerHTML = `<b style="color:${c}">${esc(VF.noKa ? '—' : t)}</b>・三環 ${VF.st ? VF.st.level + '/3' : '—'}・量比 ${VF.ratio != null ? fmt(VF.ratio, 2) + ' 倍' : '—'}${VF.est ? '・買賣比例為估算' : ''}${VF.noKa ? '・三環條件為會員功能（K 線分析）' : ''}`;
-  const inP = 1 - VF.share; const bar = $('#vfBar');
-  if (bar) bar.innerHTML = `<span class="num down small">${fmt(inP * 100, 1)}%</span><span style="flex:1;height:6px;border-radius:3px;margin:0 8px;background:linear-gradient(90deg,var(--down) ${inP * 100}%,var(--up) ${inP * 100}%)"></span><span class="num up small">${fmt((1 - inP) * 100, 1)}%</span>`;
-}
-function vfUpdate(sym) {
-  const q = S.q[sym] || {}; const us = isUs(sym);
-  const fresh = q.time && Date.now() - q.time < 15 * 60000; const mins = fresh ? volMinutesNow(us) : null;
-  const today = us ? q.vol : (q.volLots != null ? q.volLots : null);
-  VF.ratio = volRatio(today, VF.avg5, us, mins); VF.live = mins != null;
-  const chg = q.price && q.prev ? (q.price / q.prev - 1) * 100 : 0;
-  VF.share = 0.5 + Math.min(0.3, Math.max(-0.3, chg / 10)); VF.est = true;
-  vfLine();
-  if (VF.redraw) VF.redraw();
-}
-async function vfMount(sym) {
-  vfStop(); const box = $('#vflow'); if (!box) return;
-  if (S.pref.vflow === false) { box.innerHTML = `<div class="row" style="margin:-4px 0 10px"><button class="btn sm" id="vfShow">顯示買賣量粒子</button></div>`; $('#vfShow').onclick = () => { S.pref.vflow = true; savePref(); vfMount(sym); }; return; }
-  const fx = S.pref.vfFx !== false; const mode = S.pref.ringMode === 1 ? 1 : 0;
-  box.innerHTML = `<div class="card" style="margin-bottom:12px"><h2>買賣量粒子<span class="r"><span class="seg" id="vfMode"><button data-vm="0" class="${mode === 0 ? 'on' : ''}" title="日 K 停損">波段</button><button data-vm="1" class="${mode === 1 ? 'on' : ''}" title="週 K 停損、三批試算">存股</button></span>
-    <button class="btn sm ${fx ? 'primary' : ''}" id="vfFx">動畫 ${fx ? '開' : '關'}</button><button class="btn sm" id="vfHide">隱藏</button></span></h2>
-    <div style="position:relative;height:180px;border-radius:12px;overflow:hidden;background:color-mix(in srgb,var(--bg) 70%,transparent)"><canvas id="vfC" style="width:100%;height:100%;display:block"></canvas>
-      <div style="position:absolute;left:10px;top:8px" class="down small"><b>內盤（賣）</b></div><div style="position:absolute;right:10px;top:8px" class="up small"><b>外盤（買）</b></div>
-      <div id="vfSt" class="small muted" style="position:absolute;left:0;right:0;bottom:8px;text-align:center"></div></div>
-    <div id="vfBar" class="row" style="margin-top:8px;align-items:center"></div><div id="vfTxt" class="small text2" style="margin-top:4px"></div>
-    <details class="small muted" style="margin-top:4px"><summary>說明</summary>左＝內盤（賣方成交）、右＝外盤（買方成交），粒子＝成交量，聚合圈大小＝買賣量占比（網頁沒有逐筆明細，依當日漲跌估算）；量比＝盤中預估量（或盤後當日量）÷ 5 日均量，越大粒子越密，放量帶拖尾。結論依三環條件：3/3「條件成立」，其餘「觀望」，跌破試算停損為「破停損」。僅為視覺化，不代表任何買賣建議。</details></div>`;
-  $('#vfHide').onclick = () => { S.pref.vflow = false; savePref(); vfMount(sym); };
-  $('#vfFx').onclick = () => { S.pref.vfFx = !fx; savePref(); vfMount(sym); };
-  $$('[data-vm]').forEach((b) => b.onclick = () => { S.pref.ringMode = +b.dataset.vm; savePref(); vfMount(sym); });
-  VF.sym = sym; VF.st = null; VF.ratio = null; VF.avg5 = 0; VF.noKa = !can('KLINE'); vfLine();
-  vfAnim(sym, fx);
-  try {
-    const b = await liveBars(sym, '2y'); if (VF.sym !== sym) return;
-    const b0 = barCache[sym + '2y'] || []; const today = ymd(); const hist = (b0.length && b0[b0.length - 1].d === today ? b0.slice(0, -1) : b0).slice(-5).map((x) => x.v).filter((v) => v > 0);
-    VF.avg5 = hist.length ? hist.reduce((a, v) => a + v, 0) / hist.length : 0;
-    vfUpdate(sym); VF.timer = setInterval(() => { if (VF.sym === sym) vfUpdate(sym); }, 15000);
-    if (!VF.noKa && b.length >= 60) {
-      const w = weeklyBars(await liveBars(sym, '5y')); if (VF.sym !== sym) return;
-      const d = klineAnalyze(b), wk = klineAnalyze(w); const q = S.q[sym] || {}; const price = q.price || b[b.length - 1].c;
-      const us = isUs(sym); const etf = D.isEtf(sym) || (!us && /^00/.test(sym)) || q.type === 'ETF';
-      if (d && wk) VF.st = ringsEval(ringsInput(price, d, wk), mode, us ? (v) => Math.round(v * 100) / 100 : (v) => twSnap(v, etf), us ? 0.01 : twTick(price, etf));
-    }
-    vfLine();
-  } catch (e) { vfLine(); }
-}
-function vfAnim(sym, fx) {
-  const cv = $('#vfC'); if (!cv) return; const g = cv.getContext('2d'); const N = 80;
-  const P = { x: new Float32Array(N), y: new Float32Array(N), vx: new Float32Array(N), vy: new Float32Array(N), age: new Float32Array(N), life: new Float32Array(N), sz: new Float32Array(N), sd: new Int8Array(N), on: new Uint8Array(N), n: 0, asp: 2 };
-  const spawn = (x, y, vx, vy, life, sz, sd) => { for (let i = 0; i < N; i++) if (!P.on[i]) { P.x[i] = x; P.y[i] = y; P.vx[i] = vx; P.vy[i] = vy; P.age[i] = 0; P.life[i] = life; P.sz[i] = sz; P.sd[i] = sd; P.on[i] = 1; P.n++; return; } };
-  const kill = (i) => { if (P.on[i]) { P.on[i] = 0; P.n--; } };
-  VF.io = new IntersectionObserver((es) => { VF.vis = es[0].isIntersecting; }); VF.io.observe(cv);
-  let W = 0, H = 0, last = 0, acc = 0, t = 0, up = css('--up'), dn = css('--down');
-  const size = () => { const r = cv.getBoundingClientRect(); const dpr = window.devicePixelRatio || 1; if (r.width && (Math.round(r.width * dpr) !== cv.width || Math.round(r.height * dpr) !== cv.height)) { cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr); up = css('--up'); dn = css('--down'); } W = cv.width; H = cv.height; P.asp = H ? W / H : 2; };
-  const target = () => { const rv = VF.ratio != null ? VF.ratio : 1; return Math.max(6, Math.min(N, Math.round((rv < 0.8 ? 18 : rv <= 1.5 ? 40 : 70) * 0.5 * (S.pref.vfStrong ? 2 : 1)))); };
-  const scatter = (seed) => { let s = seed; const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647); for (let k = 0; k < target(); k++) { const sd = rnd() < VF.share ? 1 : -1; const a = rnd() * 6.283, r = vfRadius(sd, VF.share) * Math.sqrt(rnd()); spawn(vfCx(sd, P.asp) + Math.cos(a) * r, 0.5 + Math.sin(a) * r, 0, 0, 1e9, 0.014 + rnd() * 0.012, sd); } };
-  const draw = (pulse, live, hot) => {
-    g.clearRect(0, 0, W, H); const h = H;
-    [-1, 1].forEach((sd) => { const col = sd > 0 ? up : dn; const cx = vfCx(sd, P.asp) * h, cy = 0.5 * h, r = vfRadius(sd, VF.share) * h; const gl = fx ? 0.75 + 0.25 * pulse : 0.85;
-      const gr = g.createRadialGradient(cx, cy, 0, cx, cy, r * 1.25); gr.addColorStop(0, hexA(col, 0.28 * gl)); gr.addColorStop(1, hexA(col, 0)); g.fillStyle = gr; g.beginPath(); g.arc(cx, cy, r * 1.25, 0, 6.2832); g.fill();
-      g.strokeStyle = hexA(col, 0.55); g.lineWidth = 1.5 * (window.devicePixelRatio || 1); g.beginPath(); g.arc(cx, cy, r, 0, 6.2832); g.stroke(); });
-    for (let i = 0; i < N; i++) { if (!P.on[i]) continue; const life = P.life[i], age = P.age[i];
-      const fade = life > 1e8 ? 0.85 : Math.min(1, Math.max(0, 1 - age / life)) * (age < 0.25 ? age / 0.25 : 1); const col = P.sd[i] > 0 ? up : dn; const s = P.sz[i] * h, px = P.x[i] * h, py = P.y[i] * h;
-      if (hot && live && fx) for (let k = 1; k <= 2; k++) { g.fillStyle = hexA(col, fade * (0.32 - 0.11 * k)); g.beginPath(); g.arc((P.x[i] - P.vx[i] * 0.05 * k) * h, (P.y[i] - P.vy[i] * 0.05 * k) * h, s * (1 - 0.2 * k), 0, 6.2832); g.fill(); }
-      g.fillStyle = hexA(col, 0.22 * fade); g.beginPath(); g.arc(px, py, s * 2.2, 0, 6.2832); g.fill();
-      g.fillStyle = hexA(col, fade); g.beginPath(); g.arc(px, py, s, 0, 6.2832); g.fill(); }
-  };
-  size();
-  if (!fx) { VF.redraw = () => { if (!cv.isConnected) return; P.on.fill(0); P.n = 0; size(); scatter(vfSeed(sym)); draw(0.5, false, false); }; VF.redraw(); $('#vfSt').textContent = '動畫關閉'; return; }
-  VF.redraw = null;
-  const loop = (now) => {
-    if (VF.sym !== sym || !cv.isConnected) return;
-    VF.raf = requestAnimationFrame(loop);
-    if (document.hidden || !VF.vis) { last = 0; return; }
-    const live = !!VF.live; const minStep = live ? 0 : 66;
-    if (last && now - last < minStep) return;
-    const dt = last ? Math.min(0.08, (now - last) / 1000) : 0.016; last = now; t += dt; size();
-    const hot = (VF.ratio || 1) > 1.5; const speed = live ? (hot ? 1.5 : 1) : 0.35; const tg = target(); const share = VF.share;
-    if (live) { acc += dt * tg / 3; while (acc >= 1) { acc -= 1; if (P.n < tg) { const sd = Math.random() < share ? 1 : -1; const top = Math.random() < 0.5; const px = P.asp * (0.3 + Math.random() * 0.4);
-        spawn(px, top ? -0.04 : 1.04, (vfCx(sd, P.asp) - px) * 0.4, top ? 0.25 : -0.25, 3 + Math.random() * 1.5, 0.012 + Math.random() * 0.01, sd); } } }
-    else if (P.n < tg) { const sd = Math.random() < share ? 1 : -1; const a = Math.random() * 6.283, r = vfRadius(sd, share) * Math.sqrt(Math.random()); spawn(vfCx(sd, P.asp) + Math.cos(a) * r, 0.5 + Math.sin(a) * r, 0, 0, 6 + Math.random() * 6, 0.012 + Math.random() * 0.01, sd); }
-    for (let i = 0; i < N; i++) { if (!P.on[i]) continue; const cx = vfCx(P.sd[i], P.asp), rad = vfRadius(P.sd[i], share); const dx = cx - P.x[i], dy = 0.5 - P.y[i]; const d = Math.max(1e-3, Math.hypot(dx, dy));
-      const pull = d > rad ? 2.6 : 0.6, swirl = d < rad * 1.3 ? 0.5 : 0;
-      P.vx[i] += (dx * pull - dy / d * swirl) * dt * speed; P.vy[i] += (dy * pull + dx / d * swirl) * dt * speed;
-      const damp = 1 - (d > rad ? 0.9 : 1.8) * dt; P.vx[i] *= damp; P.vy[i] *= damp; P.x[i] += P.vx[i] * dt * speed; P.y[i] += P.vy[i] * dt * speed; P.age[i] += dt; if (P.age[i] > P.life[i]) kill(i); }
-    $('#vfSt').textContent = live ? '' : '非盤中・低功耗';
-    draw(0.5 + 0.5 * Math.sin(t * (live ? 3 : 1.4)), live, hot);
-  };
-  VF.raf = requestAnimationFrame(loop);
-}
-function vfSeed(s) { let h = 7; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 2147483646; return h + 1; }
+// （網頁版買賣量粒子已移除：使用者指定；App 端 VolumeFlowPanel 不變）
 /** #rrggbb（或 rgb()）加透明度 */
 function hexA(c, a) {
   c = String(c || '').trim(); a = Math.max(0, Math.min(1, a));
