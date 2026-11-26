@@ -1164,7 +1164,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"26de8df","at":"2026-11-26 23:17"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"776c116","at":"2026-11-26 23:24"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -1942,14 +1942,12 @@ function rangeOf(k) {
 }
 function rcLabel(d) { return d % 365 === 0 ? d / 365 + ' 年' : d % 30 === 0 ? d / 30 + ' 個月' : d + ' 天'; }
 const CTYPES = [['candle', 'K線'], ['line', '走勢'], ['area', '面積'], ['ohlc', '美國線']];
-/** 個股頁迷你行情列：大行情卡捲出畫面後黏在頂端（高度 0 的 sticky 外框，不推擠版面） */
+/** 個股頁置頂：返回／名稱／按鈕列、標籤、行情卡整組 sticky（#shd）；捲動後加 .stuck，手機版收起標籤與明細格 */
 function sqmInject() {
   if (document.getElementById('sqmCss')) return; const el = document.createElement('style'); el.id = 'sqmCss';
-  el.textContent = `.sqmw{position:sticky;top:0;z-index:40;height:0}
-.sqm{display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--card);border:1px solid var(--border);border-top:0;border-radius:0 0 12px 12px;box-shadow:0 6px 18px #0003;cursor:pointer;white-space:nowrap;overflow:hidden;
-  opacity:0;transform:translateY(-110%);pointer-events:none;transition:opacity .18s,transform .18s}
-.sqm.on{opacity:1;transform:none;pointer-events:auto}.sqm .nm{overflow:hidden;text-overflow:ellipsis;flex:0 1 auto;min-width:2.5em;max-width:10em}.sqm>*{flex:none}.sqm>.nm{flex:0 1 auto}.sqm .px{font-size:18px}.sqm .sp{flex:1}
-@media (max-width:560px){.sqm{gap:7px;padding:7px 10px}.sqm .px{font-size:16px}.sqm .tm,.sqm .tp b{display:none}}`;
+  el.textContent = `.shd{position:sticky;top:0;z-index:40;background:var(--bg);margin:0 -6px;padding:0 6px;transition:box-shadow .18s}
+.shd.stuck{padding-top:8px;padding-bottom:8px;box-shadow:0 10px 14px -12px #0007}.shd.stuck .top{margin-bottom:8px}
+@media (max-width:560px){.shd.stuck #stags,.shd.stuck #sq .grid{display:none}.shd.stuck .top{flex-wrap:nowrap;margin-bottom:6px}.shd.stuck .top>:not(:first-child):not(h1){display:none}.shd.stuck .top h1{font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}.shd.stuck #sq .row{flex-wrap:nowrap;align-items:center}.shd.stuck #sq .row>div:first-child{display:flex;align-items:baseline;gap:10px}.shd.stuck #sq .row>div:first-child>div{margin-top:0 !important}.shd.stuck #sq .card{padding:8px 12px}.shd.stuck #sq .num[style*="font-size:40px"]{font-size:26px !important}}`;
   document.head.appendChild(el);
 }
 const barCache = {};
@@ -1958,12 +1956,12 @@ VIEWS.s = {
   render(sym) {
     if (this.sym !== sym) this._tab = null; this.sym = sym; const us = isUs(sym);
     const inW = D.quotes().some((q) => q.s === sym);
-    return `<div class="top"><a class="btn sm" href="javascript:history.back()">‹ 返回</a><h1>${esc(D.name(sym))} <span class="muted num" style="font-size:16px">${sym}</span> <span class="mkt ${us ? 'us' : ''}">${us ? 'US' : D.otc(sym) ? '上櫃' : 'TW'}</span></h1>
+    return `<div id="shdS" style="height:1px;margin-bottom:-1px"></div><div class="shd" id="shd"><div class="top"><a class="btn sm" href="javascript:history.back()">‹ 返回</a><h1>${esc(D.name(sym))} <span class="muted num" style="font-size:16px">${sym}</span> <span class="mkt ${us ? 'us' : ''}">${us ? 'US' : D.otc(sym) ? '上櫃' : 'TW'}</span></h1>
       <button class="btn" id="wbtn">${inW ? '✓ 已在自選' : '＋ 加入自選'}</button><button class="btn" id="star" title="最愛">${D.starred().includes(sym) ? '★' : '☆'}</button>
       ${D.groups().length ? `<select id="grp" style="width:auto"><option value="">加入群組…</option>${D.groups().map((g) => `<option value="${g.id}">${(g.s || []).includes(sym) ? '✓ ' : ''}${esc(g.n)}</option>`).join('')}</select>` : ''}
       <button class="btn" id="sell">賣出</button><button class="btn primary" id="buy">買進</button></div>
       <div id="stags" class="row wrap" style="gap:6px;margin:-4px 0 10px"></div>
-      <div id="sq"></div><div class="sqmw"><div id="sqm" class="sqm"></div></div>
+      <div id="sq"></div></div>
       ${(S.pref.stabL || {}).pos === 'top' ? stabBar(this) : ''}
       <div class="card" style="margin-top:12px"><div class="row wrap" style="margin-bottom:8px"><div class="seg" id="rg" style="flex-wrap:nowrap;overflow-x:auto;max-width:100%;scrollbar-width:none">${Object.keys(RANGES).map((k) => `<button data-r="${k}" class="${S.pref.range === k ? 'on' : ''}" style="white-space:nowrap;flex:none;padding:6px 10px">${RANGE_N[k]}</button>`).join('')}<button data-r="C" class="${S.pref.range === 'C' ? 'on' : ''}" title="自訂區間" style="white-space:nowrap;flex:none;padding:6px 10px">${S.pref.rcDays ? '自訂 ' + rcLabel(S.pref.rcDays) : '自訂…'}</button></div>
         <div class="seg" id="ctp">${CTYPES.map(([k, n]) => `<button data-ct="${k}" class="${(S.pref.ctype || 'candle') === k ? 'on' : ''}">${n}</button>`).join('')}</div>
@@ -2006,10 +2004,9 @@ VIEWS.s = {
     this._fs = () => setTimeout(() => this.chart(), 60); document.addEventListener('fullscreenchange', this._fs);
     $$('[data-st]').forEach((b) => b.onclick = () => { this._tab = b.dataset.st; S.pref.stab = b.dataset.st; savePref(); $$('[data-st]').forEach((x) => x.classList.toggle('on', x === b)); this.info(); });
     $('#stabE').onclick = () => stabEditor();
-    sqmInject(); const sqm = $('#sqm'); if (sqm) sqm.onclick = (e) => { if (e.target.closest('a,button')) return; window.scrollTo({ top: 0, behavior: 'smooth' }); };
-    if (this._io) this._io.disconnect();
-    this._io = new IntersectionObserver(([en]) => { const m = $('#sqm'); if (m) m.classList.toggle('on', !en.isIntersecting && en.boundingClientRect.top < 0); });
-    if ($('#sq')) this._io.observe($('#sq'));
+    sqmInject(); if (this._io) this._io.disconnect();
+    this._io = new IntersectionObserver(([en]) => { const m = $('#shd'); if (m) m.classList.toggle('stuck', !en.isIntersecting && en.boundingClientRect.top < 0); });
+    if ($('#shdS')) this._io.observe($('#shdS'));
     this.chart(); this.info(); this.tags();
     this._rs = () => this.chart(); window.addEventListener('resize', this._rs);
   },
@@ -2080,10 +2077,6 @@ VIEWS.s = {
         ${[['開盤', fmtPrice(q.open, us)], ['最高', fmtPrice(q.high, us)], ['最低', fmtPrice(q.low, us)], ['昨收', fmtPrice(q.prev, us)],
            ['成交量', q.volLots != null ? fmtInt(q.volLots) + ' 張' : fmtVol(q.vol)], ['漲停', fmtPrice(q.up, us)], ['跌停', fmtPrice(q.down, us)], ['更新', q.time ? hm(q.time) : '—']]
           .map(([k, v]) => `<div><div class="small muted">${k}</div><div class="num">${v}</div></div>`).join('')}</div></div></div>`;
-    const m = $('#sqm'); if (m) m.innerHTML = `<b class="nm">${esc(D.name(sym))}</b><span class="muted num small">${esc(sym)}</span>
-      <b class="num px ${cls(ch)}">${fmtPrice(q.price, us)}</b><span class="num ${cls(ch)}">${q.price && q.prev ? arrow(ch) + ' ' + fmt(Math.abs(ch), 2) + ' ' + fmtPct(ch / q.prev * 100) : '—'}</span>
-      <span class="small muted num d-only">高 ${fmtPrice(q.high, us)}・低 ${fmtPrice(q.low, us)}・量 ${q.volLots != null ? fmtInt(q.volLots) + ' 張' : fmtVol(q.vol)}</span>
-      <span class="sp"></span><span class="small muted num tm">${q.time ? hm(q.time) : ''}</span><span class="small tp" style="color:var(--primary)">▲<b style="font-weight:400"> 頂部</b></span>`;
   },
   signals() {
     const el = $('#sig'); if (!el || !this.bars) return;
@@ -4744,7 +4737,7 @@ function layPage(force = false) {
   } finally { setTimeout(() => { layBusy = false; }, 0); }
 }
 function layButton() {
-  const top = $('#view > .top'); if (!top) return;
+  const top = $('#view > .top') || $('#view > .shd > .top'); if (!top) return;
   const n = (S.layGroups || []).filter((g) => !g.fixed).length; let b = $('#layBtn');
   if (n < 2) { if (b) b.remove(); return; }
   if (!b) { b = document.createElement('button'); b.id = 'layBtn'; b.className = 'btn'; b.title = '調整這一頁的卡片顯示、順序與寬度'; b.textContent = '⚙ 版面'; const h1 = top.querySelector('h1'); h1 && h1.nextSibling ? top.insertBefore(b, h1.nextSibling) : top.appendChild(b); b.onclick = layEditor; }
