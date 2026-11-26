@@ -1164,7 +1164,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"776c116","at":"2026-11-26 23:24"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"265364f","at":"2026-11-26 23:36"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -4334,6 +4334,7 @@ Object.assign(VIEWS.s, {
     const E = $('#sumC'); if (!E || this.sym !== sym || !this._sm || this._sm.sym !== sym) return;
     Object.assign(this._sm, o); E.innerHTML = sumHtml(this._sm);
     $$('[data-smgo]', E).forEach((x) => x.onclick = () => { const t = $('#' + x.dataset.smgo); if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+    $$('[data-smg]', E).forEach((x) => x.onclick = async () => { if (await sumSettings()) this.sumSet(sym, {}); });
   },
   /** 三環條件卡（與 App K 線分頁 TargetRingsCard 相同判定；停損模式 S.pref.ringMode：0 波段（日 K）／1 存股（週 K）） */
   async rings(sym, b, etf) {
@@ -4341,7 +4342,7 @@ Object.assign(VIEWS.s, {
     let st = null;
     try { const w = weeklyBars(await liveBars(sym, '5y')); if (this.sym !== sym || !el()) return;
       const d = klineAnalyze(b), wk = w.length >= 60 ? klineAnalyze(w) : null; const q = S.q[sym] || {}; const price = q.price || b[b.length - 1].c; const us = isUs(sym);
-      if (d && wk) st = ringsEval(ringsInput(price, d, wk), mode, us ? (v) => Math.round(v * 100) / 100 : (v) => twSnap(v, etf), us ? 0.01 : twTick(price, etf)); } catch (e) {}
+      if (d && wk) st = ringsEval(ringsInput(price, d, wk), mode, us ? (v) => Math.round(v * 100) / 100 : (v) => twSnap(v, etf), us ? 0.01 : twTick(price, etf), ringRule()); } catch (e) {}
     if (!el()) return;
     this.sumSet(sym, { rg: st || 0 });
     const E = el(); E.classList.add('rx'); E.innerHTML = ringsCardHtml(st, mode);
@@ -4349,6 +4350,7 @@ Object.assign(VIEWS.s, {
     $$('[data-rgm]', E).forEach((x) => x.onclick = () => { S.pref.ringMode = +x.dataset.rgm; savePref(); this.rings(sym, b, etf); });
     $$('[data-rxs]', E).forEach((x) => x.onclick = () => { S.pref.ringSty = +x.dataset.rxs; savePref(); const sl = $('.rxs', E).scrollLeft; this.rings(sym, b, etf).then(() => { const r2 = $('.rxs', el()); if (r2) r2.scrollLeft = sl; }); });
     $$('[data-rxa]', E).forEach((x) => x.onclick = () => { S.pref.ringAnim = S.pref.ringAnim === false; savePref(); this.rings(sym, b, etf); });
+    $$('[data-rxg]', E).forEach((x) => x.onclick = async () => { if (await ringSettings()) this.rings(sym, b, etf); else if (st && $('#rxFx', el())) rxRun($('#rxFx', el()), rxData(st), S.pref.ringSty == null ? 3 : +S.pref.ringSty, S.pref.ringAnim !== false); });
   },
   async t_chip() {
     const sym = this.sym; const us = isUs(sym); const si = $('#si'); si.innerHTML = '<div class="card empty" style="grid-column:1/-1">讀取中…</div>';
@@ -6564,7 +6566,7 @@ function rxSvg(sty, s, t, size = 150, mini = false) {
   const id = 'rxg' + (++RX_N % 1000);
   const br = `<path d="M4,16 V4 H16 M104,4 H116 V16 M116,104 V116 H104 M16,116 H4 V104" fill="none" stroke="${c}" stroke-width="1.4" opacity=".8"/>`;
   const rd = mini ? '' : `<rect x="24" y="108" width="72" height="9" fill="#050a14"/><text x="60" y="114" text-anchor="middle" ${M} font-size="7" fill="${c}" letter-spacing="1">${s.b ? 'STOP BREACH' : 'LV ' + s.lv + '/3 · RR 1:' + (s.rr || 0).toFixed(1)}</text>`;
-  return `<svg viewBox="0 0 120 120" width="${size}" height="${size}" style="flex:none;display:block"><defs><filter id="${id}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>${mini ? '' : br}<g filter="url(#${id})">${x}${rd}</g></svg>`;
+  return `<svg viewBox="0 0 120 120" width="${size}" height="${size}" style="flex:none;display:block"><defs><filter id="${id}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="${(2.2 * (RX.gl ?? 1)).toFixed(2)}" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>${mini ? '' : br}<g filter="url(#${id})">${x}${rd}</g></svg>`;
 }
 // ───────── 分析總結方框（各單項一格，依結果變色：紅偏多／黃中性／綠偏弱／灰虛線失效） ─────────
 const SM_C = { up: '#FF5A6E', mid: '#F2B544', dn: '#22C58B', off: '#6B7A94', ld: '#2E5470' };
@@ -6578,44 +6580,146 @@ function smStyleInject() {
   el.textContent = `.smw{position:relative;container-type:inline-size}.smg{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 @container (min-width:640px){.smg{grid-template-columns:repeat(4,minmax(0,1fr))}}
 .sml{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11.5px;color:#6f84a3;margin-top:8px}.sml i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px;vertical-align:0}
-.smb{position:relative;border-radius:12px;padding:10px 11px;background:linear-gradient(160deg,var(--c1),#07101e 72%);border:1.5px solid var(--c);box-shadow:0 0 12px -3px var(--c),inset 0 0 16px -8px var(--c);cursor:pointer;min-width:0}
+.smb{position:relative;border-radius:12px;padding:10px 11px;background:linear-gradient(160deg,var(--c1),#07101e 72%);border:1.5px solid var(--c);box-shadow:0 0 calc(12px * var(--gw,1)) -3px var(--c),inset 0 0 calc(16px * var(--gw,1)) -8px var(--c);cursor:pointer;min-width:0}
+.smg.c2{grid-template-columns:1fr 1fr !important}.smg.c4{grid-template-columns:repeat(4,minmax(0,1fr)) !important}.smg.nc .smb:before,.smg.nc .smb:after{display:none}
+.smg.pl .smb:not(.ld){animation:smP var(--ps,2.4s) ease-in-out infinite}@keyframes smP{50%{box-shadow:0 0 calc(22px * var(--gw,1)) -1px var(--c),inset 0 0 calc(22px * var(--gw,1)) -6px var(--c)}}
+.smbk{animation:smK 1.2s steps(2,end) infinite}@keyframes smK{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.smg.pl .smb,.smbk{animation:none}}
 .smb:before,.smb:after{content:"";position:absolute;width:11px;height:11px;border:2px solid var(--c)}.smb:before{top:4px;left:4px;border-right:0;border-bottom:0}.smb:after{bottom:4px;right:4px;border-left:0;border-top:0}
 .smb .k{display:flex;align-items:center;gap:6px;font-size:12px;color:#9fb0cc}.smb .k svg{width:17px;height:17px;flex:none;color:var(--c)}.smb .k em{margin-left:auto;font-style:normal;font-size:11px;color:#6f84a3}
-.smb .r{font-size:20px;font-weight:800;color:var(--c);margin:3px 0 1px;text-shadow:0 0 10px var(--c);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.smb .r{font-size:20px;font-weight:800;color:var(--c);margin:3px 0 1px;text-shadow:0 0 calc(10px * var(--gw,1)) var(--c);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .smb .s{font-size:11.5px;color:#c4d0e4;line-height:1.5}.smb .m{display:flex;gap:4px;margin-top:6px}.smb .m i{flex:1;height:5px;border-radius:3px;background:#22304d}.smb .m i.on{background:var(--c);box-shadow:0 0 6px var(--c)}
 .smb.off{border-style:dashed}.smb.off .r{text-decoration:line-through;text-shadow:none}.smb.ld .r{color:#6f84a3;text-shadow:none;font-size:15px}
 @media (max-width:360px){.smb .r{font-size:17px}}`;
   document.head.appendChild(el);
 }
 /** o：{ rg: ringsEval 結果, ka: {dir,str,n,sup,res}, ia: investAnalysis 結果, vo: volaOf 結果 }；undefined＝計算中、0＝資料不足 */
-function sumHtml(o) {
-  rxStyleInject(); smStyleInject(); const f = fmtPx;
+function sumHtml(o, C = sumCfg(), pv = false) {
+  rxStyleInject(); smStyleInject(); const f = fmtPx; const sh = C.show || {};
   const seg = (n, t) => `<div class="m">${Array.from({ length: t }, (_, i) => `<i class="${i < n ? 'on' : ''}"></i>`).join('')}</div>`;
   const bar = (v) => `<div class="m" style="gap:0;background:#22304d;border-radius:3px"><i class="on" style="flex:none;width:${Math.max(2, Math.min(100, v))}%"></i></div>`;
-  const box = (k, go, name, tone, r, sub, meter) => `<div class="smb ${tone}" style="--c:${SM_C[tone]};--c1:${SM_C[tone]}26" data-smgo="${go}"><div class="k"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6">${SM_IC[k]}</svg>${name}<em>詳情 ›</em></div><div class="r">${r}</div><div class="s">${sub}</div>${meter || ''}</div>`;
+  const box = (k, go, name, tone, r, sub, meter) => sh[k] === false ? '' : `<div class="smb ${tone}" style="--c:${SM_C[tone]};--c1:${SM_C[tone]}26" data-smgo="${go}"><div class="k"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6">${SM_IC[k]}</svg>${name}<em>詳情 ›</em></div><div class="r">${r}</div><div class="s">${sub}</div>${meter || ''}</div>`;
   const ld = (k, go, name, v) => box(k, go, name, 'ld', v === 0 ? '資料不足' : '計算中…', '', '');
   const tn = []; let h = '';
   const g = o.rg;
   if (!g) h += ld('rg', 'rgC', '三環條件', g);
-  else { const lv = g.broken ? 0 : g.level; const t = g.broken ? 'off' : lv >= 2 ? 'up' : lv === 1 ? 'mid' : 'dn'; tn.push(t);
+  else { const lv = g.broken ? 0 : g.level; const t = g.broken ? 'off' : lv >= C.rgUp ? 'up' : lv >= 1 ? 'mid' : 'dn'; if (sh.rg !== false) tn.push(t);
     h += box('rg', 'rgC', '三環條件', t, g.broken ? '失效' : lv + ' / 3 環', (g.broken ? '收盤跌破停損 ' + f(g.stop) + '<br>條件重置' : ['週 K 條件未成立', '週 K 成立・日 K 待確認', '日 K 已確認・即時待確認', '三環條件全數成立'][lv] + (g.zoneLo ? '<br>區間 ' + f(g.zoneLo) + '–' + f(g.zoneHi) : '')), seg(lv, 3)); }
   const k = o.ka;
   if (!k) h += ld('ka', 'kaC', 'K 線形態', k);
-  else { const t = k.dir > 0 ? 'up' : k.dir < 0 ? 'dn' : 'mid'; tn.push(t);
+  else { const t = k.str < C.kaStr ? 'mid' : k.dir > 0 ? 'up' : k.dir < 0 ? 'dn' : 'mid'; if (sh.ka !== false) tn.push(t);
     h += box('ka', 'kaC', 'K 線形態', t, DIRL[k.dir], '日 K 強度 ' + k.str + (k.n ? '・訊號 ' + k.n : '') + '<br>支撐 ' + f(k.sup) + '／壓力 ' + f(k.res), bar(k.str)); }
   const a = o.ia;
   if (!a) h += ld('ia', 'iaC', '投資分析指數', a);
-  else { const t = a.score >= 58 ? 'up' : a.score < 45 ? 'dn' : 'mid'; tn.push(t);
+  else { const t = a.score >= C.iaUp ? 'up' : a.score < C.iaDn ? 'dn' : 'mid'; if (sh.ia !== false) tn.push(t);
     h += box('ia', 'iaC', '投資分析指數', t, a.score + ' ' + esc(a.label), esc(a.verdict.title) + '<br>模型試算 ' + a.verdict.ratio + '%', bar(a.score)); }
   const v = o.vo;
   if (!v) h += ld('vo', 'voC', '波動', v);
-  else { const t = v.regime >= 1.25 ? 'dn' : v.regime <= 0.7 ? 'up' : 'mid';
+  else { const t = v.regime >= 1.25 ? 'dn' : v.regime <= 0.7 ? 'up' : 'mid'; if (C.voIn && sh.vo !== false) tn.push(t);
     h += box('vo', 'voC', '波動', t, esc(v.label) + ' ×' + v.regime.toFixed(1), '年化 ' + v.annual.toFixed(0) + '%・ATR ' + v.atrPct.toFixed(1) + '%' + (v.regime >= 1.25 ? '<br>停損距離需放寬' : ''), bar(Math.min(100, v.regime * 50))); }
   const nu = tn.filter((x) => x === 'up').length, nd = tn.filter((x) => x === 'dn' || x === 'off').length, nm = tn.length - nu - nd;
-  const tag = tn.length < 3 ? ['計算中', SM_C.ld] : nu && nd ? ['分歧', SM_C.mid] : nu === 3 ? ['3 偏多・同向', SM_C.up] : nd === 3 ? ['3 偏弱・同向', SM_C.dn]
+  const want = ['rg', 'ka', 'ia'].filter((x) => sh[x] !== false).length + (C.voIn && sh.vo !== false ? 1 : 0);
+  const split = C.div === 'any' ? new Set(tn.map((x) => (x === 'off' ? 'dn' : x))).size > 1 : nu && nd;
+  const tag = tn.length < want || !want ? ['計算中', SM_C.ld] : split ? ['分歧', SM_C.mid] : nu === want ? [want + ' 偏多・同向', SM_C.up] : nd === want ? [want + ' 偏弱・同向', SM_C.dn]
     : [[nu && nu + ' 偏多', nm && nm + ' 中性', nd && nd + ' 偏弱'].filter(Boolean).join('・'), nu > nd ? SM_C.up : nd > nu ? SM_C.dn : SM_C.mid];
-  return `<h2 style="position:relative;display:flex;align-items:center;gap:8px;white-space:nowrap">分析總結 <span class="small" style="color:#6f84a3;font-weight:400">// SUMMARY</span><span style="margin-left:auto;font-size:12px;padding:2px 9px;border-radius:99px;border:1px solid ${tag[1]};color:${tag[1]}">${tag[0]}</span></h2>
-    <div class="smw"><div class="smg">${h}</div><div class="sml">${[['up', '偏多'], ['mid', '中性'], ['dn', '偏弱'], ['off', '失效']].map(([c, t]) => `<span><i style="background:${SM_C[c]}"></i>${t}</span>`).join('')}<span>波動：紅低／綠高</span><span style="margin-left:auto">點方框看完整分析・僅為分析彙整，不構成投資建議</span></div></div>`;
+  const cls2 = [C.cols === 2 ? 'c2' : C.cols === 4 ? 'c4' : '', C.corner === false ? 'nc' : '', C.pulse ? 'pl' : ''].join(' ');
+  return `<h2 style="position:relative;display:flex;align-items:center;gap:8px;white-space:nowrap;font-size:16px;margin:0 0 10px">分析總結 <span class="small" style="color:#6f84a3;font-weight:400">// SUMMARY</span><span class="${split && C.blink ? 'smbk' : ''}" style="margin-left:auto;font-size:12px;padding:2px 9px;border-radius:99px;border:1px solid ${tag[1]};color:${tag[1]}">${tag[0]}</span>${pv ? '' : '<span class="rxsw" data-smg title="總結設定" style="cursor:pointer">⚙</span>'}</h2>
+    <div class="smw" style="--gw:${C.glow};--ps:${(2.4 / (C.pulseSpd || 1)).toFixed(2)}s"><div class="smg ${cls2}">${h}</div>${C.legend === false ? '' : `<div class="sml">${[['up', '偏多'], ['mid', '中性'], ['dn', '偏弱'], ['off', '失效']].map(([c, t]) => `<span><i style="background:${SM_C[c]}"></i>${t}</span>`).join('')}<span>波動：紅低／綠高</span><span style="margin-left:auto">點方框看完整分析・僅為分析彙整，不構成投資建議</span></div>`}</div>`;
+}
+// ───────── 三環／分析總結設定（構造與 starSettings 相同） ─────────
+const RING_DEF = { trend: true, bandLo: 0.5, nearPct: 3, brkRev: true, brkRsi: true, brkLow: true, brkMin: 1, rrMin: 2, dStopAtr: 0.3, wStopAtr: 0.5 };
+const ringRule = () => ({ ...RING_DEF, ...(S.pref.ringRule || {}) });
+const SUM_DEF = { show: { rg: true, ka: true, ia: true, vo: true }, rgUp: 2, kaStr: 0, iaUp: 58, iaDn: 45, voIn: false, div: 'opp', cols: 0, glow: 1, corner: true, pulse: false, pulseSpd: 1, blink: true, legend: true };
+const sumCfg = () => { const c = S.pref.sumCfg || {}; return { ...SUM_DEF, ...c, show: { ...SUM_DEF.show, ...(c.show || {}) } }; };
+const fxRg = (o, k, label, min, max, step, unit = '') => `<div class="field" style="margin:6px 0"><label class="small">${label}　<b data-sv="${k}">${o[k]}${unit}</b></label><input type="range" style="width:100%" data-sk="${k}" min="${min}" max="${max}" step="${step}" value="${o[k]}" data-u="${unit}"></div>`;
+const fxCk = (o, k, label, rb) => `<label class="small" style="display:inline-flex;gap:4px;align-items:center;margin:4px 10px 4px 0"><input type="checkbox" style="width:auto;flex:none;margin:0" data-sc="${k}" ${rb ? 'data-rb="1"' : ''} ${o[k] ? 'checked' : ''}>${label}</label>`;
+const fxSg = (o, k, opts) => `<span class="seg" style="margin:4px 0;flex-wrap:wrap">${opts.map(([v, t]) => `<button type="button" data-sg="${k}" data-v2="${v}" class="${String(o[k]) === String(v) ? 'on' : ''}">${t}</button>`).join('')}</span>`;
+/** 可收合區塊：標題列（▸／▾）＋右側開關；區塊內細項與「此項回預設」 */
+const fxSec = (OPEN, id, title, sub, body, o, tg) => { const on = !tg || o[tg], op = OPEN.has(id);
+  return `<div style="border:1px solid var(--border);border-radius:10px;margin:6px 0;overflow:hidden">
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--card2)"><span data-op="${id}" style="flex:1;cursor:pointer;user-select:none"><b style="font-size:14px">${op ? '▾' : '▸'} ${title}</b> <span class="small muted">${sub}</span></span>
+    ${tg ? `<label class="small" style="display:inline-flex;gap:4px;align-items:center"><input type="checkbox" style="width:auto;flex:none;margin:0" data-sc="${tg}" data-rb="1" ${on ? 'checked' : ''}>${on ? '開' : '關'}</label>` : ''}</div>
+    ${op ? `<div style="padding:4px 10px 8px">${on ? body : '<div class="small muted" style="padding:4px 0">已關閉，開啟後可調整細項</div>'}<div style="text-align:right"><button type="button" class="btn sm" data-rs="${id}">此項回預設</button></div></div>` : ''}</div>`; };
+/** 綁定表單：滑桿／勾選／分段；o() 取目前編輯中的物件，redraw 重畫表單，pv 只更新預覽 */
+function fxBind(F, o, OPEN, RS, DEF, redraw, pv) {
+  $$('[data-sk]', F).forEach((x) => x.oninput = () => { o()[x.dataset.sk] = +x.value; const v = $(`[data-sv="${x.dataset.sk}"]`, F); if (v) v.textContent = x.value + (x.dataset.u || ''); pv(); });
+  $$('[data-sc]', F).forEach((x) => x.onchange = () => { o()[x.dataset.sc] = x.checked; if (x.dataset.rb) redraw(); else pv(); });
+  $$('[data-sg]', F).forEach((x) => x.onclick = () => { const k = x.dataset.sg, v = x.dataset.v2; o()[k] = /^-?[\d.]+$/.test(v) ? +v : v; redraw(); });
+  $$('[data-op]', F).forEach((x) => x.onclick = () => { const k = x.dataset.op; if (OPEN.has(k)) OPEN.delete(k); else OPEN.add(k); redraw(); });
+  $$('[data-rs]', F).forEach((x) => x.onclick = () => { (RS[x.dataset.rs] || []).forEach((q) => { o()[q] = DEF[q]; }); redraw(); });
+}
+/** 三環設定：頂端 HUD 即時預覽（可循環環數、預覽失效）＋「判定條件」「樣式與動畫」兩頁；儲存才套用 */
+async function ringSettings() {
+  const R = ringRule(); const A = { sty: S.pref.ringSty == null ? 3 : +S.pref.ringSty, anim: S.pref.ringAnim !== false, spd: S.pref.ringSpd ?? 1, glow: S.pref.ringGlow ?? 1, pick: S.pref.ringPick !== false };
+  const ADEF = { sty: 3, anim: true, spd: 1, glow: 1, pick: true };
+  const demo = { lv: 2, b: false, rr: 2.6, lo: 100, hi: 104, stop: 96, tp: 115, px: 102 }; let tab = 0, tm = 0; const OPEN = new Set(['trend', 'look']);
+  const RS = { trend: ['trend', 'bandLo', 'nearPct'], brake: ['brkRev', 'brkRsi', 'brkLow', 'brkMin'], center: ['rrMin'], stop: ['dStopAtr', 'wStopAtr'], look: ['sty', 'pick'], anim: ['anim', 'spd'], glow: ['glow'] };
+  const form = () => { if (tab === 0) { const r = R; const nb = [r.brkRev, r.brkRsi, r.brkLow].filter(Boolean).length;
+      return fxSec(OPEN, 'trend', '外環：週 K 支撐帶', (r.trend ? '要求均線多頭' : '不看均線') + '・帶寬 −' + r.bandLo + ' ATR', fxCk(r, 'trend', '要求週 MA20 > 週 MA60（多頭排列）') + fxRg(r, 'bandLo', '支撐帶下緣（週 ATR 倍數）', 0.2, 1.5, 0.1, '×') + fxRg(r, 'nearPct', '支撐帶上緣最少（股價 %）', 1, 8, 0.5, '%'), r)
+        + fxSec(OPEN, 'brake', '中環：日 K 止跌', '至少 ' + r.brkMin + ' 項', `<div class="small">採計的止跌跡象</div><div>${fxCk(r, 'brkRev', '多方反轉形態', 1)}${fxCk(r, 'brkRsi', 'RSI 離開超賣', 1)}${fxCk(r, 'brkLow', '近 3 根不破前低', 1)}</div>` + fxRg(r, 'brkMin', '至少需成立幾項', 1, Math.max(1, nb), 1, ' 項'), r)
+        + fxSec(OPEN, 'center', '靶心：交集區＋風報比', '風報比 ≥ ' + r.rrMin, fxRg(r, 'rrMin', '風報比門檻（1 : ?）', 1, 4, 0.1), r)
+        + fxSec(OPEN, 'stop', '停損備援', '缺停損資料時使用', fxRg(r, 'dStopAtr', '波段：日支撐 − 日 ATR ×', 0.1, 1, 0.05) + fxRg(r, 'wStopAtr', '存股：週支撐 − 週 ATR ×', 0.2, 1.5, 0.05), r)
+        + '<div class="small muted" style="margin:6px 0">只影響個股技術分頁的三環卡與分析總結；星團與綜合評估仍用預設判定（與 App 相同）。</div><div style="text-align:right"><button type="button" class="btn sm" data-rall>判定條件全部回預設</button></div>'; }
+    const pick = RX_STY.map(([n], i) => `<button type="button" data-sg="sty" data-v2="${i}" class="${i === A.sty ? 'on' : ''}">${rxSvg(i, demo, 0, 44, true)}<span>${n}</span></button>`).join('');
+    return fxSec(OPEN, 'look', '動畫樣式', RX_STY[A.sty][0], `<div class="rx" style="border-radius:8px;padding:6px"><div class="rxs" style="flex-wrap:wrap">${pick}</div></div>` + fxCk(A, 'pick', '卡片內顯示樣式列'), A)
+      + fxSec(OPEN, 'anim', '動畫', A.anim ? '速度 ' + A.spd + '×' : '關閉', fxRg(A, 'spd', '動畫速度', 0.3, 2.5, 0.1, '×') + '<div class="small muted">只在 1/3～3/3 播放；0/3、破停損為靜態。</div>', A, 'anim')
+      + fxSec(OPEN, 'glow', '光暈', A.glow + '×', fxRg(A, 'glow', '光暈強度', 0, 2, 0.1, '×'), A)
+      + '<div style="text-align:right;margin-top:4px"><button type="button" class="btn sm" data-rall>樣式全部回預設</button></div>'; };
+  let iv = 0; const gl0 = RX.gl;
+  const ok = await dialog('三環條件設定', `<div style="position:sticky;top:-18px;z-index:3;background:var(--card);padding:2px 0 4px"><div class="rx" style="border-radius:10px;padding:8px 10px;display:flex;gap:10px;align-items:center">
+      <div id="rgPv" style="flex:none;width:130px;height:130px"></div><div id="rgPt" style="flex:1;min-width:0;position:relative"></div></div>
+    <div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;margin-top:4px"><button type="button" class="btn sm" id="rgPl">切換達成環數</button><button type="button" class="btn sm" id="rgPb">預覽破停損</button></div></div>
+    <span class="seg" id="rgTab" style="margin-top:6px"><button type="button" data-tb="0" class="on">判定條件</button><button type="button" data-tb="1">樣式與動畫</button></span><div id="rgF"></div>`, [['', '取消'], ['ok', '儲存', 'primary']], (root) => {
+    rxStyleInject(); const F = $('#rgF', root);
+    const pv = () => { RX.gl = A.glow; const d = { ...demo, rrMin: R.rrMin }; $('#rgPv', root).innerHTML = rxSvg(A.sty, d, A.anim && !d.b && d.lv >= 1 ? tm : 0, 130);
+      $('#rgPt', root).innerHTML = `<div class="rxm">${RX_STY[A.sty][1]} // PREVIEW</div><b style="color:${rxCol(d)};font-size:15px">${d.b ? '破停損・失效' : RING_LB[d.lv]}</b><div class="rxk" style="margin-top:4px">靶心門檻 風報比 ≥ ${R.rrMin}・止跌至少 ${R.brkMin} 項</div><div class="rxk">動畫 ${A.anim ? A.spd + '×' : '關'}・光暈 ${A.glow}×</div>`; };
+    const redraw = () => { F.innerHTML = form(); fxBind(F, () => (tab === 0 ? R : A), OPEN, RS, tab === 0 ? RING_DEF : ADEF, redraw, pv);
+      $$('[data-rall]', F).forEach((x) => x.onclick = () => { Object.assign(tab === 0 ? R : A, tab === 0 ? RING_DEF : ADEF); redraw(); });
+      const nb = [R.brkRev, R.brkRsi, R.brkLow].filter(Boolean).length; if (R.brkMin > nb) R.brkMin = Math.max(1, nb); pv(); };
+    $$('[data-tb]', root).forEach((b) => b.onclick = () => { tab = +b.dataset.tb; $$('[data-tb]', root).forEach((x) => x.classList.toggle('on', x === b)); redraw(); });
+    $('#rgPl', root).onclick = () => { demo.b = false; demo.lv = (demo.lv + 1) % 4; pv(); };
+    $('#rgPb', root).onclick = () => { demo.b = !demo.b; pv(); };
+    redraw(); iv = setInterval(() => { if (!document.body.contains(root)) return clearInterval(iv); tm += 0.05 * A.spd; if (A.anim && !demo.b && demo.lv >= 1) pv(); }, 50);
+    return () => (!R.brkRev && !R.brkRsi && !R.brkLow ? '止跌跡象至少保留一項' : null);
+  });
+  clearInterval(iv); RX.gl = gl0;
+  if (ok !== 'ok') return false;
+  S.pref.ringRule = { ...R }; S.pref.ringSty = A.sty; S.pref.ringAnim = A.anim; S.pref.ringSpd = A.spd; S.pref.ringGlow = A.glow; S.pref.ringPick = A.pick; savePref(); toast('已儲存三環設定'); return true;
+}
+/** 分析總結設定：頂端即時預覽（同向／分歧／偏弱三組範例）＋「項目與判定」「外觀與特效」兩頁；儲存才套用 */
+async function sumSettings() {
+  const C = sumCfg(); const SH = { ...C.show }; let tab = 0, dm = 1; const OPEN = new Set(['items', 'glow']);
+  const DEMO = [
+    { n: '同向偏多', rg: { level: 3, zoneLo: 100, zoneHi: 104, stop: 96 }, ka: { dir: 1, str: 72, n: 2, sup: 99, res: 112 }, ia: { score: 66, label: '中性偏多', verdict: { title: '價格合理・指標偏多', ratio: 60 } }, vo: { label: '正常', regime: 0.9, annual: 24, atrPct: 1.6 } },
+    { n: '分歧', rg: { level: 2, zoneLo: 100, zoneHi: 104, stop: 96 }, ka: { dir: -1, str: 64, n: 1, sup: 99, res: 108 }, ia: { score: 51, label: '中性', verdict: { title: '價格合理・指標中性', ratio: 30 } }, vo: { label: '偏高', regime: 1.4, annual: 38, atrPct: 2.6 } },
+    { n: '同向偏弱', rg: { level: 1, broken: true, stop: 96 }, ka: { dir: -1, str: 80, n: 0, sup: 92, res: 101 }, ia: { score: 38, label: '偏空', verdict: { title: '指標偏弱', ratio: 10 } }, vo: { label: '偏低', regime: 0.6, annual: 15, atrPct: 1 } }];
+  const RS = { items: [], rule: ['rgUp', 'kaStr', 'iaUp', 'iaDn', 'voIn', 'div'], layout: ['cols', 'legend'], glow: ['glow', 'corner'], pulse: ['pulse', 'pulseSpd'], blink: ['blink'] };
+  const form = () => { if (tab === 0) return fxSec(OPEN, 'items', '顯示的方框', Object.values(SH).filter(Boolean).length + ' 項', `<div>${fxCk(SH, 'rg', '三環條件', 1)}${fxCk(SH, 'ka', 'K 線形態', 1)}${fxCk(SH, 'ia', '投資分析指數', 1)}${fxCk(SH, 'vo', '波動', 1)}</div><div class="small muted">隱藏的方框不列入共識。</div>`, SH)
+      + fxSec(OPEN, 'rule', '各項判定門檻', '指數 ' + C.iaDn + '／' + C.iaUp, `<div class="small">三環：幾環以上算偏多（紅）</div>${fxSg(C, 'rgUp', [[1, '1 環'], [2, '2 環'], [3, '3 環']])}` + fxRg(C, 'kaStr', 'K 線：多空強度低於此值視為中性', 0, 80, 5) + fxRg(C, 'iaUp', '投資指數：偏多門檻（≥）', 50, 80, 1, ' 分') + fxRg(C, 'iaDn', '投資指數：偏弱門檻（<）', 20, 55, 1, ' 分')
+        + `<div class="small" style="margin-top:6px">分歧的定義</div>${fxSg(C, 'div', [['opp', '偏多與偏弱並存'], ['any', '任兩項方向不同']])}<div>${fxCk(C, 'voIn', '波動列入共識（低波動算偏多、高波動算偏弱）')}</div>`, C)
+      + '<div style="text-align:right;margin-top:4px"><button type="button" class="btn sm" data-rall>全部回預設</button></div>';
+    return fxSec(OPEN, 'layout', '排列', C.cols ? '每排 ' + C.cols + ' 格' : '自動', fxSg(C, 'cols', [[0, '自動（寬畫面 4 格）'], [2, '固定 2 格'], [4, '固定 4 格']]) + `<div>${fxCk(C, 'legend', '顯示底部圖例')}</div>`, C)
+      + fxSec(OPEN, 'glow', '發光與角框', '光暈 ' + C.glow + '×', fxRg(C, 'glow', '光暈強度', 0, 2, 0.1, '×') + `<div>${fxCk(C, 'corner', 'HUD 角框')}</div>`, C)
+      + fxSec(OPEN, 'pulse', '呼吸光', C.pulse ? C.pulseSpd + '×' : '關閉', fxRg(C, 'pulseSpd', '呼吸速度', 0.3, 2.5, 0.1, '×'), C, 'pulse')
+      + fxSec(OPEN, 'blink', '分歧閃爍', '右上「分歧」標籤閃爍', '<div class="small muted">開啟時，判定為分歧會讓標籤閃爍提示。</div>', C, 'blink')
+      + '<div style="text-align:right;margin-top:4px"><button type="button" class="btn sm" data-rall>全部回預設</button></div>'; };
+  const ok = await dialog('分析總結設定', `<div style="position:sticky;top:-18px;z-index:3;background:var(--card);padding:2px 0 4px"><div class="rx" id="smPv" style="border-radius:10px;padding:10px 12px;max-height:40vh;overflow:auto"></div>
+    <div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;margin-top:4px"><span class="small muted" id="smPn" style="align-self:center;margin-right:auto"></span><button type="button" class="btn sm" id="smPd">切換範例（同向／分歧／偏弱）</button></div></div>
+    <span class="seg" id="smTab" style="margin-top:6px"><button type="button" data-tb="0" class="on">項目與判定</button><button type="button" data-tb="1">外觀與特效</button></span><div id="smF"></div>`, [['', '取消'], ['ok', '儲存', 'primary']], (root) => {
+    const F = $('#smF', root);
+    const pv = () => { C.show = SH; $('#smPv', root).innerHTML = sumHtml(DEMO[dm], C, true); $('#smPn', root).textContent = '範例：' + DEMO[dm].n; };
+    const redraw = () => { F.innerHTML = form(); fxBind(F, () => C, OPEN, RS, SUM_DEF, redraw, pv);
+      $$('#smF [data-sc="rg"],#smF [data-sc="ka"],#smF [data-sc="ia"],#smF [data-sc="vo"]', root).forEach((x) => x.onchange = () => { SH[x.dataset.sc] = x.checked; redraw(); });
+      $$('[data-rs="items"]', F).forEach((x) => x.onclick = () => { Object.assign(SH, SUM_DEF.show); redraw(); });
+      $$('[data-rall]', F).forEach((x) => x.onclick = () => { if (tab === 0) { Object.assign(SH, SUM_DEF.show); RS.rule.forEach((q) => { C[q] = SUM_DEF[q]; }); } else [...RS.layout, ...RS.glow, ...RS.pulse, ...RS.blink].forEach((q) => { C[q] = SUM_DEF[q]; }); redraw(); });
+      pv(); };
+    $$('[data-tb]', root).forEach((b) => b.onclick = () => { tab = +b.dataset.tb; $$('[data-tb]', root).forEach((x) => x.classList.toggle('on', x === b)); redraw(); });
+    $('#smPd', root).onclick = () => { dm = (dm + 1) % DEMO.length; pv(); };
+    redraw();
+    return () => (C.iaDn >= C.iaUp ? '偏弱門檻需小於偏多門檻' : !Object.values(SH).some(Boolean) ? '至少顯示一個方框' : null);
+  });
+  if (ok !== 'ok') return false;
+  S.pref.sumCfg = { ...C, show: { ...SH } }; savePref(); toast('已儲存總結設定'); return true;
 }
 function rxStyleInject() {
   if (document.getElementById('rxCss')) return; const el = document.createElement('style'); el.id = 'rxCss';
@@ -6634,7 +6738,7 @@ function rxStyleInject() {
 /** 動畫迴圈：只保留一個；元素離開 DOM 即停 */
 const RX = { raf: 0, el: null, st: null, sty: 3, last: 0, t0: 0 };
 function rxRun(el, d, sty, anim) {
-  RX.el = el; RX.st = d; RX.sty = sty; cancelAnimationFrame(RX.raf);
+  RX.gl = S.pref.ringGlow ?? 1; RX.spd = S.pref.ringSpd ?? 1; RX.el = el; RX.st = d; RX.sty = sty; cancelAnimationFrame(RX.raf);
   const live = anim && !d.b && d.lv >= 1;
   el.innerHTML = rxSvg(sty, d, 0);
   if (!live) return;
@@ -6644,7 +6748,7 @@ function rxRun(el, d, sty, anim) {
     RX.raf = requestAnimationFrame(loop);
     if (document.hidden || now - RX.last < 50) return;
     const r = el.getBoundingClientRect(); if (r.bottom < 0 || r.top > innerHeight) return;
-    RX.last = now; el.innerHTML = rxSvg(sty, d, (now - RX.t0) / 1000);
+    RX.last = now; el.innerHTML = rxSvg(sty, d, (now - RX.t0) / 1000 * (RX.spd || 1));
   };
   RX.raf = requestAnimationFrame(loop);
 }
@@ -6652,7 +6756,7 @@ function ringsCardHtml(st, mode) {
   rxStyleInject();
   const anim = S.pref.ringAnim !== false; const sty = Math.min(7, Math.max(0, S.pref.ringSty == null ? 3 : +S.pref.ringSty));
   const seg = `<div class="seg" style="margin-top:6px"><button data-rgm="0" class="${mode === 0 ? 'on' : ''}">波段（日 K 停損）</button><button data-rgm="1" class="${mode === 1 ? 'on' : ''}">存股（週 K 停損）</button></div>`;
-  const h = `<h2 style="flex-wrap:nowrap">三環條件<i>// TARGET RINGS</i><span class="r"><span class="rxsw" data-rxa style="white-space:nowrap">動畫 ${anim ? '開' : '關'}</span></span></h2>`;
+  const h = `<h2 style="flex-wrap:nowrap">三環條件<i>// TARGET RINGS</i><span class="r" style="display:inline-flex;gap:6px"><span class="rxsw" data-rxa style="white-space:nowrap">動畫 ${anim ? '開' : '關'}</span><span class="rxsw" data-rxg title="三環設定">⚙</span></span></h2>`;
   if (!st) return h + seg + '<div class="rxr" style="margin-top:8px">K 線資料不足（週 K 需 60 根以上），暫無法判斷</div>';
   const d = rxData(st); const c = rxCol(d); const f = fmtPrice;
   const step = (t, en, on) => `<div class="row" style="gap:6px;align-items:center;font-size:12px"><span style="width:8px;height:8px;background:${on ? RX_C.ok : RX_C.id};box-shadow:${on ? '0 0 6px ' + RX_C.ok : 'none'};transform:rotate(45deg)"></span><span style="color:${on ? '#e8fbff' : '#6f8ca0'}">${t}</span><span class="rxm" style="margin-left:auto;color:${on ? RX_C.ok : '#3c5a70'}">${on ? 'OK' : en}</span></div>`;
@@ -6661,45 +6765,48 @@ function ringsCardHtml(st, mode) {
   return `${h}${seg}
     <div class="row" style="gap:12px;align-items:center;margin-top:10px"><div id="rxFx" style="flex:none;width:150px;height:150px"></div><div style="flex:1;display:grid;gap:5px;min-width:0">
       <div class="rxm">週 K → 日 K → 即時 // ${RX_STY[sty][1]}</div><b style="color:${c};font-size:17px;text-shadow:0 0 8px ${c}88">${RING_LB[st.level]}</b>
-      ${step('外環 週 K 支撐帶', 'W-K', st.outer)}${step('中環 日 K 止跌', 'D-K', st.middle)}${step('靶心 交集區＋風報比 ≥ 2', 'RT', st.center)}${st.broken ? `<b class="small" style="color:${RX_C.al}">現價低於停損 ${f(st.stop)}</b>` : ''}</div></div>
+      ${step('外環 週 K 支撐帶', 'W-K', st.outer)}${step('中環 日 K 止跌', 'D-K', st.middle)}${step('靶心 交集區＋風報比 ≥ ' + (st.rrMin ?? 2), 'RT', st.center)}${st.broken ? `<b class="small" style="color:${RX_C.al}">現價低於停損 ${f(st.stop)}</b>` : ''}</div></div>
     <div class="grid" style="grid-template-columns:2fr 1fr;gap:8px;margin-top:10px">${kv('試算區間', f(st.zoneLo) + ' ～ ' + f(st.zoneHi), RX_C.mid)}${kv('風報比', '1:' + st.rr.toFixed(2), st.rr >= 2 ? RX_C.ok : '')}</div>
     <div class="grid g3" style="gap:8px;margin-top:6px">${kv(st.mode === 1 ? '週 K 停損' : '日 K 停損', f(st.stop), RX_C.al)}${kv('目標', f(st.target), RX_C.cy)}${kv('價格容忍上限', f(st.cap))}</div>
     <div class="rxbox" style="margin-top:8px"><div class="rxk">試算分批（比例僅供試算，不構成建議）</div><div class="rxv" style="font-size:12px">${st.batches.map(([p, pct]) => f(p) + ' × ' + pct + '%').join('　')}　價格容忍上限 ${f(st.cap)}</div>${st.overlap ? '' : '<div class="rxk">日／週支撐帶沒有交集，區間暫以日支撐帶試算</div>'}</div>
     <div style="margin-top:6px">${st.reasons.map((t) => `<div class="rxr">・${esc(t)}</div>`).join('')}</div>
-    <div class="rxm" style="margin:10px 0 4px">STYLE // 動畫樣式</div><div class="rxs">${pick}</div>
+    ${S.pref.ringPick === false ? '' : `<div class="rxm" style="margin:10px 0 4px">STYLE // 動畫樣式</div><div class="rxs">${pick}</div>`}
     <div class="rxk" style="margin-top:6px">三環只是條件檢核與數字試算，不代表任何買賣建議；請自行判斷。動畫只在 1/3～3/3 播放，0/3、破停損為靜態。</div>`;
 }
 // ───────── 三環條件（與 App TargetRings 同規則：週 K 定方向 → 日 K 找止跌 → 即時價位；只輸出達成幾環與試算價位） ─────────
-function ringsEval(x, mode, snap = (v) => v, tick = 0.01) {
+function ringsEval(x, mode, snap = (v) => v, tick = 0.01, c = {}) {
   const r = []; const p = x.price; const f = fmtPrice;
-  const wNear = Math.max(x.wAtr, p * 0.03);
+  // 可調參數（網頁三環設定 S.pref.ringRule；省略時與 App 相同）
+  const bandLo = c.bandLo ?? 0.5, nearPct = (c.nearPct ?? 3) / 100, rrMin = c.rrMin ?? 2, dStopAtr = c.dStopAtr ?? 0.3, wStopAtr = c.wStopAtr ?? 0.5, needTrend = c.trend ?? true, brkMin = c.brkMin ?? 1;
+  const wNear = Math.max(x.wAtr, p * nearPct);
   const trendUp = x.wMa60 != null && x.wMa20 != null && x.wMa20 > x.wMa60;
-  const inBand = p >= x.wSupport - x.wAtr * 0.5 && p <= x.wSupport + wNear;
-  const outer = trendUp && inBand;
+  const inBand = p >= x.wSupport - x.wAtr * bandLo && p <= x.wSupport + wNear;
+  const outer = (trendUp || !needTrend) && inBand;
   r.push(x.wMa60 == null ? '週 K 不足 60 根，無法判斷週 MA20／MA60' : '週 MA20 ' + f(x.wMa20) + (trendUp ? ' > ' : ' ≤ ') + '週 MA60 ' + f(x.wMa60));
-  r.push('週支撐帶 ' + f(x.wSupport - x.wAtr * 0.5) + '～' + f(x.wSupport + wNear) + (inBand ? '，現價在帶內' : '，現價不在帶內'));
-  const brakes = [x.bullReversal ? '多方反轉形態' : null, x.rsiTurn ? 'RSI 離開超賣' : null, x.noNewLow ? '近 3 根不破前低' : null].filter(Boolean);
-  const middle = brakes.length > 0;
-  r.push(middle ? '日 K 止跌跡象：' + brakes.join('、') : '日 K 尚無止跌跡象');
+  if (!needTrend) r.push('（設定：不要求週均線多頭排列）');
+  r.push('週支撐帶 ' + f(x.wSupport - x.wAtr * bandLo) + '～' + f(x.wSupport + wNear) + (inBand ? '，現價在帶內' : '，現價不在帶內'));
+  const brakes = [c.brkRev !== false && x.bullReversal ? '多方反轉形態' : null, c.brkRsi !== false && x.rsiTurn ? 'RSI 離開超賣' : null, c.brkLow !== false && x.noNewLow ? '近 3 根不破前低' : null].filter(Boolean);
+  const middle = brakes.length >= brkMin;
+  r.push(middle ? '日 K 止跌跡象：' + brakes.join('、') : brakes.length ? '日 K 止跌跡象 ' + brakes.length + ' 項，未達設定的 ' + brkMin + ' 項' : '日 K 尚無止跌跡象');
   const dLo = x.dSupport, dHi = x.dSupport + x.dAtr, wLo = x.wSupport, wHi = x.wSupport + x.wAtr;
   let lo = Math.max(dLo, wLo), hi = Math.min(dHi, wHi);
   const overlap = lo <= hi;
   if (!overlap) { lo = dLo; hi = dHi; }
   lo = snap(lo); hi = snap(Math.max(hi, lo));
   r.push('試算區間 ' + f(lo) + '～' + f(hi) + (overlap ? '（日／週支撐交集）' : '（日／週支撐無交集，暫以日支撐帶）'));
-  const stop0 = mode === 1 ? (x.wStop != null ? x.wStop : x.wSupport - x.wAtr * 0.5) : (x.dStop != null ? x.dStop : x.dSupport - x.dAtr * 0.3);
+  const stop0 = mode === 1 ? (x.wStop != null ? x.wStop : x.wSupport - x.wAtr * wStopAtr) : (x.dStop != null ? x.dStop : x.dSupport - x.dAtr * dStopAtr);
   const stop = snap(stop0);
   const broken = p > 0 && p < stop;
   const rr = p > stop && x.target > p ? (x.target - p) / (p - stop) : 0;
   const inZone = p >= lo - tick / 2 && p <= hi + tick / 2;
-  const center = (inZone || !!x.reclaim) && rr >= 2.0;
+  const center = (inZone || !!x.reclaim) && rr >= rrMin;
   r.push((mode === 1 ? '存股模式（週 K 停損 ' : '波段模式（日 K 停損 ') + f(stop) + '），目標 ' + f(x.target) + '，試算風報比 1:' + rr.toFixed(2));
   if (x.reclaim) r.push('今日帶量站回日 MA20 ' + f(x.dMa20));
   if (broken) r.push('現價已低於停損價 ' + f(stop));
   const level = broken || !outer ? 0 : !middle ? 1 : !center ? 2 : 3;
   const three = [[hi, 40], [snap((lo + hi) / 2), 30], [lo, 30]];
   const batches = mode === 1 && new Set(three.map((t) => t[0])).size === 3 ? three : [[hi, 100]];
-  return { level, outer, middle: outer && middle, center: outer && middle && center, broken, zoneLo: lo, zoneHi: hi, overlap, stop, target: x.target, rr, price: p, batches, cap: snap(hi + tick), reasons: r, mode };
+  return { level, outer, middle: outer && middle, center: outer && middle && center, broken, zoneLo: lo, zoneHi: hi, overlap, stop, target: x.target, rr, price: p, batches, cap: snap(hi + tick), reasons: r, mode, rrMin };
 }
 /** 由日 K、週 K 的 klineAnalyze 結果萃取三環輸入（與 App TargetRings.inputOf 相同） */
 function ringsInput(price, d, w) {
