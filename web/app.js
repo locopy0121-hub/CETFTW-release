@@ -1107,7 +1107,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"c822439","at":"2026-11-26 21:19"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"e1f490d","at":"2026-11-26 21:27"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -6191,8 +6191,9 @@ const STAR_ANIM = { motion: 'GRAVITY', eject: 'BURST', whaleBeam: true, magnet: 
   // 各特效細項（預設值＝原本外觀）
   speed: 1, labelN: 3, pulseAmp: 0.14, ejectAmt: 1, ejectDur: 1, beamSec: 1.2, magSpd: 0.6, magR: 30, flowAmt: 1, flowSpd: 1, hazeA: 0.2, hazeR: 1.3,
   galSpin: 1, galBright: 1, galCore: 0.9, neuLink: 1, neuPulse: 1, neuDust: 1, clsSpread: 1, clsLine: true,
-  dstRise: 1, dstTwk: 0.5, dstBokeh: 1, orbSpd: 1, orbTilt: 0.6, orbLine: 1, aurBands: 3, aurAmp: 1, aurSpd: 1, holeSpd: 1, holeTilt: 0.35, holeGlow: 1 };
-const STAR_STYLES = [['GALAXY', '螺旋星系'], ['NEURAL', '神經網路'], ['CLASSIC', '經典星團'], ['DUST', '光塵星團'], ['ORBIT', '行星軌道'], ['AURORA', '極光帷幕'], ['HOLE', '黑洞吸積']];
+  dstRise: 1, dstTwk: 0.5, dstBokeh: 1, orbSpd: 1, orbTilt: 0.6, orbLine: 1, aurBands: 3, aurAmp: 1, aurSpd: 1, holeSpd: 1, holeTilt: 0.35, holeGlow: 1,
+  radSpd: 1, radTrail: 1, radRings: 4, taiSpd: 1, taiAlpha: 1, taiGlow: 1, plaArc: 1, plaJit: 1, plaGlow: 1, hivSize: 12, hivHeat: 1, hivPulse: 1 };
+const STAR_STYLES = [['GALAXY', '螺旋星系'], ['NEURAL', '神經網路'], ['CLASSIC', '經典星團'], ['DUST', '光塵星團'], ['ORBIT', '行星軌道'], ['AURORA', '極光帷幕'], ['HOLE', '黑洞吸積'], ['RADAR', '雷達掃描'], ['TAIJI', '太極陰陽'], ['PLASMA', '電漿球'], ['HIVE', '蜂巢熱力']];
 function starRuleDef(m) {
   const etf = m === 'ETF';
   return { maxN: 8, minScore: etf ? 70 : 75, exitScore: etf ? 63 : 68, rings: 2, requireK: true, wC: 0.4, wR: 0.3, wK: 0.3, stop: 'KLINE', pct: etf ? 1.5 : 2.5 };
@@ -6414,7 +6415,7 @@ function starFx(cv, src) {
   const E = { raf: 0, vis: true, last: 0, t: 0, rot: 0, dead: false, io: null, col: null, colAt: 0, beam: 0, flow: 0, handled: src().ejects.reduce((s, x) => Math.max(s, x.id), 0) };
   // 螺旋星系恆星（與 App 相同的配置：約 22% 核球、12% 盤面散星、其餘沿兩條旋臂；固定亂數種子）
   const GS = 900, TW = 4, TILT = 0.78, GT = new Float32Array(GS * 2), GA = new Float32Array(GS * 2), GB = new Uint8Array(GS * 2);
-  const HXA = new Float32Array(36), HXD = new Float32Array(36), HXL = new Uint8Array(36), DUS = []; E.pu = []; E.puAcc = 0; E.clk = 0;
+  const HXA = new Float32Array(36), HXD = new Float32Array(36), HXL = new Uint8Array(36), DUS = []; E.pu = []; E.puAcc = 0; E.clk = 0; E.sw = [0, 0];
   const DPN = 300, DX = new Float32Array(DPN * 2), DY = new Float32Array(DPN * 2), DZ = new Float32Array(DPN * 2), DPH = new Float32Array(DPN * 2), HPN = 420, HRr = new Float32Array(HPN * 2), HAa = new Float32Array(HPN * 2);
   { let sd = 20260117; const rnd = () => { sd = (sd + 0x6D2B79F5) | 0; let t = Math.imul(sd ^ (sd >>> 15), 1 | sd); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
     const gs = () => (rnd() + rnd() + rnd() - 1.5) / 0.5;
@@ -6446,12 +6447,15 @@ function starFx(cv, src) {
     const C = E.col, cy = H * 0.57, maxR = Math.min(W * 0.21, H * 0.36), cx = (s) => (s === 'bull' ? W * 0.25 : W * 0.75), col = (s) => (s === 'bull' ? C.up : C.dn);
     const gal = a.style === 'GALAXY', neu = a.style === 'NEURAL', GR = Math.min(W * 0.26, H * 0.44 / TILT), sg = (s) => (s === 'bull' ? 1 : -1);
     const gx = (s, t, an) => cx(s) + Math.cos(sg(s) * (an - E.rot)) * GR * t, gy = (s, t, an) => cy + Math.sin(sg(s) * (an - E.rot)) * GR * t * TILT;
-    const dark = a.style !== 'CLASSIC', dus = a.style === 'DUST', orb = a.style === 'ORBIT', aur = a.style === 'AURORA', hol = a.style === 'HOLE';
+    const dark = a.style !== 'CLASSIC', dus = a.style === 'DUST', orb = a.style === 'ORBIT', aur = a.style === 'AURORA', hol = a.style === 'HOLE', rad = a.style === 'RADAR', tai = a.style === 'TAIJI', pla = a.style === 'PLASMA', hiv = a.style === 'HIVE';
     // 行星軌道：第 1 名為恆星，其餘依名次由內而外繞行（內圈較快）；黑洞吸積：節點繞黑洞，吸積盤粒子內熱外冷
     const OT = Math.max(0.2, a.orbTilt || 0.6), OR = Math.min(W * 0.24, H * 0.42 / Math.max(0.45, OT)), orR = (i, n) => (i === 0 ? 0 : 0.36 + 0.64 * (i - 1) / Math.max(1, n - 2));
     const orbP = (s, i, n) => { const rr = orR(i, n), an = i * 2.39996 + sg(s) * E.clk * a.orbSpd * 0.25 / Math.pow(Math.max(0.2, rr), 1.5); return [cx(s) + Math.cos(an) * OR * rr, cy + Math.sin(an) * OR * rr * OT]; };
     const HT = Math.max(0.12, a.holeTilt || 0.35), HR = Math.min(W * 0.22, H * 0.6);
     const holP = (s, i, n) => { const rr = 0.55 + 0.6 * i / Math.max(1, n - 1), an = i * 2.39996 + sg(s) * E.clk * a.holeSpd * 0.3 / Math.pow(rr, 1.5); return [cx(s) + Math.cos(an) * HR * rr, cy + Math.sin(an) * HR * rr * Math.min(0.85, HT + 0.4)]; };
+    // 太極陰陽：兩魚眼沿軸旋轉，節點依名次圍繞各自的魚眼
+    const TR = Math.min(W * 0.4, (H - cy) * 0.94, H * 0.42), TQ = E.clk * a.taiSpd * 0.15, tEye = (s) => [W / 2 + (s === 'bull' ? -1 : 1) * Math.cos(TQ) * TR / 2, cy + (s === 'bull' ? -1 : 1) * Math.sin(TQ) * TR / 2];
+    const taiP = (s, i, n) => { const [ex, ey] = tEye(s), an = i * 2.39996 + (s === 'bear' ? Math.PI : 0), dd = i === 0 ? 0 : TR * 0.44 * Math.sqrt(i / Math.max(1, n - 1)); return [ex + Math.cos(an) * dd, ey + Math.sin(an) * dd]; };
     if (dark && moving) { E.rot += dt * 0.05 * (0.4 + a.turbulence) * (gal ? a.galSpin : 1); E.clk += dt; } else if (!moving) { E.rot = 0; E.pu = []; }
     const NR = Math.min(W * 0.22, H * 0.4), nx = (s, dv, an) => cx(s) + Math.cos(an + sg(s) * E.rot * 0.8) * NR * dv, ny = (s, dv, an) => cy + Math.sin(an + sg(s) * E.rot * 0.8) * NR * dv * 0.85;
     // 背景：螺旋星系（深空、盤面霧光、旋臂恆星、核心光芒）或分隔線
@@ -6542,6 +6546,54 @@ function starFx(cv, src) {
         g.globalAlpha = 1; g.fillStyle = '#000'; g.beginPath(); g.arc(x0, cy, hr, 0, 6.283); g.fill();
         g.strokeStyle = mix(c, 0.8); g.globalAlpha = Math.min(1, 0.8 * gl); g.lineWidth = 1.4; g.beginPath(); g.arc(x0, cy, hr * 1.04, 0, 6.283); g.stroke(); g.lineWidth = 1; g.globalAlpha = 1;
         disk(true); });
+    } else if (rad) {
+      // 雷達掃描：同心環＋十字線，掃描線帶餘暉旋轉；掃過的節點會亮一下（在節點處理）
+      g.fillStyle = '#020806'; g.fillRect(0, 0, W, H); const sw = E.clk * a.radSpd * 1.6, nr = Math.max(2, Math.round(a.radRings)), RR = maxR * 1.05;
+      ['bull', 'bear'].forEach((s, si) => { const c = col(s), x0 = cx(s), dr = sg(s), an = dr * sw + si * Math.PI; E.sw[si] = an;
+        g.strokeStyle = c; g.lineWidth = 0.7; g.globalAlpha = 0.22;
+        for (let k = 1; k <= nr; k++) { g.beginPath(); g.arc(x0, cy, RR * k / nr, 0, 6.283); g.stroke(); }
+        g.beginPath(); g.moveTo(x0 - RR, cy); g.lineTo(x0 + RR, cy); g.moveTo(x0, cy - RR); g.lineTo(x0, cy + RR); g.stroke();
+        const tr = 1.2 * Math.max(0.1, a.radTrail), sg2 = 24; g.fillStyle = c;
+        for (let k = 0; k < sg2; k++) { const a0 = an - dr * tr * k / sg2, a1 = an - dr * tr * (k + 1) / sg2; g.globalAlpha = 0.26 * (1 - k / sg2); g.beginPath(); g.moveTo(x0, cy); g.arc(x0, cy, RR, Math.min(a0, a1), Math.max(a0, a1)); g.closePath(); g.fill(); }
+        g.globalAlpha = 0.9; g.strokeStyle = mix(c, 0.5); g.lineWidth = 1.4; g.beginPath(); g.moveTo(x0, cy); g.lineTo(x0 + Math.cos(an) * RR, cy + Math.sin(an) * RR); g.stroke(); });
+      g.globalAlpha = 1; g.lineWidth = 1;
+    } else if (tai) {
+      // 太極陰陽：左魚多方、右魚空方，S 形分界隨時間旋轉
+      g.fillStyle = '#06060A'; g.fillRect(0, 0, W, H);
+      for (let k = 0; k < 80; k++) { const [x, y, z] = DUS[k]; g.fillStyle = `rgba(255,255,255,${0.08 + 0.2 * z})`; g.fillRect(x * W, y * H, 1, 1); }
+      const x0 = W / 2, [ax, ay] = tEye('bull'), [bx, by] = tEye('bear'), q = TQ, R2 = TR / 2;
+      if (a.taiGlow > 0) { const gr = g.createRadialGradient(x0, cy, TR * 0.92, x0, cy, TR * 1.3); gr.addColorStop(0, `rgba(255,255,255,${Math.min(0.5, 0.16 * a.taiGlow)})`); gr.addColorStop(1, 'rgba(255,255,255,0)'); g.fillStyle = gr; g.beginPath(); g.arc(x0, cy, TR * 1.3, 0, 6.283); g.fill(); }
+      g.globalAlpha = Math.min(1, 0.3 * a.taiAlpha);
+      g.fillStyle = C.up; g.beginPath(); g.arc(x0, cy, TR, q, q + Math.PI, false); g.arc(ax, ay, R2, q + Math.PI, q + 2 * Math.PI, false); g.arc(bx, by, R2, q + Math.PI, q, true); g.closePath(); g.fill();
+      g.fillStyle = C.dn; g.beginPath(); g.arc(x0, cy, TR, q + Math.PI, q + 2 * Math.PI, false); g.arc(bx, by, R2, q, q + Math.PI, false); g.arc(ax, ay, R2, q + 2 * Math.PI, q + Math.PI, true); g.closePath(); g.fill();
+      g.globalAlpha = 0.35; g.strokeStyle = '#fff'; g.lineWidth = 1; g.beginPath(); g.arc(x0, cy, TR, 0, 6.283); g.stroke(); g.globalAlpha = 1;
+    } else if (pla) {
+      // 電漿球：玻璃球＋核心，電弧從核心連到每個節點，另有自由電弧沿球壁游移
+      g.fillStyle = '#05040A'; g.fillRect(0, 0, W, H);
+      ['bull', 'bear'].forEach((s) => { const c = col(s), x0 = cx(s), PR = maxR * 1.08, gw = Math.max(0, a.plaGlow);
+        const sp = g.createRadialGradient(x0 - PR * 0.3, cy - PR * 0.35, PR * 0.1, x0, cy, PR); sp.addColorStop(0, 'rgba(255,255,255,0.07)'); sp.addColorStop(0.85, 'rgba(255,255,255,0.02)'); sp.addColorStop(1, mix(c, 0.4));
+        g.globalAlpha = Math.min(1, 0.5 * gw); g.fillStyle = sp; g.beginPath(); g.arc(x0, cy, PR, 0, 6.283); g.fill(); g.globalAlpha = Math.min(1, 0.4 * gw); g.strokeStyle = mix(c, 0.6); g.stroke();
+        const cg = g.createRadialGradient(x0, cy, 0, x0, cy, PR * 0.2); cg.addColorStop(0, 'rgba(255,255,255,0.95)'); cg.addColorStop(0.4, mix(c, 0.3)); cg.addColorStop(1, 'rgba(0,0,0,0)'); g.globalAlpha = 0.9; g.fillStyle = cg; g.beginPath(); g.arc(x0, cy, PR * 0.2, 0, 6.283); g.fill();
+        const tg = []; N.forEach((o) => { if (o.side === s && o.st === 1) tg.push([o.x, o.y, 1]); });
+        const fa = Math.round(4 * a.plaArc); for (let k = 0; k < fa; k++) { const an = k * 2.39996 + E.clk * 0.5 * (1 + k * 0.2) * sg(s); tg.push([x0 + Math.cos(an) * PR * 0.97, cy + Math.sin(an) * PR * 0.97, 0]); }
+        g.globalCompositeOperation = 'lighter'; g.strokeStyle = mix(c, 0.5);
+        tg.forEach(([tx, ty, isN], k) => { const dx = tx - x0, dy = ty - cy, dl = Math.hypot(dx, dy); if (dl < 4) return; const px = -dy / dl, py = dx / dl;
+          g.beginPath(); g.moveTo(x0, cy); for (let j = 1; j <= 10; j++) { const u = j / 10, w = Math.sin(u * Math.PI) * (Math.sin(E.clk * 7 + k * 1.9 + j * 1.3) * 6 + (Math.random() - 0.5) * 5) * a.plaJit; g.lineTo(x0 + dx * u + px * w, cy + dy * u + py * w); }
+          g.globalAlpha = isN ? 0.55 : 0.3; g.lineWidth = 1.2; g.stroke(); g.globalAlpha = isN ? 0.18 : 0.1; g.lineWidth = 4; g.stroke(); });
+        g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1; g.lineWidth = 1; });
+    } else if (hiv) {
+      // 蜂巢熱力：六角格依附近節點分數加熱，顏色取較強的一方，緩慢呼吸
+      g.fillStyle = '#07070A'; g.fillRect(0, 0, W, H);
+      const hs = Math.max(6, a.hivSize), hw = hs * 1.732, sig = maxR * 0.35 * Math.max(0.3, a.hivHeat), s2 = 2 * sig * sig, pts = [];
+      N.forEach((o) => { if (o.st === 1) pts.push([o.x, o.y, o.side === 'bull', (o.fin || 50) / 100]); });
+      g.lineWidth = 0.6;
+      for (let row = 0, y = 0; y < H + hs; row++, y += hs * 1.5) for (let x = (row % 2) * hw / 2; x < W + hw; x += hw) {
+        let hb = 0, hr = 0; for (const [px, py, bu, w] of pts) { const e = Math.exp(-((x - px) ** 2 + (y - py) ** 2) / s2) * w; if (bu) hb += e; else hr += e; }
+        const hh = Math.min(1, Math.max(hb, hr)), ph = 1 - 0.15 * a.hivPulse * (0.5 + 0.5 * Math.sin(E.clk * 2 + x * 0.05 + y * 0.07)), c = hb >= hr ? C.up : C.dn;
+        g.beginPath(); for (let k = 0; k < 6; k++) { const an = Math.PI / 6 + k * Math.PI / 3, vx = x + Math.cos(an) * hs * 0.94, vy = y + Math.sin(an) * hs * 0.94; if (k) g.lineTo(vx, vy); else g.moveTo(vx, vy); } g.closePath();
+        if (hh > 0.04) { g.globalAlpha = Math.min(0.75, hh * 0.7 * ph); g.fillStyle = c; g.fill(); }
+        g.globalAlpha = 0.12 + hh * 0.3; g.strokeStyle = hh > 0.04 ? c : '#3a3f4a'; g.stroke(); }
+      g.globalAlpha = 1; g.lineWidth = 1;
     } else if (a.clsLine !== false) { g.strokeStyle = C.bd; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(W / 2, 22); g.lineTo(W / 2, H - 6); g.stroke(); g.setLineDash([]); }
     g.font = '600 12px system-ui,sans-serif'; g.textAlign = 'center'; g.fillStyle = C.up; g.fillText('多方看漲 ' + d.bull.length, W * 0.25, 15); g.fillStyle = C.dn; g.fillText(d.right + ' ' + d.bear.length, W * 0.75, 15);
     if (a.haze) ['bull', 'bear'].forEach((s) => { const gr = g.createRadialGradient(cx(s), cy, 0, cx(s), cy, maxR * a.hazeR); gr.addColorStop(0, col(s)); gr.addColorStop(1, col(s) + '00'); g.globalAlpha = Math.max(0, Math.min(1, a.hazeA)); g.fillStyle = gr; g.fillRect(0, 0, W, H); g.globalAlpha = 1; });
@@ -6555,7 +6607,7 @@ function starFx(cv, src) {
         const dv = i === 0 || n <= 1 ? 0 : 0.22 + 0.7 * Math.sqrt(i / Math.max(1, n - 1)), na = (i + 1) * 2.39996 + (side === 'bear' ? Math.PI : 0);
         let o = N.get(nd.symbol);
         if (!o || o.side !== side || o.st !== 1) { o = { x: cx(side) + (Math.random() - 0.5) * maxR * 2, y: cy + (Math.random() - 0.5) * maxR * 1.6, vx: 0, vy: 0, a: 0, side, st: 1, rp: 0 }; N.set(nd.symbol, o); }
-        const P = gal ? [gx(side, gt, ga), gy(side, gt, ga)] : neu ? [nx(side, dv, na), ny(side, dv, na)] : orb ? orbP(side, i, n) : hol ? holP(side, i, n) : [cx(side) + Math.cos(ang) * dist, cy + Math.sin(ang) * dist * 0.85 + (aur ? H * 0.1 : 0)];
+        const P = gal ? [gx(side, gt, ga), gy(side, gt, ga)] : neu ? [nx(side, dv, na), ny(side, dv, na)] : orb ? orbP(side, i, n) : hol ? holP(side, i, n) : tai ? taiP(side, i, n) : [cx(side) + Math.cos(ang) * dist, cy + Math.sin(ang) * dist * 0.85 + (aur ? H * 0.1 : 0)];
         Object.assign(o, { tx: P[0], ty: P[1], fin: nd.final, r: Math.max(3, (4 + nd.final / 10) * a.scale * (i === 0 ? 1.35 : 1)), rank: nd.rank, whale: nd.whale, hot: nd.hot, sym: nd.symbol }); live.add(nd.symbol); }); });
     // 彈出事件
     d.ejects.slice().reverse().forEach((ev) => { if (ev.id <= E.handled) return; E.handled = ev.id;
@@ -6597,6 +6649,8 @@ function starFx(cv, src) {
         const al = g.globalAlpha; g.fillStyle = c; g.globalAlpha = al * 0.14; g.beginPath(); g.arc(o.x, o.y, r * 2.6, 0, 6.283); g.fill(); g.globalAlpha = al * 0.3; g.beginPath(); g.arc(o.x, o.y, r * 1.8, 0, 6.283); g.fill();
         g.globalAlpha = al * 0.95; g.fillStyle = mix(c, 0.55); g.beginPath(); g.arc(o.x, o.y, r, 0, 6.283); g.fill(); g.fillStyle = '#fff'; g.beginPath(); g.arc(o.x, o.y, r * 0.45, 0, 6.283); g.fill(); g.globalAlpha = al;
       } else { g.fillStyle = c; g.beginPath(); g.arc(o.x, o.y, r, 0, 6.283); g.fill(); }
+      if (rad && o.st === 1) { const si = o.side === 'bull' ? 0 : 1, na = Math.atan2(o.y - cy, o.x - cx(o.side)), df = ((sg(o.side) * (E.sw[si] - na)) % 6.283 + 6.283) % 6.283, pk = Math.exp(-df * 2.5);
+        if (pk > 0.05 && Math.hypot(o.x - cx(o.side), o.y - cy) > 3) { const al = g.globalAlpha; g.strokeStyle = '#fff'; g.globalAlpha = al * pk * 0.9; g.lineWidth = 1.2; g.beginPath(); g.arc(o.x, o.y, r + 3 + (1 - pk) * 6, 0, 6.283); g.stroke(); g.globalAlpha = al; g.lineWidth = 1; } }
       if (o.whale) { g.strokeStyle = '#fbbf24'; g.lineWidth = 1.2; g.beginPath(); g.arc(o.x, o.y, r + 2.5, 0, 6.283); g.stroke(); }
       if (o.rp > 0) { g.strokeStyle = '#fbbf24'; g.globalAlpha = o.rp; g.beginPath(); g.arc(o.x, o.y, r + (1 - o.rp) * 18, 0, 6.283); g.stroke(); o.rp = Math.max(0, o.rp - dt * 1.6); }
       if (moving && a.magnet && o.rank === 1 && o.st === 1) { const f = (E.t * a.magSpd + (o.side === 'bull' ? 0 : 0.5)) % 1; g.strokeStyle = c; g.globalAlpha = (1 - f) * 0.6; g.lineWidth = 1; g.beginPath(); g.arc(o.x, o.y, r + 4 + f * a.magR, 0, 6.283); g.stroke(); }
@@ -6696,6 +6750,10 @@ async function starSettings() {
       : an.style === 'ORBIT' ? rg(an, 'orbSpd', '公轉速度', 0, 3, 0.1, '×') + rg(an, 'orbTilt', '軌道傾角（越小越扁）', 0.25, 1, 0.05) + rg(an, 'orbLine', '軌道線亮度', 0, 2.5, 0.1, '×')
       : an.style === 'AURORA' ? rg(an, 'aurBands', '光帶數', 1, 5, 1, ' 條') + rg(an, 'aurAmp', '擺動幅度', 0, 2, 0.1, '×') + rg(an, 'aurSpd', '飄動速度', 0, 3, 0.1, '×')
       : an.style === 'HOLE' ? rg(an, 'density', '吸積盤粒子數量', 0.3, 1, 0.05) + rg(an, 'holeSpd', '旋轉速度', 0, 3, 0.1, '×') + rg(an, 'holeTilt', '盤面傾角（越小越扁）', 0.15, 0.7, 0.05) + rg(an, 'holeGlow', '光環亮度', 0, 1.5, 0.05, '×')
+      : an.style === 'RADAR' ? rg(an, 'radSpd', '掃描速度', 0.2, 3, 0.1, '×') + rg(an, 'radTrail', '餘暉長度', 0.2, 2.5, 0.1, '×') + rg(an, 'radRings', '同心環數', 2, 6, 1, ' 圈')
+      : an.style === 'TAIJI' ? rg(an, 'taiSpd', '旋轉速度', 0, 3, 0.1, '×') + rg(an, 'taiAlpha', '陰陽色塊亮度', 0.3, 2.5, 0.1, '×') + rg(an, 'taiGlow', '外環光暈', 0, 2.5, 0.1, '×')
+      : an.style === 'PLASMA' ? rg(an, 'plaArc', '自由電弧數量', 0, 2.5, 0.25, '×') + rg(an, 'plaJit', '電弧抖動', 0, 2.5, 0.1, '×') + rg(an, 'plaGlow', '球體光暈', 0, 2, 0.1, '×')
+      : an.style === 'HIVE' ? rg(an, 'hivSize', '格子大小', 7, 22, 1, ' px') + rg(an, 'hivHeat', '熱度擴散範圍', 0.4, 2.5, 0.1, '×') + rg(an, 'hivPulse', '呼吸起伏', 0, 2.5, 0.1, '×')
       : rg(an, 'clsSpread', '星團擴散範圍', 0.6, 1.25, 0.05, '×') + `<div>${ck(an, 'clsLine', '中間分隔線')}</div>`;
     return `${sec('all', '整體', an.anim ? '速度 ' + an.speed + '×' : '動畫關閉', rg(an, 'speed', '動畫速度', 0.3, 2.5, 0.1, '×') + rg(an, 'height', '雷達高度（畫面比例）', 0.25, 0.7, 0.01) + rg(an, 'listSec', '排行更新間隔', 2, 15, 1, ' 秒') + rg(an, 'scanMin', '盤中重新分析間隔', 1, 15, 1, ' 分'), 'anim')}
       ${sec('style', '星團樣式', STY[an.style], `<div>${sg(an, 'style', STAR_STYLES).replace('style="margin:4px 0"', 'style="margin:4px 0;flex-wrap:wrap"')}</div>` + styBody)}
@@ -6707,7 +6765,7 @@ async function starSettings() {
       ${sec('haze', '星雲光暈', '兩側底光', rg(an, 'hazeA', '光暈強度', 0.05, 0.6, 0.01) + rg(an, 'hazeR', '光暈範圍', 0.8, 2, 0.05, '×'), 'haze')}
       <div style="text-align:right;margin-top:4px"><button type="button" class="btn sm" data-rs="*">動畫全部回預設</button></div>`; };
   const OPEN = new Set(['style']);
-  const RS = { all: ['anim', 'speed', 'height', 'listSec', 'scanMin'], style: ['density', 'galSpin', 'galBright', 'galCore', 'neuLink', 'neuPulse', 'neuDust', 'clsSpread', 'clsLine', 'dstRise', 'dstTwk', 'dstBokeh', 'orbSpd', 'orbTilt', 'orbLine', 'aurBands', 'aurAmp', 'aurSpd', 'holeSpd', 'holeTilt', 'holeGlow'], node: ['scale', 'motion', 'pulseAmp', 'turbulence', 'labelN'],
+  const RS = { all: ['anim', 'speed', 'height', 'listSec', 'scanMin'], style: ['density', 'galSpin', 'galBright', 'galCore', 'neuLink', 'neuPulse', 'neuDust', 'clsSpread', 'clsLine', 'dstRise', 'dstTwk', 'dstBokeh', 'orbSpd', 'orbTilt', 'orbLine', 'aurBands', 'aurAmp', 'aurSpd', 'holeSpd', 'holeTilt', 'holeGlow', 'radSpd', 'radTrail', 'radRings', 'taiSpd', 'taiAlpha', 'taiGlow', 'plaArc', 'plaJit', 'plaGlow', 'hivSize', 'hivHeat', 'hivPulse'], node: ['scale', 'motion', 'pulseAmp', 'turbulence', 'labelN'],
     eject: ['eject', 'ejectAmt', 'ejectDur'], beam: ['whaleBeam', 'whaleX', 'beamSec'], magnet: ['magnet', 'magSpd', 'magR'], flow: ['flow', 'flowAmt', 'flowSpd'], haze: ['haze', 'hazeA', 'hazeR'] };
   let eng = null;
   const ok = await dialog('雙極星團雷達設定', `<div style="position:sticky;top:-18px;z-index:3;background:var(--card);padding:2px 0 4px"><canvas id="stPv" style="width:100%;height:170px;display:block;border:1px solid var(--border);border-radius:10px"></canvas>
