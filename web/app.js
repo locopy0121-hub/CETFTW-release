@@ -1164,7 +1164,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"8ff19a0","at":"2026-11-26 22:10"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"35aca2c","at":"2026-11-26 22:13"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -1934,8 +1934,8 @@ function dialog(title, html, buttons, setup) {
 
 // ───────── 個股 ─────────
 /** 圖表區間：[抓取範圍, 顯示根數（0＝全部）, K 棒週期]；5 年以內日 K，更長改週 K；C＝自訂（S.pref.rcDays 天） */
-const RANGES = { '1D': ['1d', 0], '3M': ['6mo', 66], '6M': ['1y', 132], '1Y': ['2y', 250], '2Y': ['5y', 500], '5Y': ['10y', 1250], '10Y': ['max', 522, '1wk'], 'MAX': ['max', 0, '1wk'] };
-const RANGE_N = { '1D': '當日', '3M': '3 個月', '6M': '6 個月', '1Y': '1 年', '2Y': '2 年', '5Y': '5 年', '10Y': '10 年', 'MAX': '最大' };
+const RANGES = { '1D': ['1d', 0], '1M': ['6mo', 22], '3M': ['6mo', 66], '6M': ['1y', 132], '1Y': ['2y', 250], '2Y': ['5y', 500], '5Y': ['10y', 1250], '10Y': ['max', 522, '1wk'], 'MAX': ['max', 0, '1wk'] };
+const RANGE_N = { '1D': '當日', '1M': '1 個月', '3M': '3 個月', '6M': '6 個月', '1Y': '1 年', '2Y': '2 年', '5Y': '5 年', '10Y': '10 年', 'MAX': '最大' };
 function rangeOf(k) {
   if (k === 'C') { const d = S.pref.rcDays || 365; return d <= 1800 ? [d <= 700 ? '5y' : '10y', Math.max(5, Math.round(d * 250 / 365)), '1d'] : ['max', Math.round(d / 7), '1wk']; }
   return RANGES[k] || RANGES['6M'];
@@ -1956,11 +1956,11 @@ VIEWS.s = {
       <div id="sq"></div>
       <div id="vflow"></div>
       ${(S.pref.stabL || {}).pos === 'top' ? stabBar(this) : ''}
-      <div class="card" style="margin-top:12px"><div class="row wrap" style="margin-bottom:8px"><div class="seg" id="rg" style="flex-wrap:wrap">${Object.keys(RANGES).map((k) => `<button data-r="${k}" class="${S.pref.range === k ? 'on' : ''}">${RANGE_N[k]}</button>`).join('')}<button data-r="C" class="${S.pref.range === 'C' ? 'on' : ''}" title="自訂區間">${S.pref.rcDays ? '自訂 ' + rcLabel(S.pref.rcDays) : '自訂…'}</button></div>
+      <div class="card" style="margin-top:12px"><div class="row wrap" style="margin-bottom:8px"><div class="seg" id="rg" style="flex-wrap:nowrap;overflow-x:auto;max-width:100%;scrollbar-width:none">${Object.keys(RANGES).map((k) => `<button data-r="${k}" class="${S.pref.range === k ? 'on' : ''}" style="white-space:nowrap;flex:none;padding:6px 10px">${RANGE_N[k]}</button>`).join('')}<button data-r="C" class="${S.pref.range === 'C' ? 'on' : ''}" title="自訂區間" style="white-space:nowrap;flex:none;padding:6px 10px">${S.pref.rcDays ? '自訂 ' + rcLabel(S.pref.rcDays) : '自訂…'}</button></div>
         <div class="seg" id="ctp">${CTYPES.map(([k, n]) => `<button data-ct="${k}" class="${(S.pref.ctype || 'candle') === k ? 'on' : ''}">${n}</button>`).join('')}</div>
         <span class="sp"></span><button class="btn sm ${S.pref.boll ? 'primary' : ''}" id="boll">布林通道</button><a class="btn sm" href="#/compare/${sym}">比較</a><span class="seg" id="kopt"><button id="kpat" class="${S.pref.kpat !== false ? 'on' : ''}" title="在 K 線上標示型態">型態</button><button id="kavg" class="${S.pref.kavg !== false ? 'on' : ''}" title="顯示我的持股均價線">均價</button><button id="kxh" class="${S.pref.xh !== false ? 'on' : ''}" title="顯示十字線（價格與日期）">十字</button><button id="kma" title="設定均線週期">均線</button><button id="kfs" title="全螢幕">⛶</button><button id="kpng" title="下載圖表圖片">⤓</button></span><span class="seg" id="zm" title="滑鼠滾輪縮放、拖曳平移、雙擊還原"><button data-z="0.7">＋</button><button data-z="1.4">－</button><button data-z="0">還原</button></span>
         <div class="seg" id="sb">${['KD', 'RSI', 'MACD'].map((k) => `<button data-s="${k}" class="${S.pref.sub === k ? 'on' : ''}">${k}</button>`).join('')}</div></div>
-        <div class="chart-wrap"><canvas></canvas><div class="chart-tip"></div></div><div class="row between small muted" style="margin-top:4px"><span id="cmsg"></span><span class="zinfo"></span><span class="d-only">滾輪縮放 · 拖曳平移 · 雙擊還原</span></div><div id="kplan"></div></div>
+        <div class="chart-wrap"><canvas></canvas><div class="chart-tip"></div></div><div class="row between small muted" style="margin-top:4px"><span id="cmsg"></span><span class="zinfo"></span><span class="d-only">滾輪縮放 · 拖曳平移 · 雙擊還原</span></div></div>
       ${(S.pref.stabL || {}).pos === 'top' ? '' : stabBar(this)}
       <div id="si" class="grid g2 stack" style="margin-top:12px"></div>`;
   },
@@ -1971,6 +1971,7 @@ VIEWS.s = {
     $('#star').onclick = () => { $('#star').textContent = toggleStar(sym) ? '★' : '☆'; };
     if ($('#grp')) $('#grp').onchange = () => { const g = D.groups().find((x) => String(x.id) === $('#grp').value); if (!g) return; const on = !(g.s || []).includes(sym); setGroup(sym, g.id, on); toast((on ? '已加入「' : '已移出「') + g.n + '」'); route(); };
     $('#sell').onclick = () => tradeModal(null, { t: 'SELL', s: sym, p: (S.q[sym] || {}).price || '' });
+    { const rg = $('#rg'), on = $('#rg button.on'); if (rg && on && rg.scrollWidth > rg.clientWidth) rg.scrollLeft = Math.max(0, on.offsetLeft - rg.offsetLeft - (rg.clientWidth - on.offsetWidth) / 2); }
     $$('[data-r]', $('#rg')).forEach((b) => b.onclick = async () => {
       if (b.dataset.r === 'C' && (!S.pref.rcDays || S.pref.range === 'C')) {
         let box = null; const v = await dialog('自訂圖表區間', `<div class="grid g2"><div class="field"><label>數量</label><input id="rcN" type="number" min="1" value="${S.pref.rcDays ? (S.pref.rcDays % 365 === 0 ? S.pref.rcDays / 365 : S.pref.rcDays % 30 === 0 ? S.pref.rcDays / 30 : S.pref.rcDays) : 3}"></div>
@@ -2004,7 +2005,7 @@ VIEWS.s = {
     const sym = this.sym; const [range, count, iv] = rangeOf(S.pref.range); const ctype = S.pref.ctype || 'candle';
     $('#sb').style.visibility = range === '1d' ? 'hidden' : '';
     if (range === '1d') {
-      $('#cmsg').textContent = '載入當日走勢…'; if ($('#kplan')) $('#kplan').innerHTML = '';
+      $('#cmsg').textContent = '載入當日走勢…';
       const bars5 = ctype === 'candle' || ctype === 'ohlc'; const us = isUs(sym) && !/^\^|=|-USD$/.test(sym); const ext = us && S.pref.usExt !== false;
       const r = await fetchYahoo(ysym(sym), '1d', bars5 ? '5m' : '1m', 30, ext);
       if (S.route !== 's' || this.sym !== sym) return;
@@ -2051,52 +2052,9 @@ VIEWS.s = {
     }
     $('#cmsg').innerHTML = can('CHART') ? '' : '🔒 KD／RSI／MACD 副圖為會員功能（進階圖表）。<a href="#/member">查看方案 ›</a>';
     const hh = holdings().find((x) => x.symbol === sym); const fsEl = document.fullscreenElement;
-    const ov = iv === '1wk' ? (this.planBox(null, sym), null) : await this.plan(all, sym); if (S.route !== 's' || this.sym !== sym) return;
-    drawChart($('.chart-wrap'), all, { overlay: ov, key: sym + range + (iv || '') + count, count: count || all.length, type: ctype, weekly: iv === '1wk', sub: can('CHART') ? S.pref.sub : null, boll: can('CHART') && S.pref.boll, mas: S.pref.mas, pats: S.pref.kpat !== false && can('KLINE'), avg: S.pref.kavg !== false && hh ? hh.avgCost : null, H: fsEl && fsEl.contains($('.chart-wrap')) ? Math.max(400, window.innerHeight - 150) : null });
+    drawChart($('.chart-wrap'), all, { key: sym + range + (iv || '') + count, count: count || all.length, type: ctype, weekly: iv === '1wk', sub: can('CHART') ? S.pref.sub : null, boll: can('CHART') && S.pref.boll, mas: S.pref.mas, pats: S.pref.kpat !== false && can('KLINE'), avg: S.pref.kavg !== false && hh ? hh.avgCost : null, H: fsEl && fsEl.contains($('.chart-wrap')) ? Math.max(400, window.innerHeight - 150) : null });
     if (iv === '1wk') $('#cmsg').textContent = '週 K（' + all[0].d + ' 起）'; else if (S.pref.range === 'C') $('#cmsg').textContent = '自訂區間：近 ' + rcLabel(S.pref.rcDays || 365);
     if (iv !== '1wk') { this.bars = all; this.signals(); this.pro(); }
-  },
-  /** 主圖交易計畫（與 App 個股頁相同）：依近兩年日 K 算出可畫的計畫，對齊目前顯示的 K 棒後回傳 overlay */
-  async plan(shown, sym) {
-    if (!can('KLINE') || !shown.length) { this.planBox(null, sym); return null; }
-    const etf = D.isEtf(sym) || (!isUs(sym) && /^00/.test(sym)) || (S.q[sym] || {}).type === 'ETF';
-    const tickOf = (p) => (isUs(sym) ? 0.01 : twTick(p, etf));
-    let cs = await liveBars(sym, '2y'); if (this.sym !== sym) return null;
-    const d0 = cs.findIndex((b) => b.d === shown[0].d); if (d0 < 0) cs = shown;   // 對不上日期時改以畫面上的 K 棒計算
-    const off = d0 < 0 ? 0 : d0;
-    let all = [];
-    if (cs.length >= 40) { const r = klineAnalyze(cs); if (r) { r.etf = etf; r.sigs = kbarSignals(cs, etf, tickOf); try { r.pats = chartPatterns(cs, tickOf); } catch (e) { r.pats = []; } all = kaOverlays(r, tickOf); this._kpR = r; } }
-    else { const sp = cpSimplePlan(cs, tickOf); if (sp) all = [sp]; this._kpR = null; }
-    const on = S.pref.showPlan !== false;
-    const ov = !on || !all.length ? null : this._kpR ? kaFocus(sym, this._kpR, all) : all[0];
-    this.planBox({ all, ov, on }, sym);
-    if (!ov) return null;
-    // 移到畫面座標；只留畫面內的型態線段與標記，避免舊線段把縱軸拉開
-    const s = ovShift(ov, off); const segs = s.segs.filter((g) => Math.max(g.i1, g.i2) >= 0); const marks = s.marks.filter((m) => m.i >= 0);
-    return { ...s, segs, marks, prices: [s.entry, s.stop, s.target].concat(segs.flatMap((g) => [g.v1, g.v2]), marks.map((m) => m.v), s.box && s.box.i2 >= 0 ? [s.box.lo, s.box.hi] : []) };
-  },
-  planBox(o, sym) {
-    const el = $('#kplan'); if (!el) return;
-    if (!o) { el.innerHTML = can('KLINE') ? '' : ''; return; }
-    const { all, ov, on } = o; const f = fmtPx;
-    if (!all.length) { el.innerHTML = '<div class="small muted" style="margin-top:8px">交易計畫：目前沒有符合方向的計畫可畫（可切換做多／做空／依訊號）。</div>' + kaSideHtml(); return; }
-    const chips = all.map((a) => `<button class="chip ${ov && ov.id === a.id ? 'on' : ''}" data-kpo="${esc(a.id)}" style="padding:4px 10px;font-size:12px;${a.bull ? 'color:var(--up)' : 'color:var(--down)'}">${esc(a.title)}</button>`).join('');
-    el.innerHTML = `<div class="tile" style="margin-top:8px"><div class="row wrap" style="gap:8px;align-items:center"><b>交易計畫</b><button class="btn sm" id="kpT">${on ? '開 ✓' : '關'}</button><span class="sp"></span></div>
-      ${on ? `${kaSideHtml()}<div class="chips" style="margin-top:8px">${chips}</div>
-      ${ov ? `<div class="small text2" style="margin-top:8px">${ov.bull ? '進場' : '關鍵'} <b class="num">${f(ov.entry)}</b> · ${ov.bull ? '停損' : '防守'} <b class="num" style="color:${PLAN_C.risk}">${f(ov.stop)}</b> · ${ov.bull ? '目標' : '下看'} <b class="num" style="color:${PLAN_C.target}">${f(ov.target)}</b> · ${esc(ov.title)}${ov.bull ? '' : '（持股減碼參考，不建議放空）'}</div>
-        <div class="row wrap small" style="margin-top:4px;gap:6px"><span style="color:${PLAN_C.profit}">■</span> 獲利 <span style="color:${PLAN_C.risk}">■</span> 風險 <span class="muted" style="flex:1">· 盈虧比 1:${ov.rr.toFixed(1)}</span><button class="btn sm" id="kpA">＋ 設為到價提醒</button></div>` : '<div class="small muted" style="margin-top:6px">點選上方計畫，在圖上顯示獲利區與風險區。</div>'}
-      <div class="small muted" style="margin-top:4px">依近兩年日 K 計算（與「技術」分頁 K 線形態分析同一份計畫）；僅為分析試算，不構成投資建議。</div>` : '<div class="small muted" style="margin-top:4px">開啟後在 K 線圖上畫出進場、停損、目標與獲利／風險區。</div>'}</div>`;
-    $('#kpT').onclick = () => { S.pref.showPlan = !on; savePref(); this.chart(); };
-    $$('[data-kpo]', el).forEach((b) => b.onclick = () => { S.kaFocus = S.kaFocus || {}; S.kaFocus[sym] = b.dataset.kpo; this.chart(); });
-    if ($('#kpA')) $('#kpA').onclick = () => {
-      if (!can('ALERTS')) { toast('提醒為會員功能'); return; }
-      const px = (S.q[sym] || {}).price; if (!px) { toast('尚無即時價，稍後再試'); return; }
-      const list = kjson('alertsV2', []); let id = Math.max(0, ...list.map((a) => +a.id || 0)); let n = 0;
-      [ov.entry, ov.stop, ov.target].map((v) => Math.round(v * 100) / 100).forEach((v) => { if (!(v > 0)) return; const t = v >= px ? 'PRICE_ABOVE' : 'PRICE_BELOW';
-        if (list.some((a) => a.s === sym && a.t === t && Math.abs(a.v - v) < 1e-6)) return; list.push({ id: ++id, s: sym, t, v, on: true, f: '' }); n++; });
-      if (!n) { toast('這三個價位都已設過提醒'); return; }
-      ksetJson('alertsV2', list); changed(); toast('已新增 ' + n + ' 個到價提醒（進場、停損、目標），可在「提醒」頁調整');
-    };
   },
   fill() {
     const sym = this.sym; const q = S.q[sym] || {}; const us = isUs(sym); const ch = q.price && q.prev ? q.price - q.prev : 0;
