@@ -1107,7 +1107,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"v1.1.437","sha":"7a5571b","at":"2026-11-26 18:10"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"45cc736","at":"2026-11-26 19:00"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -1203,10 +1203,11 @@ function tickerHtml() {
 const VIEWS = {};
 // 總覽卡片：鍵、名稱、預設寬度（2＝整列）
 const OV_CARDS = [['tiles', '資產摘要', 2], ['trend', '資產走勢', 1], ['focus', '今日焦點', 1], ['alloc', '資產配置', 1], ['events', '近期行事', 1], ['movers', '持股今日漲跌', 1],
-  ['watch', '自選行情牆', 2], ['divs', '持股除權息', 2], ['cal', '損益日曆', 2], ['mkt', '大盤摘要', 1], ['news', '持股新聞', 1]];
+  ['watch', '自選行情牆', 2], ['divs', '持股除權息', 2], ['cal', '損益日曆', 2], ['mkt', '大盤摘要', 1], ['news', '持股新聞', 1], ['star', '雙極星團雷達（多空排行）', 2]];
 const OV_DEFAULT_HIDDEN = ['watch', 'mkt', 'news'];
 function ovLayout() {
   const order = (S.pref.ovOrder || []).filter((k) => OV_CARDS.some((c) => c[0] === k));
+  if (order.length && !order.includes('star')) order.splice(Math.min(2, order.length), 0, 'star'); // 新卡片：與 App 相同放第三張
   OV_CARDS.forEach(([k]) => { if (!order.includes(k)) order.push(k); });
   const hidden = new Set(S.pref.ovHidden || OV_DEFAULT_HIDDEN); const width = S.pref.ovWidth || {};
   return order.map((k) => { const c = OV_CARDS.find((x) => x[0] === k); return { k, n: c[1], w: width[k] || c[2], on: !hidden.has(k) }; });
@@ -1286,9 +1287,10 @@ VIEWS[''] = {
     };
     C.mkt = () => '<div class="card" id="ovMkt"><h2>大盤摘要<a class="r" href="#/market">市場 ›</a></h2><div class="muted small">載入中…</div></div>';
     C.news = () => '<div class="card" id="ovNews"><h2>持股新聞</h2><div class="muted small">載入中…</div></div>';
+    C.star = () => (can('KLINE') ? '<div id="ovStar"></div>' : lockCard('KLINE', '雙極星團雷達'));
     C.events = () => '<div class="card" id="ovEv"><h2>近期行事<a class="r" href="#/calendar">行事曆 ›</a></h2><div class="muted small">載入中…</div></div>';
     const cards = ovLayout().filter((c) => c.on).map((c) => { const html = C[c.k](); return html ? `<div class="${c.w === 2 ? 'span2' : ''}">${html}</div>` : ''; }).join('');
-    $('#dyn').innerHTML = top + `<div class="dash">${cards}</div>`; renderSync();
+    $('#dyn').innerHTML = top + `<div class="dash">${cards}</div>`; renderSync(); starMount();
     $$('[data-nr]').forEach((b) => b.onclick = () => { S.pref.navR = b.dataset.nr; savePref(); this.fill(); });
     $$('[data-cm]').forEach((b) => b.onclick = () => { const [y0, m0] = (S.pref.calM || tpeNow().toISOString().slice(0, 7)).split('-').map(Number); const d = new Date(Date.UTC(y0, m0 - 1 + Number(b.dataset.cm), 1)); S.pref.calM = d.toISOString().slice(0, 7); savePref(); this.fill(); });
     if ($('#navC')) {
@@ -6177,6 +6179,422 @@ function volMinutesNow(us) {
   const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(new Date()).map((x) => [x.type, x.value]));
   const m = +p.hour * 60 + +p.minute + +p.second / 60 - 570;
   return p.weekday !== 'Sat' && p.weekday !== 'Sun' && m >= 0 && m <= 390 ? m : null;
+}
+// ───────── 雙極星團雷達（首頁卡片；與 App StarRank／StarCluster 同規則，案例 web/test/star_cases.mjs） ─────────
+// 遲滯入選／剔除、停損防守價彈出（30 分鐘冷卻）、權重排行。只描述條件是否成立，不給任何買賣指令。
+const STAR_NEW = 1e9;
+const STAR_MKTS = [['TW', '台股'], ['ETF', 'ETF'], ['US', '美股']];
+const STAR_STOPS = [['KLINE', 'K 線防守價'], ['VWAP', '盤中均價'], ['FIXED', '固定 %']];
+const STAR_US_CORE = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA', 'AVGO', 'JPM', 'LLY', 'V', 'MA', 'UNH', 'XOM',
+  'COST', 'NFLX', 'AMD', 'ORCL', 'CRM', 'ADBE', 'PLTR', 'TSM', 'ASML', 'MU', 'QCOM', 'INTC', 'ARM', 'COIN'];
+const STAR_ANIM = { motion: 'GRAVITY', eject: 'BURST', whaleBeam: true, magnet: true, flow: true, haze: false, scale: 0.65, turbulence: 0.5, whaleX: 2, height: 0.42, listSec: 4, scanMin: 3, anim: true, galaxy: true, density: 0.75 };
+function starRuleDef(m) {
+  const etf = m === 'ETF';
+  return { maxN: 8, minScore: etf ? 70 : 75, exitScore: etf ? 63 : 68, rings: 2, requireK: true, wC: 0.4, wR: 0.3, wK: 0.3, stop: 'KLINE', pct: etf ? 1.5 : 2.5 };
+}
+function starSane(r) {
+  const cl = (v, a, b) => Math.max(a, Math.min(b, isNaN(v) ? a : v));
+  const mn = cl(+r.minScore, 50, 95);
+  return { ...r, maxN: cl(Math.round(+r.maxN), 3, 15), minScore: mn, exitScore: cl(+r.exitScore, 30, mn - 1), rings: cl(Math.round(+r.rings), 0, 3), requireK: r.requireK !== false,
+    wC: Math.max(0, +r.wC || 0), wR: Math.max(0, +r.wR || 0), wK: Math.max(0, +r.wK || 0), pct: cl(+r.pct, 0.5, 15), stop: STAR_STOPS.some((s) => s[0] === r.stop) ? r.stop : 'KLINE' };
+}
+/** K 線訊號強度：同向等級越高越強（side：'bull'／'bear'） */
+function starKScore(level, side) {
+  const l = side === 'bull' ? level : -level;
+  return l >= 2 ? 100 : l === 1 ? 75 : l === 0 ? 35 : l === -1 ? 10 : 0;
+}
+function starComp(x, side) {
+  return side === 'bull' ? x.composite : 100 - x.composite;
+}
+function starRingsOf(x, side) {
+  return side === 'bull' ? x.bullRings : x.bearRings;
+}
+/** 權重正規化後的總排行分（0..100） */
+function starFinal(r, c, rg, k) {
+  const s = r.wC + r.wR + r.wK;
+  return s <= 0 ? c : (r.wC * c + r.wR * rg + r.wK * k) / s;
+}
+/** 停損防守價：K 線計畫停損 → 盤中均價 → 固定 %（缺資料時依序退回固定 %） */
+function starStopOf(r, x, side, anchor) {
+  const fixed = anchor > 0 ? (side === 'bull' ? anchor * (1 - r.pct / 100) : anchor * (1 + r.pct / 100)) : null;
+  const ok = (v) => (v != null && v > 0 ? v : null); const pl = ok(side === 'bull' ? x.longStop : x.shortStop);
+  if (r.stop === 'FIXED') return fixed;
+  if (r.stop === 'VWAP') return ok(x.vwap) ?? pl ?? fixed;
+  return pl ?? fixed;
+}
+function starBreached(side, price, stop) {
+  return stop != null && price > 0 && (side === 'bull' ? price <= stop : price >= stop);
+}
+/** 未入選者是否符合入選條件 */
+function starQualifies(r, x, side) {
+  if (!(x.price > 0)) return false;
+  if (starComp(x, side) < r.minScore) return false;
+  if (starRingsOf(x, side) < r.rings) return false;
+  if (r.requireK && (side === 'bull' ? x.kLevel < 1 : x.kLevel > -1)) return false;
+  return true;
+}
+/** 一次評估（與 App StarRank.step 相同）：回傳 { bull, bear, ejects, members } */
+function starStep(rule, inputs, prev, now, cooldown = {}) {
+  const r = starSane(rule); const ejects = []; const keep = []; const seen = new Set();
+  const rs = (n) => Math.max(0, Math.min(3, n)) / 3 * 100;
+  for (const x of inputs) {
+    if (seen.has(x.symbol)) continue; seen.add(x.symbol);
+    const pm = prev[x.symbol];
+    if (pm) {
+      const side = pm.side; const stop = starStopOf(r, x, side, pm.anchor);
+      if (starBreached(side, x.price, stop)) { ejects.push({ symbol: x.symbol, name: x.name, side, price: x.price, stop, forced: true, reason: side === 'bull' ? '跌破停損防守價' : '突破空方防守價' }); continue; }
+      const c = starComp(x, side);
+      if (c < r.exitScore) { ejects.push({ symbol: x.symbol, name: x.name, side, price: x.price, stop, forced: false, reason: '綜合評估低於 ' + Math.trunc(r.exitScore) + ' 分' }); continue; }
+      const rg = rs(starRingsOf(x, side)), k = starKScore(x.kLevel, side);
+      keep.push({ x, side, since: pm.since, anchor: pm.anchor, stop, c, rg, k, f: starFinal(r, c, rg, k) });
+    } else {
+      if ((cooldown[x.symbol] || 0) > now) continue;
+      const side = starQualifies(r, x, 'bull') ? 'bull' : starQualifies(r, x, 'bear') ? 'bear' : null; if (!side) continue;
+      const stop = starStopOf(r, x, side, x.price);
+      if (starBreached(side, x.price, stop)) continue; // 入選當下已在防守價外側：不列入
+      const c = starComp(x, side), rg = rs(starRingsOf(x, side)), k = starKScore(x.kLevel, side);
+      keep.push({ x, side, since: now, anchor: x.price, stop, c, rg, k, f: starFinal(r, c, rg, k) });
+    }
+  }
+  // 上次是成員但這次沒有輸入（資料暫缺）：保留成員資格，不顯示、不彈出
+  const members = {}; Object.values(prev).forEach((m) => { if (!seen.has(m.symbol)) members[m.symbol] = m; });
+  const rank = (side) => keep.filter((c) => c.side === side).sort((a, b) => b.f - a.f || b.c - a.c || (a.x.symbol < b.x.symbol ? -1 : a.x.symbol > b.x.symbol ? 1 : 0)).map((c, i) => {
+    const pm = prev[c.x.symbol]; const rk = i + 1; const p = c.x.price;
+    members[c.x.symbol] = { symbol: c.x.symbol, side, since: c.since, anchor: c.anchor, rank: rk };
+    const ds = [c.x.resistance, c.x.support].filter((v) => v > 0).map((v) => Math.abs(v - p) / p * 100);
+    return { symbol: c.x.symbol, name: c.x.name, side, rank: rk, rankDelta: !pm || pm.side !== side ? STAR_NEW : pm.rank - rk, price: p, chgPct: c.x.chgPct,
+      composite: c.c, rings: c.rg, kline: c.k, final: c.f, stop: c.stop, slBuffer: c.stop == null || !(p > 0) ? null : side === 'bull' ? (p - c.stop) / p * 100 : (c.stop - p) / p * 100,
+      trigPct: p > 0 && ds.length ? Math.min(...ds) : null, whale: !!c.x.whale, hot: c.x.rsi != null ? (side === 'bull' ? c.x.rsi >= 75 : c.x.rsi <= 25) : false };
+  });
+  const bull = rank('bull'), bear = rank('bear');
+  return { bull: bull.slice(0, r.maxN), bear: bear.slice(0, r.maxN), ejects, members };
+}
+/** 盤後排行（與 App StarRank.board 相同）：不動成員、不彈出；寬鬆門檻 min(入選分, 55)、K 線不反向，met＝已達入選條件 */
+function starBoard(rule, inputs) {
+  const r = starSane(rule); const th = Math.min(r.minScore, 55); const seen = new Set(); const all = [];
+  for (const x of inputs) {
+    if (seen.has(x.symbol)) continue; seen.add(x.symbol);
+    if (!(x.price > 0)) continue;
+    const side = x.composite >= 50 ? 'bull' : 'bear'; const c = starComp(x, side); if (c < th) continue;
+    if (side === 'bull' ? x.kLevel < 0 : x.kLevel > 0) continue;
+    const rg = Math.max(0, Math.min(3, starRingsOf(x, side))) / 3 * 100, k = starKScore(x.kLevel, side);
+    all.push({ x, side, c, rg, k, f: starFinal(r, c, rg, k), stop: starStopOf(r, x, side, x.price) });
+  }
+  const rank = (side) => all.filter((c) => c.side === side).sort((a, b) => b.f - a.f || b.c - a.c || (a.x.symbol < b.x.symbol ? -1 : a.x.symbol > b.x.symbol ? 1 : 0)).slice(0, r.maxN).map((c, i) => {
+    const p = c.x.price; const ds = [c.x.resistance, c.x.support].filter((v) => v > 0).map((v) => Math.abs(v - p) / p * 100);
+    return { symbol: c.x.symbol, name: c.x.name, side, rank: i + 1, rankDelta: 0, price: p, chgPct: c.x.chgPct, composite: c.c, rings: c.rg, kline: c.k, final: c.f, stop: c.stop,
+      slBuffer: c.stop == null ? null : side === 'bull' ? (p - c.stop) / p * 100 : (c.stop - p) / p * 100, trigPct: ds.length ? Math.min(...ds) : null, whale: !!c.x.whale,
+      hot: c.x.rsi != null ? (side === 'bull' ? c.x.rsi >= 75 : c.x.rsi <= 25) : false, met: starQualifies(r, c.x, side) };
+  });
+  return { bull: rank('bull'), bear: rank('bear') };
+}
+/** RSI(14)（Wilder 平滑）；資料不足回 null */
+function starRsi(c, n = 14) {
+  if (c.length <= n) return null;
+  let g = 0, l = 0;
+  for (let i = 1; i <= n; i++) { const d = c[i] - c[i - 1]; if (d > 0) g += d; else l -= d; }
+  g /= n; l /= n;
+  for (let i = n + 1; i < c.length; i++) { const d = c[i] - c[i - 1]; g = (g * (n - 1) + (d > 0 ? d : 0)) / n; l = (l * (n - 1) + (d < 0 ? -d : 0)) / n; }
+  if (l === 0) return g === 0 ? 50 : 100;
+  return 100 - 100 / (1 + g / l);
+}
+/** 空方鏡像三環：日 MA20 < MA60、K 線偏空（等級 ≤ −1 或空頭趨勢）、現價 < MA20 */
+function starBearRings(price, ma20, ma60, kLevel, trend) {
+  let n = 0;
+  if (ma20 != null && ma60 != null && ma20 < ma60) n++;
+  if (kLevel <= -1 || trend === -1) n++;
+  if (ma20 != null && price > 0 && price < ma20) n++;
+  return Math.min(n, 3);
+}
+// —— 執行期（瀏覽器端計算；成員、快照存在這個瀏覽器，不上傳、不共用；Alpaca 資料只在本機使用） ——
+const ST = { el: null, eng: null, loop: 0, busy: '', prog: 0, inp: {}, scanAt: {}, qAt: {}, snap: {}, sel: null, ej: [], ejId: 0 };
+function starPref() { const p = S.pref.star || (S.pref.star = {}); p.rules = p.rules || {}; return p; }
+function starRule(m) { return starSane({ ...starRuleDef(m), ...(starPref().rules[m] || {}) }); }
+function starAnimCfg() { return { ...STAR_ANIM, ...(starPref().anim || {}) }; }
+function starMkt() { const m = starPref().mkt; return STAR_MKTS.some((x) => x[0] === m) ? m : 'TW'; }
+function starOpen(m) { return m === 'US' ? usOpen() : twOpen(); }
+function starSnap(m) { if (!(m in ST.snap)) ST.snap[m] = store.get('star_snap_' + m, null); return ST.snap[m]; }
+/** 選股池（上限 36，既有成員優先）：台股＝成交值 ≥ 3 億的漲跌幅兩端＋自選／持股；ETF＝成交量前段與漲跌兩端（排除槓桿／反向）；美股＝大型股＋Alpaca 當日最活躍（有金鑰時）＋自選 */
+async function starPool(m) {
+  const out = new Set(Object.keys(store.get('star_mem_' + m, {})));
+  const mine = D.quotes().map((q) => q.s).concat(holdings().map((h) => h.symbol));
+  if (m === 'TW') {
+    try { const rows = (await scrUniverse()).rows.filter((r) => r.chg != null && (r.val || 0) >= 3);
+      rows.slice().sort((a, b) => b.chg - a.chg).slice(0, 15).forEach((r) => out.add(r.s));
+      rows.slice().sort((a, b) => a.chg - b.chg).slice(0, 15).forEach((r) => out.add(r.s)); } catch (e) {}
+    mine.filter((s) => !isUs(s) && !/^00/.test(s)).forEach((s) => out.add(s));
+  } else if (m === 'ETF') {
+    try { const all = await px('https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL', 1800);
+      const rows = (Array.isArray(all) ? all : []).map((o) => { const c = nn(o.ClosingPrice), ch = nn(o.Change); return { s: String(o.Code || '').trim(), n: String(o.Name || ''), v: nn(o.TradeVolume) || 0, val: nn(o.TradeValue) || 0, pc: c > 0 && ch != null && c - ch > 0 ? ch / (c - ch) * 100 : 0 }; })
+        .filter((r) => /^00\d{2,4}[A-Z]?$/.test(r.s) && r.v >= 500000 && !/正2|反1|反向|槓桿|兩倍|2X/i.test(r.n));
+      rows.filter((r) => r.pc > 0).sort((a, b) => b.pc - a.pc).slice(0, 12).forEach((r) => out.add(r.s));
+      rows.filter((r) => r.pc < 0).sort((a, b) => a.pc - b.pc).slice(0, 12).forEach((r) => out.add(r.s));
+      rows.slice().sort((a, b) => b.val - a.val).slice(0, 20).forEach((r) => out.add(r.s)); } catch (e) {}
+    mine.filter((s) => !isUs(s) && /^00/.test(s)).forEach((s) => out.add(s));
+  } else {
+    STAR_US_CORE.forEach((s) => out.add(s));
+    if (apHas()) try { const j = await apGet('/v1beta1/screener/stocks/most-actives?by=volume&top=25'); (j.most_actives || []).forEach((o) => { if (o.symbol && /^[A-Z.]+$/.test(o.symbol)) out.add(apY(o.symbol)); }); } catch (e) {}
+    mine.filter(isUs).forEach((s) => out.add(s));
+  }
+  return Array.from(out).slice(0, 36);
+}
+/** 單一標的的評估輸入（綜合進場評估＋日／週 K＋三環；與 App StarCluster.inputOf 相同） */
+async function starInput(sym) {
+  const b = await liveBars(sym, '2y'); if (b.length < 60) return null;
+  const d = klineAnalyze(b); if (!d) return null;
+  const a = await entryAdviceCached(sym, 900000);
+  const q = S.q[sym] || {}; const us = isUs(sym); const price = q.price || b[b.length - 1].c; const kl = d.entry ? d.entry.level : 0;
+  let rs = null;
+  try { const wk = klineAnalyze(weeklyBars(await liveBars(sym, '5y'))); if (wk) rs = ringsEval(ringsInput(price, d, wk), 0); } catch (e) {}
+  const bull = rs ? (rs.outer ? 1 : 0) + (rs.middle ? 1 : 0) + (rs.center ? 1 : 0) : [d.x.ma60 != null && d.x.ma20 > d.x.ma60, kl >= 1 || d.x.trend === 1, price > d.x.ma20].filter(Boolean).length;
+  const last = b[b.length - 1]; const today = last.d === ymd() ? last.v : null;
+  const hist = (today != null ? b.slice(0, -1) : b).slice(-5).map((x) => x.v).filter((v) => v > 0); const avg5 = hist.length ? hist.reduce((s, v) => s + v, 0) / hist.length : 0;
+  const ratio = avg5 > 0 ? volRatio(today, avg5, us, volMinutesNow(us)) : null;
+  const vwap = q.high > 0 && q.low > 0 ? (q.high + q.low + price) / 3 : today != null ? (last.h + last.l + last.c) / 3 : null;
+  const lp = (a && a.plan) || d.longPlan;
+  return { symbol: sym, name: D.name(sym), price, chgPct: q.prev ? (price / q.prev - 1) * 100 : 0, composite: Math.max(0, Math.min(100, a ? a.score : 50 + kl * 15)), kLevel: kl,
+    bullRings: bull, bearRings: starBearRings(price, d.x.ma20, d.x.ma60, kl, d.x.trend), longStop: (lp && lp.stop) || (rs && rs.stop) || null, shortStop: d.shortPlan ? d.shortPlan.stop : null,
+    vwap, resistance: d.x.resistance > 0 ? d.x.resistance : null, support: d.x.support > 0 ? d.x.support : null, whale: (ratio || 0) >= starAnimCfg().whaleX, rsi: starRsi(b.slice(-60).map((x) => x.c)) };
+}
+async function starScan(m) {
+  if (ST.busy) return; ST.busy = m; ST.prog = 0; starStatus();
+  try {
+    let syms = await starPool(m);
+    await refreshQuotes(syms).catch(() => {});
+    if (m === 'US') { const keep = new Set(Object.keys(store.get('star_mem_US', {})).concat(STAR_US_CORE, D.quotes().map((q) => q.s), holdings().map((h) => h.symbol)));
+      syms = syms.filter((s) => keep.has(s) || ((S.q[s] || {}).price || 0) >= 10); }
+    const inp = {}; let i = 0, done = 0;
+    const work = async () => { while (i < syms.length) { const s = syms[i++]; try { const x = await starInput(s); if (x) inp[s] = x; } catch (e) {} done++; ST.prog = done / syms.length; starStatus(); } };
+    await Promise.all([work(), work(), work(), work()]);
+    ST.inp[m] = inp; ST.scanAt[m] = ST.qAt[m] = Date.now(); starRecompute(m);
+  } finally { ST.busy = ''; starStatus(); }
+}
+/** 快更新：只換現價／漲跌／盤中均價再重新排行（K 線與評估沿用上次分析） */
+function starPatch(m) {
+  const inp = ST.inp[m]; if (!inp) return;
+  Object.values(inp).forEach((x) => { const q = S.q[x.symbol]; if (!q || !q.price) return; x.price = q.price; if (q.prev) x.chgPct = (q.price / q.prev - 1) * 100; if (q.high > 0 && q.low > 0) x.vwap = (q.high + q.low + q.price) / 3; });
+  starRecompute(m);
+}
+function starRecompute(m) {
+  const inp = ST.inp[m]; if (!inp) return;
+  if (!starOpen(m)) {
+    // 非盤中：依最近收盤評估排行（不動成員、不彈出），避免星團空白
+    const b = starBoard(starRule(m), Object.values(inp));
+    ST.snap[m] = { bull: b.bull, bear: b.bear, at: Date.now(), live: false, pool: Object.keys(inp).length }; store.set('star_snap_' + m, ST.snap[m]);
+    if (m === starMkt()) starRender(); return;
+  }
+  const now = Date.now(); const cd = store.get('star_cd_' + m, {}); Object.keys(cd).forEach((k) => { if (cd[k] < now) delete cd[k]; });
+  const r = starStep(starRule(m), Object.values(inp), store.get('star_mem_' + m, {}), now, cd);
+  r.ejects.forEach((e) => { if (e.forced) cd[e.symbol] = now + 1800000; ST.ej.unshift({ id: ++ST.ejId, m, e, at: now }); }); ST.ej = ST.ej.slice(0, 30);
+  ST.snap[m] = { bull: r.bull, bear: r.bear, at: now, live: starOpen(m), pool: Object.keys(inp).length };
+  store.set('star_mem_' + m, r.members); store.set('star_cd_' + m, cd); store.set('star_snap_' + m, ST.snap[m]);
+  if (m === starMkt()) starRender();
+}
+function starTick() {
+  if (!ST.el || !ST.el.isConnected) { clearInterval(ST.loop); ST.loop = 0; return; }
+  if (starPref().paused || ST.busy) return;
+  const m = starMkt(), a = starAnimCfg(), open = starOpen(m), now = Date.now(), snap = starSnap(m);
+  if (!ST.inp[m] ? open || !snap || now - snap.at > 6 * 3600000 || (!(snap.bull || []).length && !(snap.bear || []).length) : open && now - (ST.scanAt[m] || 0) >= a.scanMin * 60000) { starScan(m); return; }
+  if (!ST.inp[m]) return;
+  if (!open) { if (snap && snap.live) starRecompute(m); return; } // 剛收盤：改為盤後排行
+  if (now - (ST.qAt[m] || 0) >= 20000) { ST.qAt[m] = now; refreshQuotes(Object.keys(ST.inp[m])).catch(() => {}).then(() => starPatch(m)); } else starPatch(m);
+}
+function starSrc() {
+  const m = starMkt(); const s = starSnap(m) || {};
+  return { bull: s.bull || [], bear: s.bear || [], anim: starAnimCfg(), live: starOpen(m), paused: !!starPref().paused, sel: ST.sel, ejects: ST.ej.filter((x) => x.m === m), right: m === 'ETF' ? '轉弱／回檔' : '空方看跌', busy: ST.busy === m };
+}
+/** 星團畫布：節點依名次排列（第 1 名在中心、黃金角向外），彈出特效、大量光束、多空流向、磁吸脈衝、星雲光暈；不在畫面或分頁隱藏時停畫 */
+function starFx(cv, src) {
+  const g = cv.getContext('2d'); const N = new Map(); const F = [];
+  const E = { raf: 0, vis: true, last: 0, t: 0, rot: 0, dead: false, io: null, col: null, colAt: 0, beam: 0, flow: 0, handled: src().ejects.reduce((s, x) => Math.max(s, x.id), 0) };
+  // 螺旋星系恆星（與 App 相同的配置：約 22% 核球、12% 盤面散星、其餘沿兩條旋臂；固定亂數種子）
+  const GS = 900, TW = 4, TILT = 0.78, GT = new Float32Array(GS * 2), GA = new Float32Array(GS * 2), GB = new Uint8Array(GS * 2);
+  { let sd = 20260117; const rnd = () => { sd = (sd + 0x6D2B79F5) | 0; let t = Math.imul(sd ^ (sd >>> 15), 1 | sd); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    const gs = () => (rnd() + rnd() + rnd() - 1.5) / 0.5;
+    for (let i = 0; i < GS * 2; i++) { const q = rnd();
+      if (q < 0.22) { GT[i] = Math.min(1, Math.abs(gs()) * 0.12); GA[i] = rnd() * 6.283; }
+      else if (q < 0.34) { GT[i] = 0.1 + rnd() * 0.95; GA[i] = rnd() * 6.283; }
+      else { const t = 0.08 + Math.pow(rnd(), 0.8) * 0.92; GT[i] = t * (1 + gs() * 0.04); GA[i] = (rnd() < 0.5 ? 0 : Math.PI) + t * TW + gs() * 0.18 * (1.1 - t * 0.5); }
+      const b = rnd(); GB[i] = b < 0.62 ? 0 : b < 0.9 ? 1 : 2; } }
+  const mix = (c, k) => { const m = /^#([0-9a-f]{6})$/i.exec(String(c).trim()); if (!m) return c; const v = parseInt(m[1], 16), f = (x) => Math.round(x + (255 - x) * k); return `rgb(${f(v >> 16)},${f((v >> 8) & 255)},${f(v & 255)})`; };
+  try { E.io = new IntersectionObserver((es) => { E.vis = es.some((x) => x.isIntersecting); }); E.io.observe(cv); } catch (e) {}
+  const fx = (o) => { if (F.length >= 150) F.shift(); F.push(o); };
+  const stop = () => { cancelAnimationFrame(E.raf); E.dead = true; if (E.io) E.io.disconnect(); };
+  const frame = (ts) => {
+    if (!cv.isConnected) { stop(); return; }
+    E.raf = requestAnimationFrame(frame);
+    const d = src(), a = d.anim, moving = a.anim && !d.paused;
+    if (document.hidden || !E.vis || ts - E.last < (!moving ? 400 : d.live ? 0 : 66)) return;
+    const dt = E.last ? Math.min(0.05, (ts - E.last) / 1000) : 0.016; E.last = ts; E.t += dt;
+    const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight; if (!W || !H) return;
+    if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+    g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+    if (!E.col || ts - E.colAt > 2000) { E.col = { up: css('--up') || '#dc2626', dn: css('--down') || '#16a34a', tx: css('--text') || '#111', t2: css('--text2') || '#888', bd: css('--border') || '#ddd' }; E.colAt = ts; }
+    const C = E.col, cy = H * 0.57, maxR = Math.min(W * 0.21, H * 0.36), cx = (s) => (s === 'bull' ? W * 0.25 : W * 0.75), col = (s) => (s === 'bull' ? C.up : C.dn);
+    const gal = !!a.galaxy, GR = Math.min(W * 0.26, H * 0.44 / TILT), sg = (s) => (s === 'bull' ? 1 : -1);
+    const gx = (s, t, an) => cx(s) + Math.cos(sg(s) * (an - E.rot)) * GR * t, gy = (s, t, an) => cy + Math.sin(sg(s) * (an - E.rot)) * GR * t * TILT;
+    if (gal && moving) E.rot += dt * 0.05 * (0.4 + a.turbulence); else if (!moving) E.rot = 0;
+    // 背景：螺旋星系（深空、盤面霧光、旋臂恆星、核心光芒）或分隔線
+    if (gal) {
+      g.fillStyle = '#070A14'; g.fillRect(0, 0, W, H);
+      const cnt = Math.round(GS * Math.max(0.3, Math.min(1, a.density || 0.75)));
+      ['bull', 'bear'].forEach((s) => { const c = col(s), x0 = cx(s);
+        g.save(); g.translate(x0, cy); g.scale(1, TILT); const hz = g.createRadialGradient(0, 0, 0, 0, 0, GR * 1.05); hz.addColorStop(0, mix(c, 0) + ''); hz.addColorStop(1, 'rgba(0,0,0,0)'); g.globalAlpha = 0.2; g.fillStyle = hz; g.beginPath(); g.arc(0, 0, GR * 1.05, 0, 6.283); g.fill(); g.restore(); g.globalAlpha = 1;
+        g.globalCompositeOperation = 'lighter'; const o = s === 'bull' ? 0 : GS;
+        for (let b = 0; b < 3; b++) { g.fillStyle = mix(c, b === 2 ? 0.75 : 0.35); g.globalAlpha = b === 0 ? 0.55 : b === 1 ? 0.8 : 1; const z = b === 0 ? 1.3 : b === 1 ? 1.8 : 2.6;
+          g.beginPath(); for (let k = 0; k < cnt; k++) { const i = o + k; if (GB[i] !== b) continue; const t = GT[i], an = GA[i] - E.rot * (0.35 / (0.35 + t) - 0.3); const x = gx(s, t, an), y = gy(s, t, an); g.moveTo(x + z / 2, y); g.arc(x, y, z / 2, 0, 6.283); } g.fill(); }
+        g.globalAlpha = 1; const cr = g.createRadialGradient(x0, cy, 0, x0, cy, GR * 0.26); cr.addColorStop(0, 'rgba(255,255,255,0.95)'); cr.addColorStop(0.45, mix(c, 0.2)); cr.addColorStop(1, 'rgba(0,0,0,0)');
+        g.globalAlpha = 0.9; g.fillStyle = cr; g.beginPath(); g.arc(x0, cy, GR * 0.26, 0, 6.283); g.fill(); g.globalAlpha = 1; g.globalCompositeOperation = 'source-over'; });
+    } else { g.strokeStyle = C.bd; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(W / 2, 22); g.lineTo(W / 2, H - 6); g.stroke(); g.setLineDash([]); }
+    g.font = '600 12px system-ui,sans-serif'; g.textAlign = 'center'; g.fillStyle = C.up; g.fillText('多方看漲 ' + d.bull.length, W * 0.25, 15); g.fillStyle = C.dn; g.fillText(d.right + ' ' + d.bear.length, W * 0.75, 15);
+    if (a.haze) ['bull', 'bear'].forEach((s) => { const gr = g.createRadialGradient(cx(s), cy, 0, cx(s), cy, maxR * 1.3); gr.addColorStop(0, col(s) + '33'); gr.addColorStop(1, col(s) + '00'); g.fillStyle = gr; g.fillRect(0, 0, W, H); });
+    // 同步節點目標位置
+    const live = new Set();
+    ['bull', 'bear'].forEach((side) => { const list = d[side] || [], n = list.length;
+      list.forEach((nd, i) => { const ang = i * 2.39996 + (side === 'bear' ? Math.PI : 0), dist = i === 0 ? 0 : maxR * Math.sqrt(i / Math.max(1, n - 1)) * 0.92;
+        // 星系模式：第 1 名在核心，其餘依名次沿兩條旋臂由內而外，隨星系旋轉
+        const gt = i === 0 ? 0 : 0.3 + 0.65 * (i - 1) / Math.max(1, n - 2), ga = ((i + 1) % 2) * Math.PI + gt * TW;
+        let o = N.get(nd.symbol);
+        if (!o || o.side !== side || o.st !== 1) { o = { x: cx(side) + (Math.random() - 0.5) * maxR * 2, y: cy + (Math.random() - 0.5) * maxR * 1.6, vx: 0, vy: 0, a: 0, side, st: 1, rp: 0 }; N.set(nd.symbol, o); }
+        Object.assign(o, { tx: gal ? gx(side, gt, ga) : cx(side) + Math.cos(ang) * dist, ty: gal ? gy(side, gt, ga) : cy + Math.sin(ang) * dist * 0.85, r: Math.max(3, (4 + nd.final / 10) * a.scale * (i === 0 ? 1.35 : 1)), rank: nd.rank, whale: nd.whale, hot: nd.hot, sym: nd.symbol }); live.add(nd.symbol); }); });
+    // 彈出事件
+    d.ejects.slice().reverse().forEach((ev) => { if (ev.id <= E.handled) return; E.handled = ev.id;
+      const o = N.get(ev.e.symbol), x = o ? o.x : cx(ev.e.side), y = o ? o.y : cy, c = ev.e.forced ? '#f59e0b' : col(ev.e.side);
+      if (a.eject === 'BURST') for (let k = 0; k < 18; k++) { const an = k / 18 * 6.283, sp = 60 + Math.random() * 90; fx({ k: 0, x, y, vx: Math.cos(an) * sp, vy: Math.sin(an) * sp, life: 0.9, max: 0.9, sz: 2, c }); }
+      else if (a.eject === 'SHATTER') for (let k = 0; k < 8; k++) { const an = Math.random() * 6.283, sp = 30 + Math.random() * 60; fx({ k: 3, x, y, vx: Math.cos(an) * sp, vy: Math.sin(an) * sp - 40, life: 1.1, max: 1.1, sz: 3 + Math.random() * 3, c, rot: Math.random() * 6 }); }
+      fx({ k: 4, x, y, vx: 0, vy: 0, life: 0.8, max: 0.8, sz: o ? o.r : 8, c });
+      if (o) o.st = a.eject === 'DISSOLVE' ? 3 : 2; });
+    N.forEach((o, s) => { if (o.st === 1 && !live.has(s)) o.st = 3; if (o.st === 2) N.delete(s); });
+    // 大量光束、多空流向
+    if (moving && a.whaleBeam && (E.beam += dt) >= 1.2) { E.beam = 0; const wh = Array.from(N.values()).filter((o) => o.st === 1 && o.whale); if (wh.length) { const o = wh[Math.floor(Math.random() * wh.length)]; fx({ k: 1, x: o.x + (Math.random() - 0.5) * 40, y: -4, vx: 0, vy: 0, life: 3, max: 3, sz: 2, c: '#fbbf24', tgt: o }); } }
+    if (moving && a.flow) { const sb = d.bull.reduce((s, x) => s + x.final, 0), sr = d.bear.reduce((s, x) => s + x.final, 0), df = sb - sr;
+      if (Math.abs(df) > 20 && (E.flow += dt * Math.min(12, Math.abs(df) / 60)) >= 1) { E.flow = 0; const from = df > 0 ? 'bear' : 'bull', to = df > 0 ? 'bull' : 'bear', y0 = cy + (Math.random() - 0.5) * maxR;
+        fx({ k: 2, x: cx(from), y: y0, vx: (cx(to) - cx(from)) / 2.2, vy: (Math.random() - 0.5) * 20, life: 2.2, max: 2.2, sz: 1.6, c: col(to) }); } }
+    // 節點
+    N.forEach((o, s) => {
+      if (o.st === 3) { o.a -= dt * 1.5; o.r *= 1 - dt; if (o.a <= 0) { N.delete(s); return; } }
+      else if (!moving) { o.x = o.tx; o.y = o.ty; o.a = 1; o.vx = o.vy = 0; }
+      else { const tu = a.turbulence * 50; o.vx += ((o.tx - o.x) * 12 - o.vx * 5) * dt + (Math.random() - 0.5) * tu * dt; o.vy += ((o.ty - o.y) * 12 - o.vy * 5) * dt + (Math.random() - 0.5) * tu * dt; o.x += o.vx * dt; o.y += o.vy * dt; o.a = Math.min(1, o.a + dt * 2); }
+      const pr = (moving && a.motion === 'PULSE' ? 1 + 0.14 * Math.sin(E.t * 3 + o.rank) : 1) * (gal ? 0.7 : 1), r = o.r * pr, c = col(o.side);
+      g.globalAlpha = Math.max(0, o.a) * (o.rank <= 3 || gal ? 1 : 0.7);
+      if (o.hot) { g.fillStyle = '#f9731633'; g.beginPath(); g.arc(o.x, o.y, r + 5, 0, 6.283); g.fill(); }
+      if (gal) {
+        // 亮星：光暈＋白色星核＋側色光環；前 3 名加四芒星光
+        const al = g.globalAlpha; g.globalAlpha = al * 0.35; g.fillStyle = c; g.beginPath(); g.arc(o.x, o.y, r * 1.8, 0, 6.283); g.fill();
+        if (o.rank <= 3 && o.st === 1) { g.globalAlpha = al * 0.55; g.strokeStyle = '#fff'; g.lineWidth = 1; const fl = r * 3.2; g.beginPath(); g.moveTo(o.x - fl, o.y); g.lineTo(o.x + fl, o.y); g.moveTo(o.x, o.y - fl); g.lineTo(o.x, o.y + fl); g.stroke(); }
+        g.globalAlpha = al * 0.95; g.strokeStyle = c; g.lineWidth = 1.6; g.beginPath(); g.arc(o.x, o.y, r, 0, 6.283); g.stroke(); g.fillStyle = '#fff'; g.beginPath(); g.arc(o.x, o.y, r * 0.6, 0, 6.283); g.fill(); g.globalAlpha = al; g.lineWidth = 1;
+      } else { g.fillStyle = c; g.beginPath(); g.arc(o.x, o.y, r, 0, 6.283); g.fill(); }
+      if (o.whale) { g.strokeStyle = '#fbbf24'; g.lineWidth = 1.2; g.beginPath(); g.arc(o.x, o.y, r + 2.5, 0, 6.283); g.stroke(); }
+      if (o.rp > 0) { g.strokeStyle = '#fbbf24'; g.globalAlpha = o.rp; g.beginPath(); g.arc(o.x, o.y, r + (1 - o.rp) * 18, 0, 6.283); g.stroke(); o.rp = Math.max(0, o.rp - dt * 1.6); }
+      if (moving && a.magnet && o.rank === 1 && o.st === 1) { const f = (E.t * 0.6 + (o.side === 'bull' ? 0 : 0.5)) % 1; g.strokeStyle = c; g.globalAlpha = (1 - f) * 0.6; g.lineWidth = 1; g.beginPath(); g.arc(o.x, o.y, r + 4 + f * 30, 0, 6.283); g.stroke(); }
+      if (d.sel === s) { g.globalAlpha = 1; g.strokeStyle = gal ? '#fff' : C.tx; g.lineWidth = 2; g.beginPath(); g.arc(o.x, o.y, r + 4, 0, 6.283); g.stroke(); }
+      if (o.rank <= 3 && o.st === 1) { g.globalAlpha = Math.max(0, o.a); g.fillStyle = gal ? '#fff' : C.tx; g.font = '600 11px system-ui,sans-serif'; g.fillText(s, o.x, o.y - r - 5); }
+      g.globalAlpha = 1; g.lineWidth = 1;
+    });
+    // 特效粒子
+    for (let i = F.length - 1; i >= 0; i--) { const p = F[i]; p.life -= dt; if (p.life <= 0) { F.splice(i, 1); continue; } const f = p.life / p.max; g.globalAlpha = Math.max(0, f);
+      if (p.k === 1) { const o = p.tgt; if (!o || !N.has(o.sym) || N.get(o.sym) !== o) { F.splice(i, 1); continue; } const dx = o.x - p.x, dy = o.y - p.y, dd = Math.hypot(dx, dy);
+        if (dd < o.r + 2) { o.vy += 60; o.rp = 1; F.splice(i, 1); continue; } p.x += dx / dd * 260 * dt; p.y += dy / dd * 260 * dt; g.globalAlpha = 1; g.strokeStyle = p.c; g.lineWidth = 2; g.beginPath(); g.moveTo(p.x - dx / dd * 14, p.y - dy / dd * 14); g.lineTo(p.x, p.y); g.stroke(); g.lineWidth = 1; }
+      else if (p.k === 4) { g.strokeStyle = p.c; g.lineWidth = 2; g.beginPath(); g.arc(p.x, p.y, p.sz + (1 - f) * 28, 0, 6.283); g.stroke(); g.lineWidth = 1; }
+      else { if (p.k === 3) p.vy += 160 * dt; else if (p.k === 0) { p.vx *= 0.96; p.vy *= 0.96; } p.x += p.vx * dt; p.y += p.vy * dt; g.fillStyle = p.c;
+        if (p.k === 3) { p.rot += dt * 6; g.save(); g.translate(p.x, p.y); g.rotate(p.rot); g.fillRect(-p.sz / 2, -p.sz / 4, p.sz, p.sz / 2); g.restore(); } else { if (p.k === 2) g.globalAlpha = 0.5 * Math.min(1, f * 3); g.beginPath(); g.arc(p.x, p.y, p.sz, 0, 6.283); g.fill(); } }
+      g.globalAlpha = 1; }
+    if (!N.size) { g.fillStyle = C.t2; g.font = '13px system-ui,sans-serif'; g.fillText(d.busy ? '分析中…' : '目前沒有符合條件的標的', W / 2, cy); }
+  };
+  E.raf = requestAnimationFrame(frame);
+  return { stop, get dead() { return E.dead; }, pick(x, y) { let best = null, bd = 1e9; N.forEach((o, s) => { if (o.st !== 1) return; const dd = Math.hypot(o.x - x, o.y - y); if (dd < o.r + 14 && dd < bd) { bd = dd; best = s; } }); return best; } };
+}
+function starRowsHtml(list, side, m) {
+  if (!list.length) return '<div class="small muted" style="padding:8px 0">' + ((starSnap(m) || {}).live === false ? '最近收盤沒有綜合評估達 55 分且 K 線不反向的標的' : '目前沒有符合條件的標的') + '</div>';
+  const us = m === 'US';
+  return list.map((n) => { const dl = n.rankDelta >= STAR_NEW ? '<span class="tag" style="font-size:10px;padding:0 4px">NEW</span>' : n.rankDelta > 0 ? `<span class="up">▲${n.rankDelta}</span>` : n.rankDelta < 0 ? `<span class="down">▼${-n.rankDelta}</span>` : '<span class="muted">－</span>'; const sb = n.slBuffer;
+    return `<div data-go="#/s/${esc(n.symbol)}" style="display:flex;gap:6px;align-items:center;padding:5px 2px;border-bottom:1px solid var(--border);cursor:pointer;${ST.sel === n.symbol ? 'background:var(--card2);' : ''}">
+      <span class="num" style="min-width:18px;font-weight:700;color:var(${side === 'bull' ? '--up' : '--down'})">${n.rank}</span>
+      <div style="flex:1;min-width:0"><div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;font-size:13px">${n.met ? `<span style="color:var(${side === 'bull' ? '--up' : '--down'})" title="已達入選條件">✓</span> ` : ''}${esc(n.symbol)} <span class="small muted" style="font-weight:400">${esc(n.name === n.symbol ? '' : n.name)}</span></div>
+      <div class="small num" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><span class="${cls(n.chgPct)}">${fmtPrice(n.price, us)} ${fmtPct(n.chgPct)}</span>${sb != null ? ` <span style="color:${sb < 1 ? '#f97316' : 'var(--text2)'}" title="距停損防守價">緩衝 ${fmt(sb, 1)}%</span>` : ''}</div></div>
+      <span class="small" style="min-width:26px;text-align:right">${dl}</span></div>`; }).join('');
+}
+function starStatus() {
+  const el = ST.el && $('#stSt', ST.el); if (!el) return; const m = starMkt(), s = starSnap(m), open = starOpen(m);
+  const tm = (t) => new Date(t).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false });
+  el.textContent = ST.busy === m ? '分析中 ' + Math.round(ST.prog * 100) + '%' : (starPref().paused ? '已暫停 · ' : '') + (s ? '更新 ' + tm(s.at) + (s.pool ? ' · 選股池 ' + s.pool + ' 檔' : '') : '尚未分析') + (open ? ' · 盤中' : s && s.live === false ? ' · 盤後排行（最近收盤評估，✓＝已達入選條件）' : ' · 非盤中（顯示最近一次結果）') + (m === 'US' && !apHas() ? ' · 未設定 Alpaca 金鑰，只用大型股與自選' : '');
+}
+function starRender() {
+  const el = ST.el; if (!el) return; const m = starMkt(), s = starSnap(m) || {}, p = starPref();
+  $$('[data-stm]', el).forEach((b) => b.classList.toggle('on', b.dataset.stm === m));
+  $('#stP', el).textContent = p.paused ? '▶' : '⏸';
+  const ev = ST.ej.find((x) => x.m === m && Date.now() - x.at < 600000);
+  $('#stEj', el).innerHTML = ev ? `<span style="color:${ev.e.forced ? '#f59e0b' : 'var(--text2)'}">${ev.e.forced ? '⚡' : '·'} ${esc(ev.e.symbol)} ${esc(ev.e.name === ev.e.symbol ? '' : ev.e.name)} ${esc(ev.e.reason)}（${fmtPrice(ev.e.price, m === 'US')}${ev.e.stop ? '／防守 ' + fmtPrice(ev.e.stop, m === 'US') : ''}）移出星團</span>` : '';
+  const sel = ST.sel && (s.bull || []).concat(s.bear || []).find((n) => n.symbol === ST.sel);
+  $('#stSel', el).innerHTML = sel ? `<b>${esc(sel.symbol)}</b> ${esc(sel.name === sel.symbol ? '' : sel.name)}　${sel.side === 'bull' ? '多方' : '空方'}第 ${sel.rank} 名 · 綜合 ${Math.round(sel.composite)} · 三環 ${Math.round(sel.rings / 33.4)}/3 · K 線 ${Math.round(sel.kline)} · 總分 ${fmt(sel.final, 1)}${sel.stop ? ' · 防守 ' + fmtPrice(sel.stop, m === 'US') : ''}${sel.whale ? ' · 大量' : ''}${sel.hot ? ' · RSI 過熱' : ''}　<a data-go="#/s/${esc(sel.symbol)}" href="javascript:void 0">個股 ›</a>` : '';
+  $('#stL', el).innerHTML = `<div><div class="small" style="font-weight:700;color:var(--up)">多方看漲</div>${starRowsHtml(s.bull || [], 'bull', m)}</div><div><div class="small" style="font-weight:700;color:var(--down)">${m === 'ETF' ? '轉弱／回檔' : '空方看跌'}</div>${starRowsHtml(s.bear || [], 'bear', m)}</div>`;
+  starStatus();
+}
+function starBuild() {
+  const el = document.createElement('div'); el.className = 'card'; el.id = 'starCard';
+  el.innerHTML = `<h2>雙極星團雷達<span class="r"><button class="btn sm" id="stP" title="暫停／繼續"></button> <button class="btn sm" id="stG" title="星團設定">⚙</button></span></h2>
+    <span class="seg">${STAR_MKTS.map(([k, n]) => `<button data-stm="${k}">${n}</button>`).join('')}</span>
+    <canvas id="stC" style="width:100%;display:block;margin-top:6px;cursor:pointer"></canvas>
+    <div id="stSt" class="small muted"></div><div id="stSel" class="small" style="margin-top:2px"></div><div id="stEj" class="small" style="margin-top:2px"></div>
+    <div id="stL" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px"></div>
+    <details class="small muted" style="margin-top:6px"><summary>說明</summary>左＝多方看漲、右＝空方看跌（ETF 為轉弱／回檔）；入選需綜合進場評估達入選分、三環同向達門檻、（可選）K 線訊號同向；已入選者分數不低於剔除分就保留，觸及停損防守價立即移出（30 分鐘內不重新入選）。星點大小＝總排行分，第 1 名在中心；金色光束＝量比達大量門檻。點星點看明細，再點一次開個股頁。資料在這個瀏覽器計算與保存；非盤中改為盤後排行（依最近收盤評估，綜合評估 ≥ 55 且 K 線不反向，✓＝已達入選條件，不影響盤中成員）。僅為依規則計算的視覺化，不代表任何買賣建議。</details>`;
+  $$('[data-stm]', el).forEach((b) => b.onclick = () => { starPref().mkt = b.dataset.stm; savePref(); ST.sel = null; starRender(); starTick(); });
+  $('#stP', el).onclick = () => { const p = starPref(); p.paused = !p.paused; savePref(); starRender(); if (!p.paused) starTick(); };
+  $('#stG', el).onclick = () => starSettings();
+  const cv = $('#stC', el);
+  cv.onclick = (e) => { const rc = cv.getBoundingClientRect(); const s = ST.eng && ST.eng.pick(e.clientX - rc.left, e.clientY - rc.top);
+    if (s && s === ST.sel) { location.hash = '#/s/' + s; return; } ST.sel = s || null; starRender(); };
+  return el;
+}
+/** 總覽頁每次重畫時把常駐的星團卡片搬回新的位置（畫布與動畫不重建） */
+function starMount() {
+  const host = $('#ovStar'); if (!host) return;
+  if (!ST.el) ST.el = starBuild();
+  if (ST.el.parentNode !== host) host.appendChild(ST.el);
+  const cv = $('#stC', ST.el); cv.style.height = Math.round(Math.max(180, Math.min(560, window.innerHeight * starAnimCfg().height))) + 'px';
+  if (!ST.eng || ST.eng.dead) ST.eng = starFx(cv, starSrc);
+  if (!ST.loop) { ST.loop = setInterval(starTick, Math.max(2, starAnimCfg().listSec) * 1000); starRender(); starTick(); }
+}
+/** 星團專屬設定：各市場篩選與排行、動畫與特效（含預覽） */
+async function starSettings() {
+  const R = {}; STAR_MKTS.forEach(([k]) => { R[k] = starRule(k); }); const an = starAnimCfg(); let m = starMkt(), tab = 0;
+  const demo = { bull: [], bear: [], ejects: [], id: 0 };
+  const mk = (side, i) => ({ symbol: (side === 'bull' ? 'B' : 'S') + (i + 1), name: '', side, rank: i + 1, final: 95 - i * 6, whale: i === 1, hot: i === 0 && side === 'bull' });
+  demo.bull = [0, 1, 2, 3, 4, 5].map((i) => mk('bull', i)); demo.bear = [0, 1, 2, 3, 4].map((i) => mk('bear', i));
+  const rg = (o, k, label, min, max, step, unit = '') => `<div class="field" style="margin:6px 0"><label class="small">${label}　<b data-sv="${k}">${o[k]}${unit}</b></label><input type="range" style="width:100%" data-sk="${k}" min="${min}" max="${max}" step="${step}" value="${o[k]}" data-u="${unit}"></div>`;
+  const ck = (o, k, label) => `<label class="small" style="display:inline-flex;gap:4px;align-items:center;margin:4px 10px 4px 0"><input type="checkbox" data-sc="${k}" ${o[k] ? 'checked' : ''}>${label}</label>`;
+  const sg = (o, k, opts) => `<span class="seg" style="margin:4px 0">${opts.map(([v, t]) => `<button type="button" data-sg="${k}" data-v2="${v}" class="${String(o[k]) === String(v) ? 'on' : ''}">${t}</button>`).join('')}</span>`;
+  const form = () => { if (tab === 0) { const r = R[m]; return `<div style="margin:6px 0">${sg({ m }, 'm', STAR_MKTS)}</div>
+      ${rg(r, 'maxN', '每側顯示上限', 3, 15, 1, ' 檔')}${rg(r, 'minScore', '入選分（綜合評估 ≥）', 50, 95, 1, ' 分')}${rg(r, 'exitScore', '剔除分（低於即移出，需小於入選分）', 30, 94, 1, ' 分')}
+      <div class="small" style="margin-top:6px">三環同向門檻</div>${sg(r, 'rings', [[0, '不限'], [1, '1 環'], [2, '2 環'], [3, '3 環']])}<div>${ck(r, 'requireK', '要求 K 線訊號同向')}</div>
+      <div class="small" style="margin-top:6px">排行權重（自動正規化）</div>${rg(r, 'wC', '綜合評估', 0, 1, 0.05)}${rg(r, 'wR', '三環強度', 0, 1, 0.05)}${rg(r, 'wK', 'K 線訊號', 0, 1, 0.05)}
+      <div class="small" style="margin-top:6px">停損防守價</div>${sg(r, 'stop', STAR_STOPS)}${rg(r, 'pct', '固定 %（其他模式缺資料時也用這個）', 0.5, 15, 0.5, '%')}
+      <div class="small muted" style="margin:6px 0">已入選者分數 ≥ 剔除分就保留（緩衝帶防洗榜）；觸及防守價立即移出，30 分鐘內不重新入選。</div><button type="button" class="btn sm" id="stRst">重設此市場</button>`; }
+    return `<div>${ck(an, 'anim', '動畫')}</div><div class="small">動態</div>${sg(an, 'motion', [['GRAVITY', '引力向心'], ['PULSE', '能量脈動']])}<div class="small" style="margin-top:4px">跳離特效</div>${sg(an, 'eject', [['BURST', '放射爆散'], ['SHATTER', '碎裂淡出'], ['DISSOLVE', '簡單消散']])}
+      <div>${ck(an, 'whaleBeam', '大量光束')}${ck(an, 'magnet', '磁吸脈衝')}${ck(an, 'flow', '多空流向粒子')}${ck(an, 'haze', '星雲光暈')}${ck(an, 'galaxy', '螺旋星系')}</div>${rg(an, 'density', '星系粒子密度', 0.3, 1, 0.05)}
+      ${rg(an, 'scale', '星點大小', 0.3, 1, 0.05)}${rg(an, 'turbulence', '擾動', 0, 1, 0.05)}${rg(an, 'whaleX', '大量門檻（量比 ≥）', 1.2, 5, 0.1, ' 倍')}${rg(an, 'height', '雷達高度（畫面比例）', 0.25, 0.7, 0.01)}
+      ${rg(an, 'listSec', '排行更新間隔', 2, 15, 1, ' 秒')}${rg(an, 'scanMin', '盤中重新分析間隔', 1, 15, 1, ' 分')}`; };
+  let eng = null;
+  const ok = await dialog('雙極星團雷達設定', `<canvas id="stPv" style="width:100%;height:160px;display:block;border:1px solid var(--border);border-radius:10px"></canvas>
+    <div style="text-align:right;margin-top:4px"><button type="button" class="btn sm" id="stPe">預覽跳離</button></div>
+    <span class="seg" id="stTab" style="margin-top:6px"><button type="button" data-tb="0" class="on">篩選與排行</button><button type="button" data-tb="1">動畫與特效</button></span><div id="stF"></div>`, [['', '取消'], ['ok', '儲存', 'primary']], (root) => {
+    const F = $('#stF', root);
+    const bind = () => { F.innerHTML = form(); const o = tab === 0 ? R[m] : an;
+      $$('[data-sk]', F).forEach((x) => x.oninput = () => { o[x.dataset.sk] = +x.value; const v = $(`[data-sv="${x.dataset.sk}"]`, F); if (v) v.textContent = x.value + (x.dataset.u || ''); });
+      $$('[data-sc]', F).forEach((x) => x.onchange = () => { o[x.dataset.sc] = x.checked; });
+      $$('[data-sg]', F).forEach((x) => x.onclick = () => { const k = x.dataset.sg, v = x.dataset.v2; if (k === 'm') m = v; else o[k] = k === 'rings' ? +v : v; bind(); });
+      const rs = $('#stRst', F); if (rs) rs.onclick = () => { R[m] = starRuleDef(m); bind(); }; };
+    $$('[data-tb]', root).forEach((b) => b.onclick = () => { tab = +b.dataset.tb; $$('[data-tb]', root).forEach((x) => x.classList.toggle('on', x === b)); bind(); });
+    bind();
+    eng = starFx($('#stPv', root), () => ({ bull: demo.bull, bear: demo.bear, anim: { ...an, anim: true }, live: true, paused: false, sel: null, ejects: demo.ejects, right: '空方看跌', busy: false }));
+    $('#stPe', root).onclick = () => { const side = Math.random() < 0.5 ? 'bull' : 'bear'; const l = demo[side]; if (!l.length) return; const n = l[l.length - 1];
+      demo.ejects.unshift({ id: ++demo.id, e: { symbol: n.symbol, side, forced: true } }); demo[side] = l.slice(0, -1); setTimeout(() => { demo[side] = demo[side].concat([n]); }, 2500); };
+    return () => { const r = R[m]; return r.exitScore >= r.minScore ? '剔除分需小於入選分' : null; };
+  });
+  if (eng) eng.stop();
+  if (ok !== 'ok') return;
+  const p = starPref(); STAR_MKTS.forEach(([k]) => { p.rules[k] = starSane(R[k]); }); p.anim = { ...an }; savePref();
+  clearInterval(ST.loop); ST.loop = 0; STAR_MKTS.forEach(([k]) => starRecompute(k)); starMount(); starRender(); toast('已儲存星團設定');
 }
 // ───────── 買賣量粒子（與 App VolumeFlowPanel 相同：左內盤、右外盤，粒子＝成交量，聚合圈＝買賣占比，量比決定密度） ─────────
 const VF = { sym: null, raf: 0, timer: 0, io: null, vis: true, st: null, ratio: null, avg5: 0, share: 0.5, est: true, P: null };
