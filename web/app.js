@@ -1164,7 +1164,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"f75c8da","at":"2026-11-26 22:55"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"0560422","at":"2026-11-26 23:07"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -4280,7 +4280,7 @@ Object.assign(VIEWS.s, {
     const etf = D.isEtf(sym) || (!isUs(sym) && /^00/.test(sym)) || (S.q[sym] || {}).type === 'ETF';
     const b = await liveBars(sym, '2y'); if (this.sym !== sym || this.tab() !== 'ta') return;
     if (b.length < 60) { si.innerHTML = '<div class="card empty" style="grid-column:1/-1">歷史資料不足，無法分析</div>'; return; }
-    this._sm = { sym }; si.innerHTML = '<div class="card rx" id="sumC" style="grid-column:1/-1">' + sumHtml(this._sm) + '</div><div class="card" id="rgC" style="grid-column:1/-1"><h2>三環條件（週 K → 日 K → 即時）</h2><div class="small muted">計算中…</div></div><div class="card" id="kaC" style="grid-column:1/-1"></div><div class="card" id="voC" style="grid-column:1/-1"></div><div class="card" id="iaC" style="grid-column:1/-1"><h2>投資分析指數</h2><div class="small muted">計算中…</div></div>';
+    this._sm = { sym }; si.innerHTML = '<div class="card rx" id="sumC" data-lay="top" style="grid-column:1/-1">' + sumHtml(this._sm) + '</div><div class="card" id="rgC" style="grid-column:1/-1"><h2>三環條件（週 K → 日 K → 即時）</h2><div class="small muted">計算中…</div></div><div class="card" id="kaC" style="grid-column:1/-1"></div><div class="card" id="voC" style="grid-column:1/-1"></div><div class="card" id="iaC" style="grid-column:1/-1"><h2>投資分析指數</h2><div class="small muted">計算中…</div></div>';
     const tickOf = (p) => (isUs(sym) ? 0.01 : twTick(p, etf));
     const sigs = kbarSignals(b, etf, tickOf);
     const drawKa = async (weekly) => {
@@ -4676,6 +4676,7 @@ function layCollect(root) {
   const walk = (el) => {
     for (const c of Array.from(el.children)) {
       if (c.matches('script,style,canvas')) continue;
+      if (c.dataset.lay === 'top') { groups.push({ key: '#' + c.id, name: '', els: [c], w: 'f', fixed: true }); continue; }
       if (c.classList.contains('card') || c.id) {
         const t = layTitle(c); const key = c.id ? '#' + c.id : 'c:' + t.replace(/[\d,.%+\-−／/：:\s（）()]+/g, '');
         add(c, key, (c.id && LAY_ID_NAMES[c.id]) || t || (c.id ? '#' + c.id : '卡片')); continue;
@@ -6563,7 +6564,9 @@ const SM_IC = {
   vo: '<path d="M2 10h3l2-5 3 10 3-7 2 2h3"/>' };
 function smStyleInject() {
   if (document.getElementById('smCss')) return; const el = document.createElement('style'); el.id = 'smCss';
-  el.textContent = `.smg{position:relative;display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  el.textContent = `.smw{position:relative;container-type:inline-size}.smg{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@container (min-width:640px){.smg{grid-template-columns:repeat(4,minmax(0,1fr))}}
+.sml{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11.5px;color:#6f84a3;margin-top:8px}.sml i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px;vertical-align:0}
 .smb{position:relative;border-radius:12px;padding:10px 11px;background:linear-gradient(160deg,var(--c1),#07101e 72%);border:1.5px solid var(--c);box-shadow:0 0 12px -3px var(--c),inset 0 0 16px -8px var(--c);cursor:pointer;min-width:0}
 .smb:before,.smb:after{content:"";position:absolute;width:11px;height:11px;border:2px solid var(--c)}.smb:before{top:4px;left:4px;border-right:0;border-bottom:0}.smb:after{bottom:4px;right:4px;border-left:0;border-top:0}
 .smb .k{display:flex;align-items:center;gap:6px;font-size:12px;color:#9fb0cc}.smb .k svg{width:17px;height:17px;flex:none;color:var(--c)}.smb .k em{margin-left:auto;font-style:normal;font-size:11px;color:#6f84a3}
@@ -6601,7 +6604,7 @@ function sumHtml(o) {
   const tag = tn.length < 3 ? ['計算中', SM_C.ld] : nu && nd ? ['分歧', SM_C.mid] : nu === 3 ? ['3 偏多・同向', SM_C.up] : nd === 3 ? ['3 偏弱・同向', SM_C.dn]
     : [[nu && nu + ' 偏多', nm && nm + ' 中性', nd && nd + ' 偏弱'].filter(Boolean).join('・'), nu > nd ? SM_C.up : nd > nu ? SM_C.dn : SM_C.mid];
   return `<h2 style="position:relative;display:flex;align-items:center;gap:8px;white-space:nowrap">分析總結 <span class="small" style="color:#6f84a3;font-weight:400">// SUMMARY</span><span style="margin-left:auto;font-size:12px;padding:2px 9px;border-radius:99px;border:1px solid ${tag[1]};color:${tag[1]}">${tag[0]}</span></h2>
-    <div class="smg">${h}</div><div class="small" style="position:relative;color:#6f84a3;margin-top:8px">各方框為單項結果：紅＝偏多、黃＝中性、綠＝偏弱、灰虛線＝失效（波動：紅＝低波動、綠＝高波動）。點方框看完整分析。僅為分析成果彙整，不構成投資建議。</div>`;
+    <div class="smw"><div class="smg">${h}</div><div class="sml">${[['up', '偏多'], ['mid', '中性'], ['dn', '偏弱'], ['off', '失效']].map(([c, t]) => `<span><i style="background:${SM_C[c]}"></i>${t}</span>`).join('')}<span>波動：紅低／綠高</span><span style="margin-left:auto">點方框看完整分析・僅為分析彙整，不構成投資建議</span></div></div>`;
 }
 function rxStyleInject() {
   if (document.getElementById('rxCss')) return; const el = document.createElement('style'); el.id = 'rxCss';
