@@ -742,14 +742,53 @@ async function fetchUs(sym) {
   if (pre.start && now >= pre.start && now < (reg.start || pre.end)) { const x = lastIn(pre.start, pre.end); if (x) ext = { label: '盤前', price: x[0], time: x[1] }; }
   else if (post.start && now >= post.start) { const x = lastIn(post.start, post.end); if (x) ext = { label: '盤後', price: x[0], time: x[1] }; }
   if (ext && m.regularMarketPrice) ext.pct = (ext.price / m.regularMarketPrice - 1) * 100;
-  return { price: m.regularMarketPrice, prev, high: m.regularMarketDayHigh, low: m.regularMarketDayLow, vol: m.regularMarketVolume, time: (m.regularMarketTime || 0) * 1000,
+  let prev2 = prev;
+  if (ext && ext.label === '盤前' && prev && Math.abs(prev - m.regularMarketPrice) < 1e-9) {
+    // 盤前 Yahoo 的昨收常等於最近收盤：改取日 K 前一根收盤，最近一次正常交易的漲跌才正確
+    try { const d = await fetchYahoo(sym, '5d', '1d', 1800); const today = nyDate(Date.now());
+      const cs = ((d && d.timestamp) || []).map((t, i) => [nyDate(t * 1000), ((d.indicators.quote[0] || {}).close || [])[i]]).filter((x) => x[1] != null && x[0] < today);
+      if (cs.length >= 2 && Math.abs(cs[cs.length - 1][1] - m.regularMarketPrice) / m.regularMarketPrice < 0.002) prev2 = cs[cs.length - 2][1]; } catch (e) {}
+  }
+  return { price: m.regularMarketPrice, prev: prev2, high: m.regularMarketDayHigh, low: m.regularMarketDayLow, vol: m.regularMarketVolume, time: (m.regularMarketTime || 0) * 1000,
     name: m.shortName || m.longName, spark: closes.length ? closes : cl.filter((v) => v != null), h52: m.fiftyTwoWeekHigh, l52: m.fiftyTwoWeekLow, type: m.instrumentType, ext };
 }
 /** 盤前／盤後價格小標（美股） */
 function extHtml(q, big) {
   const e = q && q.ext; if (!e || !e.price) return '';
-  return `<div class="num" style="margin-top:${big ? 8 : 2}px;font-size:${big ? 16 : 12}px"><span class="tag" style="background:#E8B04B;color:#222">${e.label}</span> <b>${fmt(e.price, 2)}</b> <span class="${cls(e.pct || 0)}">${arrow(e.pct || 0)} ${fmtPct(e.pct || 0)}</span> <span class="muted">${hm(e.time)}</span></div>`;
+  const d = q.price ? e.price - q.price : 0;
+  return `<div class="num" style="margin-top:${big ? 8 : 2}px;font-size:${big ? 18 : 12}px"><span class="tag" style="background:#E8B04B;color:#222">${e.label}</span> <b>${fmt(e.price, 2)}</b> <span class="${cls(e.pct || 0)}">${arrow(e.pct || 0)}${big && d ? ' ' + fmt(Math.abs(d), 2) : ''} ${fmtPct(e.pct || 0)}</span> <span class="muted">${hm(e.time)}</span>${big ? '<div class="small muted" style="font-size:12px">' + e.label + '漲跌以最近一次正常交易收盤 ' + fmt(q.price, 2) + ' 計</div>' : ''}</div>`;
 }
+/** 表格／清單用的盤前盤後小字（美股） */
+function extMini(q) {
+  const e = q && q.ext; if (!e || !e.price) return '';
+  return `<div class="small num" style="white-space:nowrap"><span style="color:#E8B04B;font-weight:700">${e.label}</span> ${fmt(e.price, 2)} <span class="${cls(e.pct || 0)}">${fmtPct(e.pct || 0)}</span></div>`;
+}
+// ───────── 美股時段（美東 04:00 盤前、09:30 開盤、16:00 收盤、20:00 盤後結束；休市 US_HOLIDAY、提早收盤 US_HALF） ─────────
+const US_HALF = { 2026: ['11/27', '12/24'], 2027: ['11/26'] };
+function nyNow(ms = Date.now()) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+  return { y: +p.year, md: p.month + '/' + p.day, wd: p.weekday, m: +p.hour * 60 + +p.minute };
+}
+function usPhase(ms = Date.now()) {
+  const n = nyNow(ms); const hol = (US_HOLIDAY[n.y] || []).find(([d]) => d === n.md); const half = (US_HALF[n.y] || []).includes(n.md);
+  const close = half ? 780 : 960, postEnd = half ? 1020 : 1200;
+  const k = n.wd === 'Sat' || n.wd === 'Sun' || hol ? 'OFF' : n.m >= 240 && n.m < 570 ? 'PRE' : n.m >= 570 && n.m < close ? 'REG' : n.m >= close && n.m < postEnd ? 'POST' : 'NIGHT';
+  return { k, half, hol: hol ? hol[1] : '', m: n.m, close, postEnd, label: { PRE: '盤前交易中', REG: '盤中', POST: '盤後交易中', NIGHT: '已收盤', OFF: hol ? '休市（' + hol[1] + '）' : '週末休市' }[k] };
+}
+/** 美東分鐘數 → 台灣時間（依目前夏令／冬令時差） */
+function usTw(nyMin) {
+  const d = tpeNow(); const diff = Math.round((((d.getHours() * 60 + d.getMinutes()) - nyNow().m + 1440) % 1440) / 60) * 60;
+  const t = (nyMin + diff) % 1440; return String(Math.floor(t / 60)).padStart(2, '0') + ':' + String(t % 60).padStart(2, '0');
+}
+function durTxt(min) { return min >= 60 ? Math.floor(min / 60) + ' 小時' + (min % 60 ? ' ' + (min % 60) + ' 分' : '') : min + ' 分鐘'; }
+/** 美股時段標籤＋倒數（個股頁、美股市場頁） */
+function usSessLine() {
+  const p = usPhase(); const pre = p.k === 'PRE' || p.k === 'POST';
+  const nxt = p.k === 'PRE' ? '距開盤 ' + durTxt(570 - p.m) + '（台灣 ' + usTw(570) + '）' : p.k === 'REG' ? '距收盤 ' + durTxt(p.close - p.m) + '（台灣 ' + usTw(p.close) + '）'
+    : p.k === 'POST' ? '盤後交易至台灣 ' + usTw(p.postEnd) : p.k === 'NIGHT' ? '下一段盤前：台灣 ' + usTw(240) : '';
+  return `<span class="tag" style="background:${p.k === 'REG' ? 'var(--primary)' : pre ? '#E8B04B' : 'var(--grid)'};color:${p.k === 'REG' ? '#fff' : '#222'}">美股${p.label}</span>${nxt ? ' <span class="small muted">' + nxt + '</span>' : ''}${p.half ? ' <span class="small muted">今日提早收盤</span>' : ''}`;
+}
+function usSchedTxt() { const p = usPhase(); return '台灣時間：盤前 ' + usTw(240) + '・開盤 ' + usTw(570) + '・收盤 ' + usTw(p.close) + '・盤後至 ' + usTw(p.postEnd) + (p.half ? '（今日提早收盤）' : ''); }
 async function sparkTw(sym) {
   const r = await fetchYahoo(ysym(sym), '1d', '5m', 120); if (!r) return;
   const closes = ((r.indicators && r.indicators.quote && r.indicators.quote[0].close) || []).filter((v) => v != null);
@@ -1031,7 +1070,7 @@ function drawChart(wrap, bars, opt) {
   const zi = wrap.parentElement && wrap.parentElement.querySelector('.zinfo'); if (zi) zi.textContent = z.count !== def || z.off ? `顯示 ${vis.length} 根（${vis[0].d} ～ ${vis[vis.length - 1].d}）` : '';
 }
 /** 當日走勢（分時線＋昨收基準＋成交量） */
-function drawLine(wrap, pts, prev, us, ctype) {
+function drawLine(wrap, pts, prev, us, ctype, opt = {}) {
   const cv = wrap.querySelector('canvas'); const tip = wrap.querySelector('.chart-tip');
   const W = wrap.clientWidth, H = 320, dpr = pxRatio(); cv.width = W * dpr; cv.height = H * dpr; cv.style.height = H + 'px';
   const g = cv.getContext('2d'); g.scale(dpr, dpr); g.clearRect(0, 0, W, H); g.font = '11px sans-serif'; g.textBaseline = 'middle';
@@ -1040,11 +1079,12 @@ function drawLine(wrap, pts, prev, us, ctype) {
   const vals = pts.map((p) => p[1]).concat(prev ? [prev] : []);
   let hi = Math.max(...vals), lo = Math.min(...vals); const pad = (hi - lo) * 0.08 || hi * 0.01; hi += pad; lo -= pad;
   // 台股整天 270 分鐘；美股 390 分鐘
-  const span = us ? 390 * 60000 : 270 * 60000; const t0 = pts[0][0];
+  const span = opt.span || (us ? 390 * 60000 : 270 * 60000); const t0 = opt.t0 || pts[0][0];
   const x = (t) => padL + Math.min(1, (t - t0) / span) * (W - padL - padR); const y = (v) => top + (hi - v) / (hi - lo) * mainH;
   const UP = css('--up'), DN = css('--down'); const last = pts[pts.length - 1][1]; const col = prev && last < prev ? DN : UP;
   g.strokeStyle = css('--grid'); g.fillStyle = css('--muted');
   for (let k = 0; k <= 4; k++) { const v = lo + (hi - lo) * k / 4; g.beginPath(); g.moveTo(padL, y(v)); g.lineTo(W - padR, y(v)); g.stroke(); g.fillText(fmtPx(v), W - padR + 4, y(v)); }
+  (opt.bands || []).forEach(([a, b, lb]) => { const xa = x(a), xb = x(b); g.globalAlpha = 0.13; g.fillStyle = '#E8B04B'; g.fillRect(xa, top, xb - xa, mainH); g.globalAlpha = 1; g.fillStyle = css('--muted'); g.fillText(lb, xa + 4, top + mainH - 8); });
   if (prev) { g.setLineDash([4, 4]); g.strokeStyle = css('--muted'); g.beginPath(); g.moveTo(padL, y(prev)); g.lineTo(W - padR, y(prev)); g.stroke(); g.setLineDash([]); }
   const grad = g.createLinearGradient(0, top, 0, top + mainH); grad.addColorStop(0, col + '55'); grad.addColorStop(1, col + '00');
   g.beginPath(); pts.forEach((p, i) => (i ? g.lineTo(x(p[0]), y(p[1])) : g.moveTo(x(p[0]), y(p[1])))); g.strokeStyle = col; g.lineWidth = 1.6; g.stroke();
@@ -1054,7 +1094,7 @@ function drawLine(wrap, pts, prev, us, ctype) {
   g.globalAlpha = 1; g.fillStyle = css('--muted');
   [0, 0.25, 0.5, 0.75, 1].forEach((f) => { const t = t0 + span * f; const d0 = new Date(t + 8 * 3600000); g.fillText((f === 0 ? String(d0.getUTCMonth() + 1) + '/' + d0.getUTCDate() + ' ' : '') + hm(t), Math.min(W - padR - 30, padL + f * (W - padL - padR) - (f === 0 ? 0 : 14)), H - 8); });
   const md = (t) => { const d = new Date(t + 8 * 3600000); return String(d.getUTCMonth() + 1).padStart(2, '0') + '/' + String(d.getUTCDate()).padStart(2, '0'); };
-  const info = (p) => `${md(p[0])} ${hm(p[0])}　<b class="${cls(prev ? p[1] - prev : 0)}">${fmt(p[1], 2)} ${prev ? fmtPct((p[1] / prev - 1) * 100) : ''}</b>　量 ${fmtVol(us ? p[2] : (p[2] || 0) / 1000)}${us ? '' : ' 張'}${prev ? '　昨收 ' + fmt(prev, 2) : ''}`;
+  const info = (p) => `${md(p[0])} ${hm(p[0])}　<b class="${cls(prev ? p[1] - prev : 0)}">${fmt(p[1], 2)} ${prev ? fmtPct((p[1] / prev - 1) * 100) : ''}</b>　量 ${fmtVol(us ? p[2] : (p[2] || 0) / 1000)}${us ? '' : ' 張'}${prev ? '　' + (opt.baseLabel || '昨收') + ' ' + fmt(prev, 2) : ''}${opt.lab ? opt.lab(p[0]) : ''}`;
   tip.innerHTML = info(pts[pts.length - 1]);
   const xh = xhair(wrap, cv, H);
   const move = (e) => { const r = cv.getBoundingClientRect(); const my = e.clientY - r.top; const t = t0 + (e.clientX - r.left - padL) / (W - padL - padR) * span; let best = pts[0]; for (const p of pts) if (Math.abs(p[0] - t) < Math.abs(best[0] - t)) best = p; tip.innerHTML = info(best);
@@ -1107,7 +1147,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"aef1b6f","at":"2026-11-26 21:39"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"df99a3c","at":"2026-11-26 21:50"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -1378,11 +1418,11 @@ VIEWS.watch = {
       if (S.pref.layout !== 'list') h += `<div class="notice" style="margin-bottom:10px">🔒 行情牆與熱度圖為會員功能（${esc(FEATURES[3][1])}），已改用清單顯示。<a href="#/member">查看方案 ›</a></div>`;
       h += `<div class="card list m-only" style="padding:4px 12px">${syms.map((s) => { const q = S.q[s] || {}; const ch = q.price && q.prev ? q.price - q.prev : 0;
         return `<div class="it" data-go="#/s/${s}"><div class="l"><div class="t1">${esc(D.name(s))} <span class="muted small num">${s}</span>${q.lu ? ' <span class="tag up">漲停</span>' : q.ld ? ' <span class="tag down">跌停</span>' : ''}</div><div class="t2">量 ${q.volLots != null ? fmtInt(q.volLots) + ' 張' : fmtVol(q.vol)}</div></div>
-          <div class="r"><div class="num ${cls(ch)}">${fmtPrice(q.price)}</div><div class="num small ${cls(ch)}">${q.prev ? arrow(ch) + fmt(Math.abs(ch), 2) + ' ' + fmtPct(ch / q.prev * 100) : '—'}</div></div></div>`; }).join('')}</div>`;
+          <div class="r"><div class="num ${cls(ch)}">${fmtPrice(q.price)}</div><div class="num small ${cls(ch)}">${q.prev ? arrow(ch) + fmt(Math.abs(ch), 2) + ' ' + fmtPct(ch / q.prev * 100) : '—'}</div>${isUs(s) ? extMini(q) : ''}</div></div>`; }).join('')}</div>`;
       h += `<div class="card scroll-x d-only" style="padding:6px 8px"><table class="tbl"><thead><tr><th>個股</th><th>成交</th><th>漲跌</th><th>漲跌幅</th><th>成交量</th><th>最高</th><th>最低</th><th></th></tr></thead><tbody>${syms.map((s) => {
         const q = S.q[s] || {}; const us = isUs(s); const ch = q.price && q.prev ? q.price - q.prev : 0;
         return `<tr class="click" data-go="#/s/${s}"><td class="nm">${esc(D.name(s))} <span class="muted small num">${s}</span>${q.lu ? ' <span class="tag up">漲停</span>' : q.ld ? ' <span class="tag down">跌停</span>' : ''}</td>
-          <td class="num ${cls(ch)}">${fmtPrice(q.price, us)}</td><td class="num ${cls(ch)}">${q.price ? arrow(ch) + fmt(Math.abs(ch), 2) : '—'}</td><td class="num ${cls(ch)}">${q.prev ? fmtPct(ch / q.prev * 100) : '—'}</td>
+          <td class="num ${cls(ch)}">${fmtPrice(q.price, us)}${us ? extMini(q) : ''}</td><td class="num ${cls(ch)}">${q.price ? arrow(ch) + fmt(Math.abs(ch), 2) : '—'}</td><td class="num ${cls(ch)}">${q.prev ? fmtPct(ch / q.prev * 100) : '—'}</td>
           <td class="num">${q.volLots != null ? fmtInt(q.volLots) + ' 張' : fmtVol(q.vol)}</td><td class="num">${fmtPrice(q.high, us)}</td><td class="num">${fmtPrice(q.low, us)}</td>
           <td><button class="btn sm" data-rm="${s}" title="移除">✕</button></td></tr>`;
       }).join('')}</tbody></table></div>`;
@@ -1509,6 +1549,13 @@ VIEWS.hold = {
       <div class="tile"><div class="k">今日損益</div><div class="v num ${cls(P.day)}">${fmtSigned(P.day)}</div></div>
       <div class="tile"><div class="k">未實現損益</div><div class="v num ${cls(P.pl)}">${fmtSigned(P.pl)}</div><div class="s num ${cls(P.pl)}">${fmtPct(P.cost ? P.pl / P.cost * 100 : 0)}</div></div>
       <div class="tile"><div class="k">現金</div><div class="v num">${fmtInt(P.cash)}</div>${P.margin > 0 ? `<div class="s muted">融資 ${fmtInt(P.margin)}</div>` : ''}</div></div>`;
+    const ex = rows.filter((r) => isUs(r.symbol) && (S.q[r.symbol] || {}).ext && S.q[r.symbol].ext.price && r.price);
+    if (ex.length) { const lb = S.q[ex[0].symbol].ext.label; const fx = usdTwd(); const dv = ex.reduce((a, r) => a + (S.q[r.symbol].ext.price - r.price) * r.shares * fx, 0);
+      const base = ex.reduce((a, r) => a + r.price * r.shares * fx, 0);
+      h += `<div class="card" style="margin-bottom:12px;border-left:4px solid #E8B04B"><div class="row between wrap" style="align-items:center;gap:8px"><div><b>美股${lb}試算</b> <span class="small muted">${ex.length} 檔有${lb}成交，依${lb}價試算市值變動（台幣）</span></div>
+        <div class="num ${cls(dv)}" style="font-size:20px;font-weight:800">${fmtSigned(dv)} <span class="small">${base ? fmtPct(dv / base * 100) : ''}</span></div></div><div style="margin-top:4px">${usSessLine()}</div>
+        <div class="small text2" style="margin-top:6px">${ex.slice().sort((a, b) => Math.abs(S.q[b.symbol].ext.pct || 0) - Math.abs(S.q[a.symbol].ext.pct || 0)).slice(0, 6).map((r) => esc(r.name) + ' <span class="num ' + cls(S.q[r.symbol].ext.pct) + '">' + fmtPct(S.q[r.symbol].ext.pct) + '</span>').join('　')}</div>
+        <div class="small muted" style="margin-top:4px">試算僅供參考，正式開盤後以盤中成交為準。</div></div>`; }
     if (P.margin > 0) h += `<div style="margin-bottom:12px">${marginCardHtml(P)}</div>`;
     if (P.shorts.length) h += `<div style="margin-bottom:12px">${shortCardHtml(P)}</div>`;
     if (!rows.length) h += '<div class="card empty">尚無持股。按「新增交易」記錄買進，或在手機開啟同步。</div>';
@@ -1518,7 +1565,7 @@ VIEWS.hold = {
       if (S.pref.holdView === 'wall' || S.pref.holdView === 'heat') h += `<div class="notice" style="margin-bottom:10px">🔒 行情牆為會員功能，已改用表格顯示。<a href="#/member">查看方案 ›</a></div>`;
       const hide = new Set(S.pref.holdHide || HOLD_DEFAULT_HIDE); const cols = HOLD_COLS.filter(([k]) => k === 'name' || !hide.has(k));
       const cell = (k, r) => ({ name: `<td class="nm">${esc(r.name)} <span class="muted small num">${r.symbol}</span>${r.lu ? ' <span class="tag up">漲停</span>' : r.ld ? ' <span class="tag down">跌停</span>' : ''}</td>`,
-        shares: `<td class="num">${fmt(r.shares, r.shares % 1 ? 2 : 0)}</td>`, avgCost: `<td class="num">${fmtPrice(r.avgCost)}</td>`, price: `<td class="num ${cls(r.chg)}">${fmtPrice(r.price)}</td>`,
+        shares: `<td class="num">${fmt(r.shares, r.shares % 1 ? 2 : 0)}</td>`, avgCost: `<td class="num">${fmtPrice(r.avgCost)}</td>`, price: `<td class="num ${cls(r.chg)}">${fmtPrice(r.price)}${isUs(r.symbol) ? extMini(S.q[r.symbol]) : ''}</td>`,
         pct: `<td class="num ${cls(r.chg)}">${fmtPct(r.pct)}</td>`, day: `<td class="num ${cls(r.day)}">${fmtSigned(r.day)}</td>`, mv: `<td class="num">${fmtInt(r.mv)}</td>`,
         pl: `<td class="num ${cls(r.pl)}">${fmtSigned(r.pl)}</td>`, plPct: `<td class="num ${cls(r.pl)}">${fmtPct(r.plPct)}</td>`, weight: `<td class="num">${r.weight.toFixed(1)}%</td>`,
         cost: `<td class="num">${fmtInt(r.cost)}</td>`, vol: `<td class="num">${r.vol ? fmtVol(r.vol) : '—'}</td>` })[k];
@@ -1531,7 +1578,7 @@ VIEWS.hold = {
       // 手機：卡片清單
       h += `<div class="card list m-only" style="padding:4px 12px">${rows.map((r) => `<div class="it" data-go="#/s/${r.symbol}"><div class="l"><div class="t1">${esc(r.name)} <span class="muted small num">${r.symbol}</span></div>
         <div class="t2">${fmt(r.shares, r.shares % 1 ? 2 : 0)} 股 · 均 ${fmtPrice(r.avgCost)} · 市值 ${fmtInt(r.mv)}</div><div class="t2">今日 <span class="${cls(r.day)}">${fmtSigned(r.day)}</span> · 占比 ${r.weight.toFixed(1)}%</div></div>
-        <div class="r"><div class="num ${cls(r.chg)}">${fmtPrice(r.price)} <span class="small">${fmtPct(r.pct)}</span></div><div class="num ${cls(r.pl)}">${fmtSigned(r.pl)}</div><div class="num small ${cls(r.pl)}">${fmtPct(r.plPct)}</div></div></div>`).join('')}</div>`;
+        <div class="r"><div class="num ${cls(r.chg)}">${fmtPrice(r.price)} <span class="small">${fmtPct(r.pct)}</span></div>${isUs(r.symbol) ? extMini(S.q[r.symbol]) : ''}<div class="num ${cls(r.pl)}">${fmtSigned(r.pl)}</div><div class="num small ${cls(r.pl)}">${fmtPct(r.plPct)}</div></div></div>`).join('')}</div>`;
     }
     $('#dyn').innerHTML = h;
     $$('[data-sort]').forEach((th) => th.onclick = () => { const k = th.dataset.sort; if (S.pref.holdSort === k) S.pref.holdDir = -(S.pref.holdDir || -1); else { S.pref.holdSort = k; S.pref.holdDir = k === 'name' ? 1 : -1; } savePref(); this.fill(); });
@@ -1941,20 +1988,29 @@ VIEWS.s = {
     $('#sb').style.visibility = range === '1d' ? 'hidden' : '';
     if (range === '1d') {
       $('#cmsg').textContent = '載入當日走勢…';
-      const bars5 = ctype === 'candle' || ctype === 'ohlc';
-      const r = await fetchYahoo(ysym(sym), '1d', bars5 ? '5m' : '1m', 30);
+      const bars5 = ctype === 'candle' || ctype === 'ohlc'; const us = isUs(sym) && !/^\^|=|-USD$/.test(sym); const ext = us && S.pref.usExt !== false;
+      const r = await fetchYahoo(ysym(sym), '1d', bars5 ? '5m' : '1m', 30, ext);
       if (S.route !== 's' || this.sym !== sym) return;
       if (!r || !r.timestamp) { $('#cmsg').textContent = '無法取得當日走勢'; return; }
-      const q0 = r.indicators.quote[0]; const prev = r.meta.chartPreviousClose || r.meta.previousClose;
+      const q0 = r.indicators.quote[0]; const tp = r.meta.currentTradingPeriod || {}; const reg = tp.regular || {}, pre = tp.pre || {}, post = tp.post || {};
+      const hasReg = !reg.start || r.timestamp.some((t, i) => t >= reg.start && t < reg.end && q0.close[i] != null);
+      // 盤前（今天還沒有正常交易）：基準改為最近一次收盤，走勢與漲跌都以它計
+      const preOnly = ext && !hasReg && r.meta.regularMarketPrice > 0;
+      const prev = preOnly ? r.meta.regularMarketPrice : (r.meta.chartPreviousClose || r.meta.previousClose);
       const dd = new Date((r.timestamp[0] + 8 * 3600) * 1000); const wk = '日一二三四五六'[dd.getUTCDay()];
-      $('#cmsg').textContent = '交易日 ' + dd.getUTCFullYear() + '/' + String(dd.getUTCMonth() + 1).padStart(2, '0') + '/' + String(dd.getUTCDate()).padStart(2, '0') + '（週' + wk + '）' + (bars5 ? '・5 分 K' : '');
+      const seg = (t) => (reg.start && t < reg.start ? '盤前' : reg.end && t >= reg.end ? '盤後' : '');
+      $('#cmsg').innerHTML = esc('交易日 ' + dd.getUTCFullYear() + '/' + String(dd.getUTCMonth() + 1).padStart(2, '0') + '/' + String(dd.getUTCDate()).padStart(2, '0') + '（週' + wk + '）' + (bars5 ? '・5 分 K' : '') + (ext ? '・美東 04:00–20:00' + (preOnly ? '・基準為最近收盤' : '') : ''))
+        + (us ? ` <button class="btn sm" id="usExtT" style="margin-left:6px">${ext ? '含盤前盤後 ✓' : '只看盤中'}</button>` : '');
+      if ($('#usExtT')) $('#usExtT').onclick = () => { S.pref.usExt = !ext; savePref(); this.chart(); };
       if (bars5) {
         const bs = r.timestamp.map((t, i) => (q0.close[i] == null || q0.open[i] == null ? null : { d: hm(t * 1000), t: t * 1000, o: q0.open[i], h: q0.high[i], l: q0.low[i], c: q0.close[i], v: isUs(sym) ? q0.volume[i] : (q0.volume[i] || 0) / 1000 })).filter(Boolean);
-        drawChart($('.chart-wrap'), bs, { key: sym + '1d5', count: 0, mas: [], type: ctype, intraday: true, base: prev });
+        drawChart($('.chart-wrap'), bs, { key: sym + '1d5' + (ext ? 'x' : ''), count: 0, mas: [], type: ctype, intraday: true, base: prev });
         return;
       }
       const pts = r.timestamp.map((t, i) => [t * 1000, q0.close[i], q0.volume[i]]).filter((p) => p[1] != null);
-      drawLine($('.chart-wrap'), pts, prev, isUs(sym), ctype);
+      const full = ext && pre.start && post.end && r.timestamp[0] >= pre.start - 60;
+      drawLine($('.chart-wrap'), pts, prev, isUs(sym), ctype, full ? { t0: pre.start * 1000, span: (post.end - pre.start) * 1000, bands: [[pre.start * 1000, reg.start * 1000, '盤前'], [reg.end * 1000, post.end * 1000, '盤後']],
+        baseLabel: preOnly ? '收盤' : '昨收', lab: (t) => (seg(t / 1000) ? '　<span style="color:#E8B04B">' + seg(t / 1000) + '</span>' : '') } : {});
       return;
     }
     const key = sym + range + (iv || ''); $('#cmsg').textContent = barCache[key] ? '' : '載入 K 線…';
@@ -1980,7 +2036,7 @@ VIEWS.s = {
     $('#sq').innerHTML = `<div class="card"><div class="row wrap" style="align-items:flex-end;gap:18px">
       <div><div class="num ${cls(ch)}" style="font-size:40px;font-weight:800;line-height:1">${fmtPrice(q.price, us)}</div>
         <div class="num ${cls(ch)}" style="font-size:16px;margin-top:4px">${q.price ? arrow(ch) + ' ' + fmt(Math.abs(ch), 2) + '　' + fmtPct(ch / q.prev * 100) : '—'}
-        ${q.lu ? '<span class="tag up">漲停</span>' : q.ld ? '<span class="tag down">跌停</span>' : ''}</div>${us ? extHtml(q, true) : ''}</div>
+        ${q.lu ? '<span class="tag up">漲停</span>' : q.ld ? '<span class="tag down">跌停</span>' : ''}</div>${us ? extHtml(q, true) : ''}${us && !/^\^|=|-USD$/.test(sym) ? '<div style="margin-top:6px">' + usSessLine() + '</div>' : ''}</div>
       <div class="grid g4" style="flex:1;min-width:280px;gap:8px">
         ${[['開盤', fmtPrice(q.open, us)], ['最高', fmtPrice(q.high, us)], ['最低', fmtPrice(q.low, us)], ['昨收', fmtPrice(q.prev, us)],
            ['成交量', q.volLots != null ? fmtInt(q.volLots) + ' 張' : fmtVol(q.vol)], ['漲停', fmtPrice(q.up, us)], ['跌停', fmtPrice(q.down, us)], ['更新', q.time ? hm(q.time) : '—']]
@@ -3054,13 +3110,23 @@ VIEWS.us = {
     const breadth = US_MEGA.map(([k]) => qPct(k)).filter((v) => v != null); const ups = breadth.filter((v) => v > 0).length;
     const lead = sect[0], lag = sect[sect.length - 1];
     const meta = (S.q['^GSPC'] || {}).time;
-    $('#dyn').innerHTML = `<div class="wall" style="margin-bottom:12px">${idx.map((x) => quoteCard(x)).join('')}</div>
+    const ph = usPhase(); const extOn = ph.k !== 'REG';
+    const exSyms = Array.from(new Set(US_MEGA.map(([k]) => k).concat(D.quotes().map((q) => q.s), holdings().map((h) => h.symbol)).filter((k) => isUs(k) && !/^\^|=|-USD$/.test(k))));
+    const exRows = exSyms.filter((k) => (S.q[k] || {}).ext && S.q[k].ext.price).sort((a, b) => (S.q[b].ext.pct || 0) - (S.q[a].ext.pct || 0));
+    const exLb = exRows.length ? S.q[exRows[0]].ext.label : (ph.k === 'PRE' ? '盤前' : '盤後');
+    const exRow = (k) => { const q = S.q[k]; const e = q.ext; const n = (US_MEGA.find((x) => x[0] === k) || [])[1] || D.name(k);
+      return `<tr class="click" data-go="#/s/${k}"><td class="nm">${esc(n)} <span class="muted small num">${k}</span>${holdings().some((h) => h.symbol === k) ? ' <span class="tag" style="color:var(--primary)">持股</span>' : ''}</td><td class="num">${fmtPrice(q.price)}</td><td class="num ${cls(e.pct)}">${fmt(e.price, 2)}</td><td class="num ${cls(e.pct)}">${fmtPct(e.pct)}</td><td class="num muted">${hm(e.time)}</td></tr>`; };
+    const sess = `<div class="card" style="margin-bottom:12px"><div class="row between wrap" style="align-items:center;gap:8px"><div>${usSessLine()}</div><div class="small muted">${usSchedTxt()}</div></div>
+      ${extOn ? `<div class="small text2" style="margin-top:8px">非正常交易時段：指數為最近收盤，盤前可參考下方指數期貨與個股${exLb}成交。</div><div class="wall" style="--wall-w:170px;margin-top:8px">${US_FUT.slice(0, 3).map((x) => quoteCard(x)).join('')}</div>` : ''}
+      ${exRows.length ? `<h2 style="margin-top:12px">${exLb}漲跌排行<span class="r small muted">權值股、自選、持股 ${exRows.length} 檔</span></h2><div class="scroll-x"><table class="tbl"><thead><tr><th>個股</th><th>收盤</th><th>${exLb}價</th><th>${exLb}漲跌</th><th>時間</th></tr></thead><tbody>
+        ${(exRows.length > 12 ? exRows.slice(0, 6).concat(exRows.slice(-6)) : exRows).map(exRow).join('')}</tbody></table></div>${exRows.length > 12 ? '<div class="small muted">列出漲幅前 6 與跌幅前 6</div>' : ''}` : extOn && ph.k !== 'OFF' ? '<div class="small muted" style="margin-top:8px">目前還沒有' + exLb + '成交資料（盤前 ' + usTw(240) + ' 起陸續出現）。</div>' : ''}</div>`;
+    $('#dyn').innerHTML = sess + `<div class="wall" style="margin-bottom:12px">${idx.map((x) => quoteCard(x)).join('')}</div>
       <div class="card" style="margin-bottom:12px"><h2>類股表現（SPDR 類股 ETF）<span class="r small muted">${meta ? '更新 ' + new Date(meta).toLocaleString('zh-TW', { hour12: false, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}</span></h2>
         ${heatTiles(sect)}
         <div class="small text2" style="margin-top:8px">領漲：${esc(lead[1])} <span class="num ${cls(qPct(lead[0]))}">${fmtPct(qPct(lead[0]))}</span>　領跌：${esc(lag[1])} <span class="num ${cls(qPct(lag[0]))}">${fmtPct(qPct(lag[0]))}</span>　權值股 ${ups}／${breadth.length} 上漲</div></div>
-      <div class="grid g2 stack"><div class="card"><h2>權值股</h2><div class="scroll-x"><table class="tbl"><thead><tr><th>個股</th><th>價格</th><th>漲跌幅</th><th>成交量</th></tr></thead><tbody>
+      <div class="grid g2 stack"><div class="card"><h2>權值股</h2><div class="scroll-x"><table class="tbl"><thead><tr><th>個股</th><th>價格</th><th>漲跌幅</th>${exRows.length ? '<th>' + exLb + '</th>' : ''}<th>成交量</th></tr></thead><tbody>
         ${US_MEGA.slice().sort((a, b) => (qPct(b[0]) ?? -99) - (qPct(a[0]) ?? -99)).map(([k, n]) => { const q = S.q[k] || {}; const p = qPct(k);
-          return `<tr class="click" data-go="#/s/${k}"><td class="nm">${esc(n)} <span class="muted small num">${k}</span>${holdings().some((h) => h.symbol === k) ? ' <span class="tag" style="color:var(--primary)">持股</span>' : ''}</td><td class="num ${cls(p)}">${fmtPrice(q.price)}</td><td class="num ${cls(p)}">${fmtPct(p)}</td><td class="num">${fmtVol(q.vol)}</td></tr>`; }).join('')}</tbody></table></div></div>
+          return `<tr class="click" data-go="#/s/${k}"><td class="nm">${esc(n)} <span class="muted small num">${k}</span>${holdings().some((h) => h.symbol === k) ? ' <span class="tag" style="color:var(--primary)">持股</span>' : ''}</td><td class="num ${cls(p)}">${fmtPrice(q.price)}</td><td class="num ${cls(p)}">${fmtPct(p)}</td>${exRows.length ? `<td class="num ${cls((q.ext || {}).pct)}">${q.ext && q.ext.price ? fmtPct(q.ext.pct) : '—'}</td>` : ''}<td class="num">${fmtVol(q.vol)}</td></tr>`; }).join('')}</tbody></table></div></div>
         <div class="card"><h2>期貨、商品與加密貨幣</h2><div class="wall" style="--wall-w:170px">${US_FUT.map((x) => quoteCard(x, x[0] === '^TNX' ? 3 : 2)).join('')}</div></div></div>
       <div class="small muted" style="margin-top:8px">資料來源：Yahoo Finance（期貨與海外指數可能延遲）。點任一項可看 K 線。</div>`;
   },
