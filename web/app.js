@@ -1107,7 +1107,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"b72df2d","at":"2026-11-26 21:31"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"aef1b6f","at":"2026-11-26 21:39"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -2093,22 +2093,222 @@ function aiPx(ai, s) { const q = S.q[s]; return (q && q.price) || (ai.px && ai.p
 function aiName(ai, s) { const n = D.name(s); return n && n !== s ? n : (ai.nm && ai.nm[s]) || ''; }
 function aiGrpOf(b) { return b.g || (b.m === 'US' ? 'US' : b.e ? 'ETF' : 'TW'); }
 function aiEq(ai, b) { return (b.c || 0) + (b.p || []).reduce((a, p) => a + (aiPx(ai, p.s) || p.a) * p.q * (p.sd || 1), 0); }
+// ───────── 網頁 AI 模擬交易（瀏覽器自己跑一份：與手機 App AiSim 同規則；帳本只存在這台瀏覽器，不上傳、不與手機帳本合併） ─────────
+const AIW_DEF = { on: false, bt: 1000000, be: 1000000, bu: 30000, sd: 0, mp: 5, pp: 15, ap: 7, ma: 2, iv: 3, ru: ['COMBINED', 'RINGS', 'KBAR'], tw: true, et: true, us: true, pm: 0, n: 15 };
+const AIW = { busy: '', last: {}, loop: 0 };
+function aiwCfg() {
+  const c = { ...AIW_DEF, ...store.get('aiw_cfg', {}) };
+  c.ru = (Array.isArray(c.ru) ? c.ru : []).filter((r) => AI_RULE[r]);
+  const num = (k, lo, hi) => { const v = +c[k]; c[k] = isFinite(v) ? Math.max(lo, Math.min(hi, v)) : AIW_DEF[k]; };
+  num('bt', 10000, 1e9); num('be', 10000, 1e9); num('bu', 1000, 1e8); num('sd', 0, 2); num('mp', 1, 20); num('pp', 1, 100); num('ap', 0, 100); num('ma', 0, 10); num('iv', 1, 60); num('pm', 0, 2); num('n', 3, 36);
+  return c;
+}
+function aiwBooks() { const v = store.get('aiw_books', []); return Array.isArray(v) ? v : []; }
+function aiwBudget(c, g) { return g === 'US' ? c.bu : g === 'ETF' ? c.be : c.bt; }
+function aiwGrpOn(c, g) { return g === 'US' ? c.us : g === 'ETF' ? c.et : c.tw; }
+function aiwEnsure(c, bs = aiwBooks()) {
+  bs = bs.slice();
+  Object.keys(AI_GRP).forEach((g) => c.ru.forEach((r) => { if (!bs.some((b) => b.r === r && aiGrpOf(b) === g)) { const bud = aiwBudget(c, g); bs.push({ r, m: g === 'US' ? 'US' : 'TW', g, e: g === 'ETF', b: bud, c: bud, p: [], x: [], d: {}, cd: {} }); } }));
+  return bs;
+}
+/** 盤中時段：台股 09:00–13:30、美股 09:30–16:00（美東），週一至週五；休市日以報價時間判斷 */
+function aiwSess(g) {
+  if (g !== 'US') { const d = tpeNow(); const m = d.getHours() * 60 + d.getMinutes(); return d.getDay() >= 1 && d.getDay() <= 5 && m >= 540 && m <= 810; }
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date()).map((x) => [x.type, x.value]));
+  const m = +p.hour * 60 + +p.minute; return p.weekday !== 'Sat' && p.weekday !== 'Sun' && m >= 570 && m <= 960;
+}
+function aiwDay(g) { return g === 'US' ? new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()) : ymd().replace(/\//g, '-'); }
+// 費用模型（與 App AppCosts 相同概念）：台股手續費依第一個台股帳戶折扣、證交稅、融券費 0.08%；美股不計手續費
+function aiwGross(m, n, p) { return m === 'TW' ? Math.floor(Math.round(n * p * 1e6) / 1e6) : Math.round(n * p * 100) / 100; }
+function aiwFee(m, g) { if (m !== 'TW') return 0; const a = D.accounts().find((x) => x.m !== 'US'); return twFee(g, a && a.d ? a.d : 1, a && a.min != null ? a.min : 20); }
+function aiwTax(m, s, g) { return m === 'TW' ? Math.floor(g * twTaxRate(s)) : 0; }
+function aiwBorrow(m, g) { return m === 'TW' ? Math.floor(g * 0.0008) : 0; }
+/** 開倉或加碼（與 App AiSim.open 相同） */
+function aiwOpen(b, s, side, price, amount, stop, target, why, day, now) {
+  const sh = price > 0 ? Math.floor(amount / price + 1e-9) : 0; if (sh <= 0) return null;
+  const g = aiwGross(b.m, sh, price); const fee = aiwFee(b.m, g); const ex = b.p.find((p) => p.s === s);
+  const merge = (val) => ex ? { ...ex, q: ex.q + sh, a: (ex.a * ex.q + price * sh) / (ex.q + sh), bs: ex.bs + val, ad: (ex.ad || 0) + 1, ld: day }
+    : { s, sd: side, q: sh, a: price, bs: val, st: stop, tg: target, od: day, oa: now, ad: 0, ld: day, w: why };
+  if (side > 0) { const cost = g + fee; if (cost > b.c) return null; return { ...b, c: b.c - cost, p: b.p.filter((p) => p.s !== s).concat(merge(cost)) }; }
+  const net = g - fee - aiwTax(b.m, s, g) - aiwBorrow(b.m, g); if (g > b.c) return null;
+  return { ...b, c: b.c + net, p: b.p.filter((p) => p.s !== s).concat(merge(net)) };
+}
+/** 全部平倉（與 App AiSim.close 相同） */
+function aiwClose(b, s, price, exit, day) {
+  const p = b.p.find((x) => x.s === s); if (!p) return b;
+  const g = aiwGross(b.m, p.q, price); const fee = aiwFee(b.m, g);
+  let dc, pl; if (p.sd > 0) { const net = g - fee - aiwTax(b.m, s, g); dc = net; pl = net - p.bs; } else { const cost = g + fee; dc = -cost; pl = p.bs - cost; }
+  const base = p.sd > 0 ? p.bs : aiwGross(b.m, p.q, p.a); const dy = Math.max(0, Math.round((Date.parse(day) - Date.parse(p.od)) / 864e5)) || 0;
+  const x = { s, sd: p.sd, q: p.q, a: p.a, cl: price, pl, pp: base > 0 ? pl / base * 100 : 0, od: p.od, cd: day, dy, w: p.w, e: exit };
+  return { ...b, c: b.c + dc, p: b.p.filter((y) => y.s !== s), x: (b.x || []).concat(x).slice(-500), cd: { ...(b.cd || {}), [s]: day } };
+}
+/** 依規則決定動作（與 App AiSim.decide 相同）：{ k: open／add／close, sd, st, tg, note } */
+function aiwDecide(rule, s, held, c, today, cooled) {
+  const p = s.price; const f = fmtPrice;
+  if (held) {
+    const L = held.sd > 0;
+    if (L && p <= held.st) return { k: 'close', note: '跌破停損 ' + f(held.st) };
+    if (L && p >= held.tg) return { k: 'close', note: '到達目標 ' + f(held.tg) };
+    if (!L && p >= held.st) return { k: 'close', note: '突破停損 ' + f(held.st) };
+    if (!L && p <= held.tg) return { k: 'close', note: '到達目標 ' + f(held.tg) };
+    if (rule === 'COMBINED') { if (L && s.dec === 'NOT') return { k: 'close', note: '評估轉為條件未符合' }; if (!L && (s.al || 0) >= 1) return { k: 'close', note: '評估轉為偏多' }; }
+    if (rule === 'RINGS' && s.rg && s.rg.level === 0) return { k: 'close', note: '三環回到 0/3' };
+    if (rule === 'KBAR') { if (L && (s.kl || 0) <= -1) return { k: 'close', note: 'K 線訊號轉弱' }; if (!L && (s.kl || 0) >= 1) return { k: 'close', note: 'K 線訊號轉強' }; }
+    if ((held.ad || 0) >= c.ma || held.ld === today || c.ap <= 0) return null;
+    const ok = rule === 'COMBINED' ? L && (((s.rg && s.rg.level) || 0) >= 3 || (s.lmax != null && p <= s.lmax && p < held.a))
+      : rule === 'RINGS' ? L && s.rg && s.rg.level >= 3 && p <= (s.rg.zoneLo + s.rg.zoneHi) / 2
+      : L ? (s.kl || 0) >= 2 && p < held.a : (s.kl || 0) <= -2 && p > held.a;
+    return ok ? { k: 'add', note: '加碼' } : null;
+  }
+  if (cooled) return null;
+  const wl = c.sd !== 1, ws = c.sd !== 0;
+  if (rule === 'COMBINED') {
+    if (wl && s.dec === 'MET' && s.ls != null && s.lt != null) return { k: 'open', sd: 1, st: s.ls, tg: s.lt, note: '條件符合' };
+    const rr = s.ss != null && s.st != null && s.ss > p && s.st < p ? (p - s.st) / (s.ss - p) : 0;
+    if (ws && (s.al || 0) <= -1 && s.ss != null && s.st != null && rr >= 1.5) return { k: 'open', sd: -1, st: s.ss, tg: s.st, note: '評估轉弱（做空）' };
+  } else if (rule === 'RINGS') {
+    if (wl && s.rg && s.rg.level >= 3) return { k: 'open', sd: 1, st: s.rg.stop, tg: s.rg.target, note: '三環 3/3' };
+  } else if (rule === 'KBAR') {
+    if (wl && (s.kl || 0) >= 2 && s.ls != null && s.lt != null && s.ls < p && s.lt > p) return { k: 'open', sd: 1, st: s.ls, tg: s.lt, note: '訊號偏多' };
+    if (ws && (s.kl || 0) <= -2 && s.ss != null && s.st != null && s.ss > p && s.st < p) return { k: 'open', sd: -1, st: s.ss, tg: s.st, note: '訊號轉弱（做空）' };
+  }
+  return null;
+}
+/** 一檔的訊號快照（綜合進場評估、日 K、三環；與 App AiSim.signal 相同來源） */
+async function aiwSig(sym, needAdv) {
+  const b = await liveBars(sym, '2y'); if (b.length < 60) return null;
+  const d = klineAnalyze(b); if (!d) return null;
+  const price = (S.q[sym] || {}).price; if (!(price > 0)) return null;
+  const a = needAdv ? await entryAdviceCached(sym, 600000) : null;
+  let rg = null; try { const wk = klineAnalyze(weeklyBars(await liveBars(sym, '5y'))); if (wk) rg = ringsEval(ringsInput(price, d, wk), 0); } catch (e) {}
+  const lp = (a && a.plan) || d.longPlan; const sp = d.shortPlan;
+  const dec = a ? tdSummary(a.level, a.ratio, price, lp ? lp.stop : null, lp ? lp.tp1 : null, lp ? lp.e0 : null, lp ? lp.e1 : null).state : null;
+  return { price, dec, ls: lp ? lp.stop : null, lt: lp ? lp.tp1 : null, lmax: lp && lp.e0 != null && lp.e1 != null ? Math.max(lp.e0, lp.e1) : null,
+    ss: sp ? sp.stop : null, st: sp ? sp.tp1 : null, kl: d.entry ? d.entry.level : 0, al: a ? a.level : null, rg };
+}
+/** 選股：模擬持倉優先，再加自動選股（與星團相同來源）／自選清單，最多 topN 檔 */
+async function aiwPool(g, c, bs) {
+  const fits = (s) => g === 'US' ? isUs(s) : !isUs(s) && (g === 'ETF') === /^00/.test(s);
+  const held = new Set(bs.filter((b) => aiGrpOf(b) === g).flatMap((b) => b.p.map((p) => p.s)));
+  const out = new Set();
+  if (c.pm !== 1) try { (await starPool(g)).forEach((s) => out.add(s)); } catch (e) {}
+  if (c.pm !== 0) D.quotes().map((q) => q.s).forEach((s) => out.add(s));
+  const rest = Array.from(out).filter((s) => fits(s) && !held.has(s)).slice(0, c.n);
+  return Array.from(held).concat(rest);
+}
+function aiwStat(b, px) {
+  const x = b.x || []; const win = x.length ? x.filter((v) => v.pl > 0).length / x.length : null;
+  const gw = x.filter((v) => v.pl > 0).reduce((a, v) => a + v.pl, 0), gl = -x.filter((v) => v.pl < 0).reduce((a, v) => a + v.pl, 0);
+  let peak = b.b, mdd = 0; Object.keys(b.d || {}).sort().forEach((k) => { const v = b.d[k]; if (v > peak) peak = v; if (peak > 0) mdd = Math.max(mdd, (peak - v) / peak * 100); });
+  const by = {}; x.forEach((v) => { (by[v.w] = by[v.w] || []).push(v); });
+  const rs = Object.entries(by).sort((a, c) => c[1].length - a[1].length).slice(0, 6).map(([w, l]) => ({ w, n: l.length, win: l.filter((v) => v.pl > 0).length / l.length, avg: l.reduce((a, v) => a + v.pp, 0) / l.length }));
+  return { n: x.length, win, pf: gl > 0 ? gw / gl : null, real: x.reduce((a, v) => a + v.pl, 0), mdd, eq: aiEq({ px }, b), rs };
+}
+/** 給 aiSimHtml 用的檢視資料（與手機雲端帳本 ai:sim 同格式） */
+function aiwView() {
+  const c = aiwCfg(); const px = store.get('aiw_px', {}); const nm = store.get('aiw_nm', {});
+  const books = aiwEnsure(c).filter((b) => c.ru.includes(b.r)).map((b) => ({ ...b, st: aiwStat(b, px) }));
+  return { at: store.get('aiw_run', 0), msg: store.get('aiw_msg', ''), cfg: { on: c.on, sd: c.sd, tw: c.tw, et: c.et, us: c.us, ru: c.ru }, px, nm, books };
+}
+/** 執行一輪（未開啟、非盤中、間隔未到的分組略過；force 只略過間隔） */
+async function aiwTick(force) {
+  const c = aiwCfg(); if ((!c.on && !force) || AIW.busy) return -1;
+  const grps = Object.keys(AI_GRP).filter((g) => aiwGrpOn(c, g) && aiwSess(g) && (force || Date.now() - (AIW.last[g] || 0) >= c.iv * 60000 - 5000));
+  if (!grps.length) return -1;
+  let acts = 0; const px = store.get('aiw_px', {}); const nm = store.get('aiw_nm', {});
+  try {
+    let bs = aiwEnsure(c);
+    for (const g of grps) {
+      AIW.last[g] = Date.now(); AIW.busy = AI_GRP[g]; aiwStatus();
+      const day = aiwDay(g); const syms = await aiwPool(g, c, bs);
+      await refreshQuotes(syms).catch(() => {});
+      const needAdv = c.ru.includes('COMBINED');
+      for (const s of syms) {
+        const q = S.q[s]; if (!q || !(q.price > 0)) continue;
+        if (q.time && Date.now() - q.time > 30 * 60000) continue; // 報價不是近 30 分鐘（休市或停牌）就略過
+        const sig = await aiwSig(s, needAdv).catch(() => null); if (!sig) continue;
+        const now = Date.now();
+        bs = bs.map((b) => {
+          if (aiGrpOf(b) !== g || !c.ru.includes(b.r)) return b;
+          const held = b.p.find((p) => p.s === s);
+          const act = aiwDecide(b.r, sig, held, c, day, (b.cd || {})[s] === day); if (!act) return b;
+          const nb = act.k === 'close' ? aiwClose(b, s, q.price, act.note, day)
+            : act.k === 'add' ? aiwOpen(b, s, held.sd, q.price, b.b * c.ap / 100, held.st, held.tg, held.w, day, now)
+            : b.p.length >= c.mp ? null : aiwOpen(b, s, act.sd, q.price, b.b * c.pp / 100, act.st, act.tg, act.note, day, now);
+          if (nb && nb !== b) { acts++; if (q.name) nm[s] = q.name; }
+          return nb || b;
+        });
+      }
+      const live = new Set(bs.flatMap((b) => b.p.map((p) => p.s)));
+      live.forEach((s) => { const q = S.q[s]; if (q && q.price > 0) px[s] = q.price; if (q && q.name) nm[s] = q.name; });
+      Object.keys(px).forEach((s) => { if (!live.has(s)) delete px[s]; });
+      bs = bs.map((b) => { if (aiGrpOf(b) !== g) return b;
+        const d = { ...(b.d || {}), [day]: aiEq({ px }, b) }; const ks = Object.keys(d).sort(); ks.slice(0, Math.max(0, ks.length - 400)).forEach((k) => delete d[k]);
+        const cd = {}; Object.entries(b.cd || {}).forEach(([k, v]) => { if (v === day) cd[k] = v; });
+        return { ...b, d, cd }; });
+    }
+    const keepNm = new Set(bs.flatMap((b) => b.p.map((p) => p.s).concat((b.x || []).slice(-50).map((x) => x.s)))); Object.keys(nm).forEach((s) => { if (!keepNm.has(s)) delete nm[s]; });
+    store.set('aiw_books', bs); store.set('aiw_px', px); store.set('aiw_nm', nm);
+    store.set('aiw_run', Date.now()); store.set('aiw_msg', '模擬執行 ' + acts + ' 筆（' + grps.map((g) => AI_GRP[g]).join('、') + '）');
+  } finally { AIW.busy = ''; aiwStatus(); }
+  if ($('#aiwBox')) VIEWS.sim.fill();
+  return acts;
+}
+function aiwStatus() {
+  const el = $('#aiwSt'); if (!el) return;
+  const at = store.get('aiw_run', 0);
+  el.textContent = AIW.busy ? '執行中：' + AIW.busy + '…' : (at ? '上次執行 ' + new Date(at).toLocaleDateString('zh-TW') + ' ' + hm(at) + '・' + store.get('aiw_msg', '') : '尚未執行');
+}
+/** 分頁開著且看得見時，每 30 秒檢查一次是否到了執行間隔 */
+function aiwStart() {
+  if (AIW.loop) return;
+  AIW.loop = setInterval(() => { if (document.hidden) return; aiwTick(false).catch(() => {}); }, 30000);
+  setTimeout(() => aiwTick(false).catch(() => {}), 8000);
+}
+try { if (aiwCfg().on) aiwStart(); } catch (e) {}
 function aiSimHtml() {
+  const web = S.pref.aiSrc === 'web';
+  const src = `<div class="row wrap" style="margin-bottom:12px;align-items:center"><div class="seg" id="aiS"><button data-asrc="phone" class="${web ? '' : 'on'}">手機帳本</button><button data-asrc="web" class="${web ? 'on' : ''}">網頁帳本</button></div><span class="small muted">兩本帳各自獨立，不會合併</span></div>`;
+  if (web) {
+    const ai = aiwView();
+    return src + `<div id="aiwBox"><div class="notice" style="margin-bottom:12px">網頁帳本由這個瀏覽器在分頁開著時，於盤中依與手機相同的規則自動執行（獨立虛擬帳本，只存在這台瀏覽器、不上傳雲端、不與手機帳本合併，不計入真實資產）。<span id="aiwSt"></span>。損益為依規則試算的模擬結果，不是買賣指令。</div>${aiwPanel()}${aiBooksHtml(ai, '網頁')}</div>`;
+  }
   const ai = aiSim();
-  if (!ai || !Array.isArray(ai.books)) return `<div class="card"><h2>AI 模擬交易</h2><div class="text2">還沒有收到手機的 AI 模擬帳本。</div>
-    <ul class="text2 small"><li>AI 模擬交易在手機 App 盤中自動執行（持股 › AI 模擬交易）。</li><li>手機登入同一帳號，「帳號與同步」設為<b>手機為主</b>並開啟自動同步後，網頁就會顯示三組帳本（台股、台股 ETF、美股）。</li></ul></div>`;
+  if (!ai || !Array.isArray(ai.books)) return src + `<div class="card"><h2>AI 模擬交易</h2><div class="text2">還沒有收到手機的 AI 模擬帳本。</div>
+    <ul class="text2 small"><li>AI 模擬交易在手機 App 盤中自動執行（持股 › AI 模擬交易）。</li><li>手機登入同一帳號，「帳號與同步」設為<b>手機為主</b>並開啟自動同步後，網頁就會顯示三組帳本（台股、台股 ETF、美股）。</li><li>也可以切到「網頁帳本」，讓這個瀏覽器自己跑一份。</li></ul></div>`;
+  return src + `<div class="notice" style="margin-bottom:12px">AI 模擬交易由手機 App 在盤中依規則自動執行，這裡是唯讀檢視（獨立虛擬帳本，不計入真實資產）。手機更新 ${ai.at ? esc(new Date(ai.at).toLocaleDateString('zh-TW') + ' ' + hm(ai.at)) : '—'}${ai.cfg && !ai.cfg.on ? ' · 手機目前已暫停自動執行' : ''}。損益為依規則試算的模擬結果，不是買賣指令。</div>` + aiBooksHtml(ai, '手機');
+}
+/** 網頁帳本的設定卡（只存在這台瀏覽器） */
+function aiwPanel() {
+  const c = aiwCfg(); const sess = Object.keys(AI_GRP).filter((g) => aiwGrpOn(c, g) && aiwSess(g)).map((g) => AI_GRP[g]);
+  const n = (id, label, v, step, unit) => `<div class="field"><label>${label}${unit ? '<span class="muted">（' + unit + '）</span>' : ''}</label><input id="aw_${id}" type="number" step="${step}" value="${v}"></div>`;
+  const ck = (attr, k, label, on) => `<label style="display:inline-flex;gap:6px;align-items:center;cursor:pointer;white-space:nowrap"><input type="checkbox" style="width:auto;margin:0" ${attr}="${k}" ${on ? 'checked' : ''}>${label}</label>`;
+  return `<div class="card" style="margin-bottom:12px"><h2>網頁帳本設定<span class="r"><label style="display:inline-flex;gap:6px;align-items:center;cursor:pointer;white-space:nowrap"><input type="checkbox" id="aiwOn" style="width:auto;margin:0" ${c.on ? 'checked' : ''}><b>${c.on ? '自動執行中' : '已暫停'}</b></label></span></h2>
+    <div class="small text2">${c.on ? (sess.length ? '目前盤中：' + sess.join('、') + '，每 ' + c.iv + ' 分鐘執行一次（分頁需開著）' : '目前非盤中，開盤後分頁開著就會自動執行') : '打開右上開關後，盤中且分頁開著時自動執行'}</div>
+    <details style="margin-top:8px"${c.on ? '' : ' open'}><summary class="small" style="cursor:pointer;font-weight:700">規則與參數</summary>
+    <div class="row wrap" style="gap:14px;margin-top:8px"><span class="small muted">分組</span>${ck('data-awg', 'tw', '台股', c.tw)}${ck('data-awg', 'et', '台股 ETF', c.et)}${ck('data-awg', 'us', '美股', c.us)}</div>
+    <div class="row wrap" style="gap:14px;margin-top:6px"><span class="small muted">規則</span>${Object.keys(AI_RULE).map((r) => ck('data-awr', r, AI_RULE[r], c.ru.includes(r))).join('')}</div>
+    <div class="grid g3" style="margin-top:8px;gap:8px">
+      <div class="field"><label>方向</label><select id="aw_sd">${['只做多', '只做空', '雙向'].map((t, i) => `<option value="${i}" ${c.sd === i ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+      <div class="field"><label>選股來源</label><select id="aw_pm">${['自動選股', '自選清單', '自動＋自選'].map((t, i) => `<option value="${i}" ${c.pm === i ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+      ${n('n', '每組掃描檔數', c.n, 1)}${n('bt', '台股本金', c.bt, 10000, '元')}${n('be', '台股 ETF 本金', c.be, 10000, '元')}${n('bu', '美股本金', c.bu, 1000, '美元')}
+      ${n('mp', '最多持倉檔數', c.mp, 1)}${n('pp', '每檔首次投入', c.pp, 1, '% 本金')}${n('ap', '每次加碼', c.ap, 1, '% 本金')}${n('ma', '最多加碼次數', c.ma, 1)}${n('iv', '執行間隔', c.iv, 1, '分鐘')}</div>
+    <div class="small muted" style="margin-top:4px">本金變更在「重設帳本」後才套用到新帳本；規則說明：${Object.keys(AI_RULE).map((r) => esc(AI_RULE[r])).join('、')}，與手機 App 相同。</div>
+    <div class="row wrap" style="gap:8px;margin-top:8px"><button class="btn primary" id="aiwSave">儲存設定</button><button class="btn" id="aiwRun">立即執行一次</button><button class="btn danger" id="aiwReset">重設網頁帳本</button></div></details></div>`;
+}
+/** 帳本內容（手機與網頁共用：分組、規則並排、持倉、條件統計、已平倉） */
+function aiBooksHtml(ai, who) {
   const grps = Object.keys(AI_GRP); const g = grps.includes(S.pref.aiGrp) ? S.pref.aiGrp : 'TW';
   const bs = ai.books.filter((b) => aiGrpOf(b) === g && AI_RULE[b.r]);
   const rules = bs.map((b) => b.r); const r = rules.includes(S.pref.aiRule) ? S.pref.aiRule : rules[0];
   const b = bs.find((x) => x.r === r); const us = g === 'US'; const cur = us ? '美元' : '元';
   const on = ai.cfg && ai.cfg[{ TW: 'tw', ETF: 'et', US: 'us' }[g]] !== false;
-  let h = `<div class="notice" style="margin-bottom:12px">AI 模擬交易由手機 App 在盤中依規則自動執行，這裡是唯讀檢視（獨立虛擬帳本，不計入真實資產）。手機更新 ${ai.at ? esc(new Date(ai.at).toLocaleDateString('zh-TW') + ' ' + hm(ai.at)) : '—'}${ai.cfg && !ai.cfg.on ? ' · 手機目前已暫停自動執行' : ''}。損益為依規則試算的模擬結果，不是買賣指令。</div>
-    <div class="row wrap" style="margin-bottom:12px"><div class="seg" id="aiG">${grps.map((k) => `<button data-ag="${k}" class="${g === k ? 'on' : ''}">${AI_GRP[k]}</button>`).join('')}</div>${on ? '' : '<span class="small muted">此分組在手機已關閉</span>'}</div>`;
+  let h = `<div class="row wrap" style="margin-bottom:12px"><div class="seg" id="aiG">${grps.map((k) => `<button data-ag="${k}" class="${g === k ? 'on' : ''}">${AI_GRP[k]}</button>`).join('')}</div>${on ? '' : '<span class="small muted">此分組在' + who + '已關閉</span>'}</div>`;
   h += `<div class="card scroll-x" style="margin-bottom:12px"><h2>規則並排比較<span class="r small muted">${cur}</span></h2><table class="tbl"><thead><tr><th>規則</th><th>權益</th><th>報酬率</th><th>已實現</th><th>勝率</th><th>獲利因子</th><th>最大回撤</th><th>平倉筆數</th><th>持倉</th></tr></thead><tbody>${bs.map((x) => {
     const eq = aiEq(ai, x), ret = x.b ? (eq - x.b) / x.b * 100 : 0, st = x.st || {};
     return `<tr class="click" data-ar="${x.r}"><td class="nm">${r === x.r ? '▸ ' : ''}${esc(AI_RULE[x.r])}</td><td class="num">${fmtInt(eq)}</td><td class="num ${cls(ret)}">${fmtPct(ret)}</td><td class="num ${cls(st.real)}">${fmtSigned(st.real)}</td>
       <td class="num">${st.win == null ? '—' : fmt(st.win * 100, 0) + '%'}</td><td class="num">${st.pf == null ? (st.n ? '∞' : '—') : fmt(st.pf, 2)}</td><td class="num">${st.mdd == null ? '—' : fmt(st.mdd, 1) + '%'}</td><td class="num">${st.n || 0}</td><td class="num">${(x.p || []).length}</td></tr>`; }).join('')}</tbody></table></div>`;
-  if (!b) return h + '<div class="empty">此分組沒有帳本。</div>';
+  if (!b) return h + '<div class="empty">此分組沒有帳本' + (who === '網頁' ? '（請在設定勾選規則）' : '') + '。</div>';
   const pos = (b.p || []).slice().sort((a, c) => (c.oa || 0) - (a.oa || 0));
   h += `<div class="card scroll-x" style="margin-bottom:12px"><h2>${esc(AI_RULE[b.r])}・模擬持倉（${pos.length}）</h2>${pos.length ? `<table class="tbl"><thead><tr><th>個股</th><th>方向</th><th>股數</th><th>均價</th><th>現價</th><th>停損</th><th>目標</th><th>損益</th><th>報酬率</th><th>觸發條件</th></tr></thead><tbody>${pos.map((p) => {
     const now = aiPx(ai, p.s) || p.a, sd = p.sd || 1, un = (now - p.a) * p.q * sd, pct = p.a ? (now - p.a) / p.a * 100 * sd : 0;
@@ -2116,15 +2316,28 @@ function aiSimHtml() {
       <td class="num">${fmtPrice(p.st)}</td><td class="num">${fmtPrice(p.tg)}</td><td class="num ${cls(un)}">${fmtSigned(un)}</td><td class="num ${cls(pct)}">${fmtPct(pct)}</td><td class="small">${esc(p.w || '')}${p.ad ? '・加碼 ' + p.ad + ' 次' : ''}</td></tr>`; }).join('')}</tbody></table>` : '<div class="muted small">目前沒有模擬持倉。</div>'}</div>`;
   const rs = (b.st && b.st.rs) || [];
   if (rs.length) h += `<div class="card scroll-x" style="margin-bottom:12px"><h2>依觸發條件統計</h2><table class="tbl"><thead><tr><th>條件</th><th>筆數</th><th>勝率</th><th>平均報酬</th></tr></thead><tbody>${rs.map((x) => `<tr><td>${esc(x.w)}</td><td class="num">${x.n}</td><td class="num">${fmt((x.win || 0) * 100, 0)}%</td><td class="num ${cls(x.avg)}">${fmtPct(x.avg)}</td></tr>`).join('')}</tbody></table></div>`;
-  const xs = (b.x || []).slice().reverse();
+  const xs = (b.x || []).slice(-50).reverse();
   h += `<div class="card"><h2>已平倉（最近 ${xs.length} 筆）</h2>${xs.length ? `<div class="list">${xs.map((x) => `<div class="it click" data-go="#/s/${esc(x.s)}"><span class="tag ${(x.sd || 1) > 0 ? 'up' : 'down'}">${(x.sd || 1) > 0 ? '多' : '空'}</span>
     <div class="l"><div class="t1">${esc(aiName(ai, x.s))} <span class="muted small num">${esc(x.s)}</span> <span class="muted small">${esc(String(x.od || '').slice(5).replace('-', '/'))} → ${esc(String(x.cd || '').slice(5).replace('-', '/'))}</span></div>
     <div class="t2">${fmtPrice(x.a)} → ${fmtPrice(x.cl)}・${esc(x.w || '')}／${esc(x.e || '')}</div></div><div class="r num ${cls(x.pl)}">${fmtSigned(x.pl)}<div class="small">${fmtPct(x.pp)}</div></div></div>`).join('')}</div>` : '<div class="muted small">尚無平倉紀錄。</div>'}</div>`;
   return h;
 }
 function aiSimBind() {
+  $$('[data-asrc]').forEach((x) => x.onclick = () => { S.pref.aiSrc = x.dataset.asrc; savePref(); VIEWS.sim.fill(); });
   $$('[data-ag]').forEach((x) => x.onclick = () => { S.pref.aiGrp = x.dataset.ag; savePref(); VIEWS.sim.fill(); });
   $$('[data-ar]').forEach((x) => x.onclick = () => { S.pref.aiRule = x.dataset.ar; savePref(); VIEWS.sim.fill(); });
+  if (!$('#aiwBox')) return;
+  aiwStatus();
+  const read = () => { const c = aiwCfg(); ['bt', 'be', 'bu', 'mp', 'pp', 'ap', 'ma', 'iv', 'n', 'sd', 'pm'].forEach((k) => { const el = $('#aw_' + k); if (el && el.value !== '') c[k] = +el.value; });
+    $$('[data-awg]').forEach((x) => { c[x.dataset.awg] = x.checked; }); c.ru = $$('[data-awr]').filter((x) => x.checked).map((x) => x.dataset.awr); return c; };
+  $('#aiwOn').onchange = (e) => { const c = aiwCfg(); c.on = e.target.checked; store.set('aiw_cfg', c); if (c.on) aiwStart(); toast(c.on ? '網頁帳本已開啟自動執行（盤中、分頁開著時）' : '網頁帳本已暫停'); VIEWS.sim.fill(); };
+  $('#aiwSave').onclick = () => { const c = read(); c.on = aiwCfg().on; store.set('aiw_cfg', c); toast('已儲存網頁帳本設定'); VIEWS.sim.fill(); };
+  $('#aiwRun').onclick = async () => { const c = read(); c.on = aiwCfg().on; store.set('aiw_cfg', c);
+    if (!Object.keys(AI_GRP).some((g) => aiwGrpOn(aiwCfg(), g) && aiwSess(g))) return toast('目前非盤中，沒有可執行的分組', 3000);
+    if (AIW.busy) return toast('正在執行中…');
+    const n = await aiwTick(true).catch(() => -1); toast(n >= 0 ? '模擬執行 ' + n + ' 筆' : '這次沒有執行'); };
+  $('#aiwReset').onclick = async () => { if ((await dialog('重設網頁帳本', '清除網頁帳本的模擬持倉、平倉紀錄與權益，並以目前設定的本金重新開始？（手機帳本不受影響）', [['', '取消'], ['ok', '重設', 'primary']])) !== 'ok') return;
+    ['aiw_books', 'aiw_px', 'aiw_nm', 'aiw_run', 'aiw_msg'].forEach((k) => store.del(k)); AIW.last = {}; toast('已重設網頁帳本'); VIEWS.sim.fill(); };
 }
 VIEWS.sim = {
   title: '模擬交易',
@@ -2159,7 +2372,7 @@ VIEWS.sim = {
     $$('[data-sd]').forEach((b) => b.onclick = async () => { const list = simTrades().filter((t) => String(t.id) !== b.dataset.sd); const r = ledger(list, { base: SIMB }); if (r.err) return toast('無法刪除：' + r.err, 3500);
       if ((await dialog('刪除模擬交易', '確定刪除？', [['', '取消'], ['ok', '刪除', 'primary']])) !== 'ok') return; simSave(list); this.fill(); });
   },
-  syms() { if (S.pref.simTab === 'ai') { const ai = aiSim(); return ai && ai.books ? Array.from(new Set(ai.books.flatMap((b) => (b.p || []).map((p) => p.s)))) : []; } return Array.from(new Set(simTrades().map((t) => t.s))); },
+  syms() { if (S.pref.simTab === 'ai') { const ai = S.pref.aiSrc === 'web' ? aiwView() : aiSim(); return ai && ai.books ? Array.from(new Set(ai.books.flatMap((b) => (b.p || []).map((p) => p.s)))) : []; } return Array.from(new Set(simTrades().map((t) => t.s))); },
 };
 async function simModal(side, sym0) {
   let made = null;
