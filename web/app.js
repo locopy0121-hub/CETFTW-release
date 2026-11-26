@@ -1164,7 +1164,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"35aca2c","at":"2026-11-26 22:13"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"d21416c","at":"2026-11-26 22:31"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -4326,8 +4326,11 @@ Object.assign(VIEWS.s, {
       const d = klineAnalyze(b), wk = w.length >= 60 ? klineAnalyze(w) : null; const q = S.q[sym] || {}; const price = q.price || b[b.length - 1].c; const us = isUs(sym);
       if (d && wk) st = ringsEval(ringsInput(price, d, wk), mode, us ? (v) => Math.round(v * 100) / 100 : (v) => twSnap(v, etf), us ? 0.01 : twTick(price, etf)); } catch (e) {}
     if (!el()) return;
-    el().innerHTML = ringsCardHtml(st, mode);
-    $$('[data-rgm]', el()).forEach((x) => x.onclick = () => { S.pref.ringMode = +x.dataset.rgm; savePref(); this.rings(sym, b, etf); });
+    const E = el(); E.classList.add('rx'); E.innerHTML = ringsCardHtml(st, mode);
+    if (st && $('#rxFx', E)) rxRun($('#rxFx', E), rxData(st), S.pref.ringSty == null ? 3 : +S.pref.ringSty, S.pref.ringAnim !== false);
+    $$('[data-rgm]', E).forEach((x) => x.onclick = () => { S.pref.ringMode = +x.dataset.rgm; savePref(); this.rings(sym, b, etf); });
+    $$('[data-rxs]', E).forEach((x) => x.onclick = () => { S.pref.ringSty = +x.dataset.rxs; savePref(); const sl = $('.rxs', E).scrollLeft; this.rings(sym, b, etf).then(() => { const r2 = $('.rxs', el()); if (r2) r2.scrollLeft = sl; }); });
+    $$('[data-rxa]', E).forEach((x) => x.onclick = () => { S.pref.ringAnim = S.pref.ringAnim === false; savePref(); this.rings(sym, b, etf); });
   },
   async t_chip() {
     const sym = this.sym; const us = isUs(sym); const si = $('#si'); si.innerHTML = '<div class="card empty" style="grid-column:1/-1">讀取中…</div>';
@@ -6430,21 +6433,171 @@ function ringSvg(st, size = 120) {
     <line x1="2" y1="60" x2="118" y2="60" stroke="${RING_C.idle}" stroke-opacity="0.3"/><line x1="60" y1="2" x2="60" y2="118" stroke="${RING_C.idle}" stroke-opacity="0.3"/>
     ${ring(0)}${ring(1)}${ring(2)}<circle cx="60" cy="60" r="7" fill="${on[2] ? c : RING_C.idle}" fill-opacity="${on[2] ? 1 : 0.4}"/></svg>`;
 }
+/** 三環科技版動畫（網頁）：8 種樣式，S.pref.ringSty（0～7，預設 3 多重安全鎖）、S.pref.ringAnim（預設開）。
+ *  只在 1/3～3/3 且未破停損時跑動畫（0/3、破停損靜態）；分頁隱藏或卡片不在畫面時暫停；約 20 fps。 */
+const RX_C = { ok: '#19FFB2', mid: '#FFC23D', id: '#2E5470', al: '#FF3B5C', cy: '#00E5FF' };
+const RX_STY = [['全像光圈', 'FOCUS'], ['資料管線', 'PIPELINE'], ['全像波場', 'WAVEFIELD'], ['多重安全鎖', 'SECURITY'], ['三軸對位', 'ALIGN'], ['HUD 戰術量尺', 'TACTICAL'], ['神經迴路', 'CIRCUIT'], ['能量核心', 'CORE']];
+let RX_N = 0;
+function rxCol(s) { return s.b ? RX_C.al : s.lv >= 3 ? RX_C.ok : s.lv >= 1 ? RX_C.mid : RX_C.cy; }
+/** 由三環結果取繪圖資料：lv、b（破停損）、價位 */
+function rxData(st) { return { lv: st.level, b: !!st.broken, rr: st.rr, lo: st.zoneLo, hi: st.zoneHi, stop: st.stop, tp: st.target, px: st.price }; }
+function rxSvg(sty, s, t, size = 150, mini = false) {
+  const C = RX_C, c = rxCol(s), M = 'font-family="monospace"', on = (i) => !s.b && s.lv > i, f = (v) => fmtPx(v);
+  const P = (r, a) => [60 + r * Math.cos(a), 60 + r * Math.sin(a)];
+  const arc = (r, d0, d1) => { const [x0, y0] = P(r, d0 * Math.PI / 180), [x1, y1] = P(r, d1 * Math.PI / 180); return `M${x0.toFixed(2)},${y0.toFixed(2)} A${r},${r} 0 ${d1 - d0 > 180 ? 1 : 0} 1 ${x1.toFixed(2)},${y1.toFixed(2)}`; };
+  const ticks = (r, n, l, cc, op = 0.5, rot = 0, cx = 60, cy = 60) => { let x = ''; for (let k = 0; k < n; k++) { const a = k * 2 * Math.PI / n + rot; const l2 = k % 5 ? l : l * 2;
+    x += `<line x1="${(cx + r * Math.cos(a)).toFixed(1)}" y1="${(cy + r * Math.sin(a)).toFixed(1)}" x2="${(cx + (r - l2) * Math.cos(a)).toFixed(1)}" y2="${(cy + (r - l2) * Math.sin(a)).toFixed(1)}" stroke="${cc}" stroke-opacity="${op}" stroke-width=".8"/>`; } return x; };
+  const lbl = ['W-K', 'D-K', 'RT'];
+  let x = '';
+  switch (sty) {
+    case 0: { // 全像光圈
+      const r = s.b ? 40 : 44 - s.lv * 10; const rot = t * 0.25;
+      x += ticks(54, 60, 3, c, 0.6, -rot * 0.5) + `<circle cx="60" cy="60" r="54" fill="none" stroke="${c}" stroke-width="1"/>`;
+      for (let i = 0; i < 6; i++) { const a = i * Math.PI / 3 + 0.25 + rot, a2 = a + Math.PI / 3; const [p1, q1] = P(48, a), [p2, q2] = P(48, a2), [p3, q3] = P(r, a2 + 0.5), [p4, q4] = P(r, a + 0.5);
+        x += `<polygon points="${p1.toFixed(1)},${q1.toFixed(1)} ${p2.toFixed(1)},${q2.toFixed(1)} ${p3.toFixed(1)},${q3.toFixed(1)} ${p4.toFixed(1)},${q4.toFixed(1)}" fill="#06223a" fill-opacity=".85" stroke="${c}" stroke-width=".9"/>`; }
+      x += `<line x1="60" y1="${60 - r + 2}" x2="60" y2="${60 + r - 2}" stroke="${c}" stroke-width=".6"/><line x1="${60 - r + 2}" y1="60" x2="${60 + r - 2}" y2="60" stroke="${c}" stroke-width=".6"/>`;
+      if (s.lv >= 3 && !s.b) x += `<circle cx="60" cy="60" r="${3 + 2 * (0.5 + 0.5 * Math.sin(t * 3))}" fill="#fff"/>`;
+      if (s.b) for (let k = 0; k < 9; k++) x += `<rect x="${28 + (k * 29) % 60}" y="${30 + (k * 17) % 58}" width="${6 + (k * 7) % 14}" height="1.6" fill="${C.al}" opacity=".8"/>`;
+      if (!mini) x += `<rect x="34" y="1" width="52" height="9" fill="#050a14"/><text x="60" y="8" text-anchor="middle" ${M} font-size="7" fill="${c}">FOCUS ${s.b ? 'ERR' : [0, 34, 67, 100][s.lv] + '%'}</text>`;
+      break; }
+    case 1: { // 資料管線
+      const L = [[14, 106, 24, 96], [26, 94, 38, 82], [40, 80, 50, 70]];
+      L.forEach((l, i) => { const y = 14 + i * 24; const o = on(i); const cc = o ? c : C.id;
+        x += `<polygon points="${l[0]},${y} ${l[1]},${y} ${l[3]},${y + 18} ${l[2]},${y + 18}" fill="${o ? c : '#08182a'}" fill-opacity="${o ? 0.12 : 0.9}" stroke="${cc}" stroke-width="1.2"/>`;
+        if (!mini) x += `<text x="${l[1] + 3}" y="${y + 12}" ${M} font-size="6.5" fill="${cc}">${['W', 'D', 'RT'][i]}</text>`;
+        if (o) for (let k = 0; k < 6; k++) { const yy = y + 2 + ((k * 5 + t * 14) % 14); const w = l[2] - l[0]; const fr = (yy - y) / 18; const xl = l[0] + w * fr + 3, xr = l[1] - (l[1] - l[3]) * fr - 7;
+          x += `<rect x="${(xl + ((k * 19) % Math.max(1, xr - xl))).toFixed(1)}" y="${yy.toFixed(1)}" width="4" height="2" fill="${c}"/>`; }
+        else if (!mini) x += `<text x="${(l[0] + l[1]) / 2}" y="${y + 12}" text-anchor="middle" ${M} font-size="6.5" fill="${s.b ? C.al : C.id}">${s.b ? '× HALT' : '— —'}</text>`; });
+      const fl = s.lv >= 3 && !s.b; const blink = fl ? 0.2 + 0.15 * Math.sin(t * 4) : 1;
+      x += `<line x1="60" y1="86" x2="60" y2="94" stroke="${fl ? c : C.id}" stroke-dasharray="1.5 2" stroke-dashoffset="${-t * 8}"/><rect x="34" y="94" width="52" height="11" fill="${fl ? c : '#08182a'}" fill-opacity="${fl ? blink : 1}" stroke="${fl ? c : s.b ? C.al : C.id}"/>`;
+      if (!mini) x += `<text x="60" y="102" text-anchor="middle" ${M} font-size="6.5" fill="${fl ? '#fff' : s.b ? C.al : C.id}">${fl ? 'SIGNAL READY' : s.b ? 'STOP' : 'WAIT'}</text>`;
+      break; }
+    case 2: { // 全像波場
+      for (let k = -3; k <= 3; k++) x += `<line x1="${60 + k * 8}" y1="70" x2="${60 + k * 22}" y2="104" stroke="${C.cy}" stroke-opacity=".25" stroke-width=".7"/>`;
+      for (let k = 0; k < 4; k++) { const yy = 72 + k * k * 3.2; x += `<line x1="${60 - 30 - k * 13}" y1="${yy}" x2="${60 + 30 + k * 13}" y2="${yy}" stroke="${C.cy}" stroke-opacity=".2" stroke-width=".7"/>`; }
+      [48, 33, 18].forEach((r0, i) => { const o = on(i); const r = o ? r0 * (1 - 0.08 * ((t * 0.8 + i * 0.33) % 1)) : r0;
+        x += `<ellipse cx="60" cy="82" rx="${r.toFixed(1)}" ry="${(r * 0.36).toFixed(1)}" fill="none" stroke="${o ? c : C.id}" stroke-opacity="${o ? 1 : 0.6}" stroke-width="${o ? 2.2 : 1}" ${o ? '' : 'stroke-dasharray="3 3"'}/>`;
+        if (o) x += `<path d="M${(60 - r - 6).toFixed(1)},82 l4,-2 v4z M${(60 + r + 6).toFixed(1)},82 l-4,-2 v4z" fill="${c}"/>`; });
+      if (s.lv >= 3 && !s.b) { const h = Math.min(58, 14 + (s.rr || 0) * 11); const fl = 0.35 + 0.15 * Math.sin(t * 5);
+        x += `<rect x="57" y="${80 - h}" width="6" height="${h}" fill="${c}" opacity="${fl.toFixed(2)}"/><rect x="59" y="${80 - h}" width="2" height="${h}" fill="#fff"/>`;
+        if (!mini) x += `<text x="68" y="${86 - h}" ${M} font-size="7.5" fill="${c}">RR ${(s.rr || 0).toFixed(1)}</text>`; }
+      if (s.b) x += `<ellipse cx="60" cy="82" rx="54" ry="20" fill="${C.al}" opacity=".2"/>` + (mini ? '' : `<text x="60" y="50" text-anchor="middle" ${M} font-size="9" fill="${C.al}">!! BREACH</text>`);
+      break; }
+    case 3: { // 多重安全鎖
+      x += ticks(56, 72, 2.5, C.cy, 0.35, t * 0.1);
+      [48, 36, 24].forEach((r, i) => { const o = on(i); const n = [12, 9, 6][i]; const rot = o ? t * [14, -20, 28][i] : 0;
+        for (let k = 0; k < n; k++) { const gp = o ? 360 / n * 0.2 : 2; const d0 = k * 360 / n + gp + rot, d1 = (k + 1) * 360 / n - gp + rot; x += `<path d="${arc(r, d0 - 90, d1 - 90)}" fill="none" stroke="${o ? c : s.b ? '#7a1f33' : C.id}" stroke-width="${o ? 4 : 5}"/>`; }
+        if (!o) { const [lx, ly] = P(r, -Math.PI / 2); x += `<rect x="${lx - 3.5}" y="${ly - 3.5}" width="7" height="7" fill="#050a14" stroke="${s.b ? C.al : C.cy}"/><circle cx="${lx}" cy="${ly}" r="1.3" fill="${s.b ? C.al : C.cy}"/>`; } });
+      if (mini) break;
+      x += s.lv >= 3 && !s.b ? `<text x="60" y="57" text-anchor="middle" ${M} font-size="6" fill="${c}">ZONE</text><text x="60" y="64" text-anchor="middle" ${M} font-size="6.5" fill="#fff">${f(s.lo)}</text><text x="60" y="71" text-anchor="middle" ${M} font-size="6.5" fill="#fff">${f(s.hi)}</text>`
+        : `<text x="60" y="63" text-anchor="middle" ${M} font-size="8" fill="${s.b ? C.al : C.cy}">${s.b ? 'LOCK' : '0' + s.lv + '/3'}</text>`;
+      break; }
+    case 4: { // 三軸對位
+      [22, 60, 98].forEach((cx, i) => { const o = on(i); const cc = o ? c : s.b ? C.al : C.cy;
+        const off = o ? Math.sin(t * 3 + i) * 3 : s.b ? [64, -118, 146][i] : [64, -118, 146][i] + Math.sin(t * 0.9 + i * 2) * (s.lv ? 40 : 0);
+        const a = (-90 + off) * Math.PI / 180;
+        x += `<circle cx="${cx}" cy="50" r="16" fill="#061525" stroke="${cc}" stroke-width="1"/>` + ticks(15, 24, 2, cc, 0.6, 0, cx, 50);
+        x += `<line x1="${cx}" y1="28" x2="${cx}" y2="33" stroke="${RX_C.ok}" stroke-width="1.5"/><line x1="${cx}" y1="50" x2="${(cx + 12 * Math.cos(a)).toFixed(1)}" y2="${(50 + 12 * Math.sin(a)).toFixed(1)}" stroke="${o ? c : '#cfe9f5'}" stroke-width="2" stroke-linecap="round"/><circle cx="${cx}" cy="50" r="2" fill="${cc}"/>`;
+        x += `<rect x="${cx - 13}" y="72" width="26" height="10" fill="${o ? c : '#061525'}" fill-opacity="${o ? 0.2 : 1}" stroke="${cc}" stroke-width=".8"/>`;
+        if (!mini) x += `<text x="${cx}" y="79.5" text-anchor="middle" ${M} font-size="6.5" fill="${o ? '#fff' : cc}">${o ? 'OK' : s.b ? 'ERR' : '---'}</text><text x="${cx}" y="92" text-anchor="middle" ${M} font-size="6.5" fill="#86a9bd">${lbl[i]}</text>`; });
+      if (s.lv >= 3 && !s.b) x += `<line x1="10" y1="34" x2="110" y2="34" stroke="${c}" stroke-dasharray="2 2" stroke-dashoffset="${-t * 10}" stroke-width=".8"/>`;
+      break; }
+    case 5: { // HUD 戰術量尺
+      const lo = Math.min(s.stop, s.px, s.lo) , hi = Math.max(s.tp, s.px, s.hi); const pad = (hi - lo) * 0.08 || 1; const y = (v) => 100 - (v - (lo - pad)) / ((hi + pad) - (lo - pad)) * 84;
+      x += `<circle cx="34" cy="58" r="27" fill="none" stroke="${C.cy}" stroke-opacity=".3"/>` + ticks(27, 36, 2, C.cy, 0.5, t * 0.4, 34, 58);
+      let g = '';
+      [22, 14, 6].forEach((r, i) => { const o = on(i); x += `<circle cx="34" cy="58" r="${r}" fill="none" stroke="${o ? c : C.id}" stroke-width="${o ? 2 : 1}" ${o ? '' : 'stroke-dasharray="2 2"'}/>`; });
+      x += `<path d="M34,26 v8 M34,82 v8 M2,58 h8 M58,58 h8" stroke="${c}" stroke-width="1.2"/>`;
+      for (let k = 0; k <= 8; k++) { const yy = 16 + k * 10.5; g += `<line x1="${k % 2 ? 86 : 84}" y1="${yy}" x2="90" y2="${yy}" stroke="${C.cy}" stroke-opacity=".6" stroke-width=".7"/>`; }
+      const yp = y(s.px), yt = y(s.tp), ys = y(s.stop);
+      g += `<line x1="90" y1="16" x2="90" y2="100" stroke="${C.cy}" stroke-opacity=".6"/>`;
+      if (yp > yt) g += `<rect x="91" y="${yt.toFixed(1)}" width="5" height="${(yp - yt).toFixed(1)}" fill="${RX_C.ok}" opacity=".7"/>`;
+      if (ys > yp) g += `<rect x="91" y="${yp.toFixed(1)}" width="5" height="${(ys - yp).toFixed(1)}" fill="${RX_C.al}" opacity=".7"/>`;
+      g += `<rect x="89" y="${y(s.hi).toFixed(1)}" width="9" height="${Math.max(1, y(s.lo) - y(s.hi)).toFixed(1)}" fill="none" stroke="${RX_C.mid}" stroke-dasharray="1.5 1.5" stroke-width=".8"/>`;
+      if (!mini) { g += `<text x="99" y="${(yt + 2.5).toFixed(1)}" ${M} font-size="5.5" fill="${RX_C.ok}">TP ${f(s.tp)}</text><text x="99" y="${(ys + 2.5).toFixed(1)}" ${M} font-size="5.5" fill="${RX_C.al}">SL ${f(s.stop)}</text>`;
+        g += `<text x="76" y="${(yp + 2.5).toFixed(1)}" text-anchor="end" ${M} font-size="6.5" fill="#fff">${f(s.px)}</text>`; }
+      g += `<path d="M78,${yp.toFixed(1)} l7,-3.5 v7z" fill="#fff" opacity="${s.lv && !s.b ? (0.55 + 0.45 * Math.abs(Math.sin(t * 2.5))).toFixed(2) : 1}"/>`;
+      x += `<g transform="translate(-9 0)">${g}</g>`;
+      break; }
+    case 6: { // 神經迴路
+      const N = [[22, 88], [98, 88], [60, 24]];
+      for (let k = 0; k < 5; k++) x += `<path d="M${10 + k * 25},112 v-6 h6" fill="none" stroke="${C.cy}" stroke-opacity=".25"/>`;
+      const tr = [[[22, 88], [60, 88], [60, 60]], [[98, 88], [60, 88]], [[60, 24], [60, 60]]];
+      tr.forEach((pts, i) => { const o = on(i); x += `<path d="M${pts.map((p) => p.join(',')).join(' L')}" fill="none" stroke="${o ? c : C.id}" stroke-width="${o ? 1.8 : 1}" ${o ? '' : 'stroke-dasharray="2 2"'}/>`;
+        if (o) { // 電流脈衝沿走線移動
+          const seg = []; let tot = 0; for (let k = 1; k < pts.length; k++) { const l = Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]); seg.push(l); tot += l; }
+          [0, 0.5].forEach((ph) => { let d = ((t * 0.7 + ph + i * 0.2) % 1) * tot; let k = 0; while (k < seg.length - 1 && d > seg[k]) { d -= seg[k]; k++; } const fr = seg[k] ? d / seg[k] : 0;
+            x += `<circle cx="${(pts[k][0] + (pts[k + 1][0] - pts[k][0]) * fr).toFixed(1)}" cy="${(pts[k][1] + (pts[k + 1][1] - pts[k][1]) * fr).toFixed(1)}" r="2" fill="#fff"/>`; }); } });
+      const core = s.lv >= 3 && !s.b; const cs = core ? 22 + 2 * Math.sin(t * 3) : 14;
+      x += `<rect x="${(60 - cs / 2).toFixed(1)}" y="${(60 - cs / 2).toFixed(1)}" width="${cs.toFixed(1)}" height="${cs.toFixed(1)}" fill="#061525" stroke="${core ? c : s.b ? C.al : C.id}" stroke-width="1.4" transform="rotate(45 60 60)"/>` + (core ? `<circle cx="60" cy="60" r="4" fill="#fff"/>` : '');
+      N.forEach((p, i) => { const o = on(i); const cc = o ? c : s.b ? C.al : C.id; x += `<circle cx="${p[0]}" cy="${p[1]}" r="8" fill="#061525" stroke="${cc}" stroke-width="1.5"/><circle cx="${p[0]}" cy="${p[1]}" r="${o ? 3.5 : 1.5}" fill="${o ? '#fff' : cc}"/>`;
+        if (!mini) x += `<text x="${p[0]}" y="${p[1] + (i === 2 ? -11 : 16)}" text-anchor="middle" ${M} font-size="6" fill="${cc}">${lbl[i]}</text>`; });
+      break; }
+    default: { // 能量核心
+      x += ticks(54, 48, 2, C.cy, 0.4, -t * 0.15);
+      for (let i = 0; i < 3; i++) { const o = on(i); for (let k = 0; k < 6; k++) { const d0 = -90 + i * 120 + k * 20 + 2, d1 = d0 + 16; const sh = o ? 0.65 + 0.35 * Math.max(0, Math.sin(t * 4 - (i * 6 + k) * 0.5)) : 1;
+        x += `<path d="${arc(42, d0, d1)}" fill="none" stroke="${o ? c : '#0f2a40'}" stroke-width="10" stroke-opacity="${sh.toFixed(2)}"/>`; } }
+      const core = s.lv >= 3 && !s.b;
+      x += `<circle cx="60" cy="60" r="28" fill="#061525" stroke="${c}" stroke-opacity=".6"/>` + (core ? `<circle cx="60" cy="60" r="${(18 + 3 * Math.sin(t * 2.5)).toFixed(1)}" fill="${c}" opacity=".2"/>` : '');
+      if (!mini) x += s.b ? `<text x="60" y="64" text-anchor="middle" ${M} font-size="10" font-weight="700" fill="${C.al}">STOP</text>` : `<text x="60" y="63" text-anchor="middle" ${M} font-size="14" font-weight="700" fill="#fff">${s.lv}/3</text><text x="60" y="72" text-anchor="middle" ${M} font-size="5.5" fill="${c}">${[0, 33, 67, 100][s.lv]}% CHARGE</text>`;
+    }
+  }
+  const id = 'rxg' + (++RX_N % 1000);
+  const br = `<path d="M4,16 V4 H16 M104,4 H116 V16 M116,104 V116 H104 M16,116 H4 V104" fill="none" stroke="${c}" stroke-width="1.4" opacity=".8"/>`;
+  const rd = mini ? '' : `<rect x="24" y="108" width="72" height="9" fill="#050a14"/><text x="60" y="114" text-anchor="middle" ${M} font-size="7" fill="${c}" letter-spacing="1">${s.b ? 'STOP BREACH' : 'LV ' + s.lv + '/3 · RR 1:' + (s.rr || 0).toFixed(1)}</text>`;
+  return `<svg viewBox="0 0 120 120" width="${size}" height="${size}" style="flex:none;display:block"><defs><filter id="${id}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>${mini ? '' : br}<g filter="url(#${id})">${x}${rd}</g></svg>`;
+}
+function rxStyleInject() {
+  if (document.getElementById('rxCss')) return; const el = document.createElement('style'); el.id = 'rxCss';
+  el.textContent = `.rx{position:relative;color:#d8f3ff;background:#050a14 radial-gradient(circle at 50% 0,#0b2a44 0,#050a14 70%) !important;border:1px solid #13405c !important;box-shadow:inset 0 0 22px #00d9ff22;overflow:hidden}
+.rx:before{content:"";position:absolute;inset:0;background-image:linear-gradient(#00e5ff12 1px,transparent 1px),linear-gradient(90deg,#00e5ff12 1px,transparent 1px);background-size:22px 22px;pointer-events:none}
+.rx:after{content:"";position:absolute;left:0;top:0;width:46px;height:2px;background:#00e5ff;box-shadow:0 0 8px #00e5ff}
+.rx>*{position:relative}.rx h2{color:#e8fbff}.rx h2 i{font:10px monospace;color:#3fb6d6;font-style:normal;margin-left:6px;letter-spacing:1px}
+.rx .rxm{font:10px monospace;color:#3fb6d6;letter-spacing:1px}.rx .rxk{font-size:11px;color:#86a9bd}.rx .rxv{font-family:monospace;font-size:14px;color:#e8fbff}
+.rx .seg{background:#071728;border-color:#13405c}.rx .seg button{color:#86a9bd}.rx .seg button.on{background:#0d3350;color:#7fe9ff}
+.rx .rxbox{background:#071728cc;border:1px solid #13405c;border-radius:4px;padding:8px}.rx .rxr{font-size:12px;color:#a9c7d8}
+.rx .rxs{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}.rx .rxs::-webkit-scrollbar{display:none}
+.rx .rxs button{flex:none;display:flex;flex-direction:column;align-items:center;gap:2px;background:#071728;border:1px solid #13405c;border-radius:4px;padding:4px 4px 3px;color:#86a9bd;font-size:10px;width:62px}
+.rx .rxs button.on{border-color:#00e5ff;color:#7fe9ff;box-shadow:0 0 8px #00e5ff55}.rx .rxsw{font:11px monospace;color:#7fe9ff;cursor:pointer;border:1px solid #13405c;border-radius:4px;padding:3px 8px;background:#071728}`;
+  document.head.appendChild(el);
+}
+/** 動畫迴圈：只保留一個；元素離開 DOM 即停 */
+const RX = { raf: 0, el: null, st: null, sty: 3, last: 0, t0: 0 };
+function rxRun(el, d, sty, anim) {
+  RX.el = el; RX.st = d; RX.sty = sty; cancelAnimationFrame(RX.raf);
+  const live = anim && !d.b && d.lv >= 1;
+  el.innerHTML = rxSvg(sty, d, 0);
+  if (!live) return;
+  RX.t0 = performance.now();
+  const loop = (now) => {
+    if (!RX.el || !RX.el.isConnected || RX.el !== el) return;
+    RX.raf = requestAnimationFrame(loop);
+    if (document.hidden || now - RX.last < 50) return;
+    const r = el.getBoundingClientRect(); if (r.bottom < 0 || r.top > innerHeight) return;
+    RX.last = now; el.innerHTML = rxSvg(sty, d, (now - RX.t0) / 1000);
+  };
+  RX.raf = requestAnimationFrame(loop);
+}
 function ringsCardHtml(st, mode) {
+  rxStyleInject();
+  const anim = S.pref.ringAnim !== false; const sty = Math.min(7, Math.max(0, S.pref.ringSty == null ? 3 : +S.pref.ringSty));
   const seg = `<div class="seg" style="margin-top:6px"><button data-rgm="0" class="${mode === 0 ? 'on' : ''}">波段（日 K 停損）</button><button data-rgm="1" class="${mode === 1 ? 'on' : ''}">存股（週 K 停損）</button></div>`;
-  const h = '<h2>三環條件（週 K → 日 K → 即時）</h2>';
-  if (!st) return h + seg + '<div class="small muted" style="margin-top:8px">K 線資料不足（週 K 需 60 根以上），暫無法判斷</div>';
-  const c = ringColor(st); const f = fmtPrice;
-  const step = (t, on) => `<div class="row small" style="gap:6px;align-items:center"><span style="width:8px;height:8px;border-radius:4px;background:${on ? RING_C.ok : RING_C.idle};opacity:${on ? 1 : 0.5}"></span><span class="${on ? '' : 'muted'}">${t}</span></div>`;
-  const kv = (k, v, col) => `<div><div class="small muted">${k}</div><div class="num" style="${col ? 'color:' + col : ''}">${v}</div></div>`;
-  return `<div style="border:2px solid ${c}55;border-radius:14px;padding:10px;margin:-4px">${h}${seg}
-    <div class="row" style="gap:14px;align-items:center;margin-top:10px">${ringSvg(st)}<div style="flex:1;display:grid;gap:4px"><b style="color:${c};font-size:17px">${RING_LB[st.level]}</b>
-      ${step('外環 週 K 支撐帶', st.outer)}${step('中環 日 K 止跌', st.middle)}${step('靶心 交集區＋風報比 ≥ 2', st.center)}${st.broken ? `<b class="small" style="color:${RING_C.alert}">現價低於停損 ${f(st.stop)}</b>` : ''}</div></div>
-    <div class="grid" style="grid-template-columns:2fr 1fr;gap:8px;margin-top:10px">${kv('試算區間', f(st.zoneLo) + ' ～ ' + f(st.zoneHi))}${kv('風報比', '1:' + st.rr.toFixed(2), st.rr >= 2 ? RING_C.ok : '')}</div>
-    <div class="grid g3" style="gap:8px;margin-top:6px">${kv(st.mode === 1 ? '週 K 停損' : '日 K 停損', f(st.stop), RING_C.alert)}${kv('目標', f(st.target))}${kv('價格容忍上限', f(st.cap))}</div>
-    <div class="tile" style="margin-top:8px"><div class="small muted">試算分批（比例僅供試算，不構成建議）</div><div class="small num">${st.batches.map(([p, pct]) => f(p) + ' × ' + pct + '%').join('　')}　價格容忍上限 ${f(st.cap)}</div>${st.overlap ? '' : '<div class="small muted">日／週支撐帶沒有交集，區間暫以日支撐帶試算</div>'}</div>
-    <div style="margin-top:6px">${st.reasons.map((t) => `<div class="small text2">・${esc(t)}</div>`).join('')}</div>
-    <div class="small muted" style="margin-top:4px">三環只是條件檢核與數字試算，不代表任何買賣建議；請自行判斷。</div></div>`;
+  const h = `<h2 style="flex-wrap:nowrap">三環條件<i>// TARGET RINGS</i><span class="r"><span class="rxsw" data-rxa style="white-space:nowrap">動畫 ${anim ? '開' : '關'}</span></span></h2>`;
+  if (!st) return h + seg + '<div class="rxr" style="margin-top:8px">K 線資料不足（週 K 需 60 根以上），暫無法判斷</div>';
+  const d = rxData(st); const c = rxCol(d); const f = fmtPrice;
+  const step = (t, en, on) => `<div class="row" style="gap:6px;align-items:center;font-size:12px"><span style="width:8px;height:8px;background:${on ? RX_C.ok : RX_C.id};box-shadow:${on ? '0 0 6px ' + RX_C.ok : 'none'};transform:rotate(45deg)"></span><span style="color:${on ? '#e8fbff' : '#6f8ca0'}">${t}</span><span class="rxm" style="margin-left:auto;color:${on ? RX_C.ok : '#3c5a70'}">${on ? 'OK' : en}</span></div>`;
+  const kv = (k, v, col) => `<div><div class="rxk">${k}</div><div class="rxv" style="${col ? 'color:' + col : ''}">${v}</div></div>`;
+  const pick = RX_STY.map(([n], i) => `<button data-rxs="${i}" class="${i === sty ? 'on' : ''}">${rxSvg(i, d, 0, 44, true)}<span>${n}</span></button>`).join('');
+  return `${h}${seg}
+    <div class="row" style="gap:12px;align-items:center;margin-top:10px"><div id="rxFx" style="flex:none;width:150px;height:150px"></div><div style="flex:1;display:grid;gap:5px;min-width:0">
+      <div class="rxm">週 K → 日 K → 即時 // ${RX_STY[sty][1]}</div><b style="color:${c};font-size:17px;text-shadow:0 0 8px ${c}88">${RING_LB[st.level]}</b>
+      ${step('外環 週 K 支撐帶', 'W-K', st.outer)}${step('中環 日 K 止跌', 'D-K', st.middle)}${step('靶心 交集區＋風報比 ≥ 2', 'RT', st.center)}${st.broken ? `<b class="small" style="color:${RX_C.al}">現價低於停損 ${f(st.stop)}</b>` : ''}</div></div>
+    <div class="grid" style="grid-template-columns:2fr 1fr;gap:8px;margin-top:10px">${kv('試算區間', f(st.zoneLo) + ' ～ ' + f(st.zoneHi), RX_C.mid)}${kv('風報比', '1:' + st.rr.toFixed(2), st.rr >= 2 ? RX_C.ok : '')}</div>
+    <div class="grid g3" style="gap:8px;margin-top:6px">${kv(st.mode === 1 ? '週 K 停損' : '日 K 停損', f(st.stop), RX_C.al)}${kv('目標', f(st.target), RX_C.cy)}${kv('價格容忍上限', f(st.cap))}</div>
+    <div class="rxbox" style="margin-top:8px"><div class="rxk">試算分批（比例僅供試算，不構成建議）</div><div class="rxv" style="font-size:12px">${st.batches.map(([p, pct]) => f(p) + ' × ' + pct + '%').join('　')}　價格容忍上限 ${f(st.cap)}</div>${st.overlap ? '' : '<div class="rxk">日／週支撐帶沒有交集，區間暫以日支撐帶試算</div>'}</div>
+    <div style="margin-top:6px">${st.reasons.map((t) => `<div class="rxr">・${esc(t)}</div>`).join('')}</div>
+    <div class="rxm" style="margin:10px 0 4px">STYLE // 動畫樣式</div><div class="rxs">${pick}</div>
+    <div class="rxk" style="margin-top:6px">三環只是條件檢核與數字試算，不代表任何買賣建議；請自行判斷。動畫只在 1/3～3/3 播放，0/3、破停損為靜態。</div>`;
 }
 // ───────── 三環條件（與 App TargetRings 同規則：週 K 定方向 → 日 K 找止跌 → 即時價位；只輸出達成幾環與試算價位） ─────────
 function ringsEval(x, mode, snap = (v) => v, tick = 0.01) {
