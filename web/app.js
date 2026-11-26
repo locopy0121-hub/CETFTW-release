@@ -1164,7 +1164,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"0fcbffa","at":"2026-11-26 22:04"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"8ff19a0","at":"2026-11-26 22:10"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -4323,7 +4323,7 @@ Object.assign(VIEWS.s, {
     const etf = D.isEtf(sym) || (!isUs(sym) && /^00/.test(sym)) || (S.q[sym] || {}).type === 'ETF';
     const b = await liveBars(sym, '2y'); if (this.sym !== sym || this.tab() !== 'ta') return;
     if (b.length < 60) { si.innerHTML = '<div class="card empty" style="grid-column:1/-1">歷史資料不足，無法分析</div>'; return; }
-    si.innerHTML = '<div class="card" id="kaC" style="grid-column:1/-1"></div><div class="card" id="voC" style="grid-column:1/-1"></div><div class="card" id="iaC" style="grid-column:1/-1"><h2>投資分析指數</h2><div class="small muted">計算中…</div></div>';
+    si.innerHTML = '<div class="card" id="rgC" style="grid-column:1/-1"><h2>三環條件（週 K → 日 K → 即時）</h2><div class="small muted">計算中…</div></div><div class="card" id="kaC" style="grid-column:1/-1"></div><div class="card" id="voC" style="grid-column:1/-1"></div><div class="card" id="iaC" style="grid-column:1/-1"><h2>投資分析指數</h2><div class="small muted">計算中…</div></div>';
     const tickOf = (p) => (isUs(sym) ? 0.01 : twTick(p, etf));
     const sigs = kbarSignals(b, etf, tickOf);
     const drawKa = async (weekly) => {
@@ -4353,11 +4353,23 @@ Object.assign(VIEWS.s, {
       render();
     };
     drawKa(!!this._kaW);
+    this.rings(sym, b, etf);
     const v = volaOf(b); const kr = klineAnalyze(b);
     if (v) { $('#voC').innerHTML = voCardHtml(v, kr && kr.plan); drawSeries($('#voChart'), v.series.map((x) => x[0]), [{ v: v.series.map((x) => x[1]), color: '#f59e0b', name: '年化波動', fill: true }], { h: 180, fmt: (x) => x.toFixed(0) + '%', key: 'vo' + sym }); }
     else $('#voC').innerHTML = '<h2>波動</h2><div class="small muted">資料不足</div>';
     try { const a = await investAnalysis(sym, b); if (this.sym !== sym || this.tab() !== 'ta') return; $('#iaC').innerHTML = a ? iaCardHtml(a) : '<h2>投資分析指數</h2><div class="small muted">資料不足</div>'; }
     catch (e) { if ($('#iaC')) $('#iaC').innerHTML = '<h2>投資分析指數</h2>' + sapiErr(e); }
+  },
+  /** 三環條件卡（與 App K 線分頁 TargetRingsCard 相同判定；停損模式 S.pref.ringMode：0 波段（日 K）／1 存股（週 K）） */
+  async rings(sym, b, etf) {
+    const el = () => $('#rgC'); const mode = S.pref.ringMode === 1 ? 1 : 0;
+    let st = null;
+    try { const w = weeklyBars(await liveBars(sym, '5y')); if (this.sym !== sym || !el()) return;
+      const d = klineAnalyze(b), wk = w.length >= 60 ? klineAnalyze(w) : null; const q = S.q[sym] || {}; const price = q.price || b[b.length - 1].c; const us = isUs(sym);
+      if (d && wk) st = ringsEval(ringsInput(price, d, wk), mode, us ? (v) => Math.round(v * 100) / 100 : (v) => twSnap(v, etf), us ? 0.01 : twTick(price, etf)); } catch (e) {}
+    if (!el()) return;
+    el().innerHTML = ringsCardHtml(st, mode);
+    $$('[data-rgm]', el()).forEach((x) => x.onclick = () => { S.pref.ringMode = +x.dataset.rgm; savePref(); this.rings(sym, b, etf); });
   },
   async t_chip() {
     const sym = this.sym; const us = isUs(sym); const si = $('#si'); si.innerHTML = '<div class="card empty" style="grid-column:1/-1">讀取中…</div>';
@@ -6448,6 +6460,33 @@ async function liveBars(sym, range = '2y') {
   const q = S.q[sym] || {}; const b = b0.slice(); const today = ymd();
   if (q.price && !isUs(sym) && twOpen()) { const last = b[b.length - 1]; const cur = { d: today, o: q.open || q.price, h: Math.max(q.high || q.price, q.price), l: Math.min(q.low || q.price, q.price), c: q.price, v: q.volLots || 0 }; if (last.d === today) b[b.length - 1] = cur; else b.push(cur); }
   return b;
+}
+const RING_C = { ok: '#2ED29A', mid: '#F2B33D', idle: '#6B7385', alert: '#E5534B' };
+function ringColor(st) { return st.broken ? RING_C.alert : st.level >= 3 ? RING_C.ok : st.level >= 1 ? RING_C.mid : RING_C.idle; }
+const RING_LB = ['0/3 待機', '1/3 週 K 支撐帶', '2/3 日 K 止跌', '3/3 條件全達成'];
+/** 三環準星（外環週 K、中環日 K、靶心即時；達成的環亮起） */
+function ringSvg(st, size = 120) {
+  const c = ringColor(st); const on = [st.outer, st.middle, st.center]; const R = [54, 37, 20];
+  const ring = (i) => `<circle cx="60" cy="60" r="${R[i]}" fill="none" stroke="${on[i] ? c : RING_C.idle}" stroke-opacity="${on[i] ? 1 : 0.35}" stroke-width="${on[i] ? 5 : 3}"/>`;
+  return `<svg viewBox="0 0 120 120" width="${size}" height="${size}" style="flex:none">${on[2] ? `<circle cx="60" cy="60" r="58" fill="${c}" fill-opacity="0.10"/>` : ''}
+    <line x1="2" y1="60" x2="118" y2="60" stroke="${RING_C.idle}" stroke-opacity="0.3"/><line x1="60" y1="2" x2="60" y2="118" stroke="${RING_C.idle}" stroke-opacity="0.3"/>
+    ${ring(0)}${ring(1)}${ring(2)}<circle cx="60" cy="60" r="7" fill="${on[2] ? c : RING_C.idle}" fill-opacity="${on[2] ? 1 : 0.4}"/></svg>`;
+}
+function ringsCardHtml(st, mode) {
+  const seg = `<div class="seg" style="margin-top:6px"><button data-rgm="0" class="${mode === 0 ? 'on' : ''}">波段（日 K 停損）</button><button data-rgm="1" class="${mode === 1 ? 'on' : ''}">存股（週 K 停損）</button></div>`;
+  const h = '<h2>三環條件（週 K → 日 K → 即時）</h2>';
+  if (!st) return h + seg + '<div class="small muted" style="margin-top:8px">K 線資料不足（週 K 需 60 根以上），暫無法判斷</div>';
+  const c = ringColor(st); const f = fmtPrice;
+  const step = (t, on) => `<div class="row small" style="gap:6px;align-items:center"><span style="width:8px;height:8px;border-radius:4px;background:${on ? RING_C.ok : RING_C.idle};opacity:${on ? 1 : 0.5}"></span><span class="${on ? '' : 'muted'}">${t}</span></div>`;
+  const kv = (k, v, col) => `<div><div class="small muted">${k}</div><div class="num" style="${col ? 'color:' + col : ''}">${v}</div></div>`;
+  return `<div style="border:2px solid ${c}55;border-radius:14px;padding:10px;margin:-4px">${h}${seg}
+    <div class="row" style="gap:14px;align-items:center;margin-top:10px">${ringSvg(st)}<div style="flex:1;display:grid;gap:4px"><b style="color:${c};font-size:17px">${RING_LB[st.level]}</b>
+      ${step('外環 週 K 支撐帶', st.outer)}${step('中環 日 K 止跌', st.middle)}${step('靶心 交集區＋風報比 ≥ 2', st.center)}${st.broken ? `<b class="small" style="color:${RING_C.alert}">現價低於停損 ${f(st.stop)}</b>` : ''}</div></div>
+    <div class="grid" style="grid-template-columns:2fr 1fr;gap:8px;margin-top:10px">${kv('試算區間', f(st.zoneLo) + ' ～ ' + f(st.zoneHi))}${kv('風報比', '1:' + st.rr.toFixed(2), st.rr >= 2 ? RING_C.ok : '')}</div>
+    <div class="grid g3" style="gap:8px;margin-top:6px">${kv(st.mode === 1 ? '週 K 停損' : '日 K 停損', f(st.stop), RING_C.alert)}${kv('目標', f(st.target))}${kv('價格容忍上限', f(st.cap))}</div>
+    <div class="tile" style="margin-top:8px"><div class="small muted">試算分批（比例僅供試算，不構成建議）</div><div class="small num">${st.batches.map(([p, pct]) => f(p) + ' × ' + pct + '%').join('　')}　價格容忍上限 ${f(st.cap)}</div>${st.overlap ? '' : '<div class="small muted">日／週支撐帶沒有交集，區間暫以日支撐帶試算</div>'}</div>
+    <div style="margin-top:6px">${st.reasons.map((t) => `<div class="small text2">・${esc(t)}</div>`).join('')}</div>
+    <div class="small muted" style="margin-top:4px">三環只是條件檢核與數字試算，不代表任何買賣建議；請自行判斷。</div></div>`;
 }
 // ───────── 三環條件（與 App TargetRings 同規則：週 K 定方向 → 日 K 找止跌 → 即時價位；只輸出達成幾環與試算價位） ─────────
 function ringsEval(x, mode, snap = (v) => v, tick = 0.01) {
