@@ -1164,7 +1164,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"d12396a","at":"2026-11-26 22:35"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"f75c8da","at":"2026-11-26 22:55"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -4280,7 +4280,7 @@ Object.assign(VIEWS.s, {
     const etf = D.isEtf(sym) || (!isUs(sym) && /^00/.test(sym)) || (S.q[sym] || {}).type === 'ETF';
     const b = await liveBars(sym, '2y'); if (this.sym !== sym || this.tab() !== 'ta') return;
     if (b.length < 60) { si.innerHTML = '<div class="card empty" style="grid-column:1/-1">歷史資料不足，無法分析</div>'; return; }
-    si.innerHTML = '<div class="card" id="rgC" style="grid-column:1/-1"><h2>三環條件（週 K → 日 K → 即時）</h2><div class="small muted">計算中…</div></div><div class="card" id="kaC" style="grid-column:1/-1"></div><div class="card" id="voC" style="grid-column:1/-1"></div><div class="card" id="iaC" style="grid-column:1/-1"><h2>投資分析指數</h2><div class="small muted">計算中…</div></div>';
+    this._sm = { sym }; si.innerHTML = '<div class="card rx" id="sumC" style="grid-column:1/-1">' + sumHtml(this._sm) + '</div><div class="card" id="rgC" style="grid-column:1/-1"><h2>三環條件（週 K → 日 K → 即時）</h2><div class="small muted">計算中…</div></div><div class="card" id="kaC" style="grid-column:1/-1"></div><div class="card" id="voC" style="grid-column:1/-1"></div><div class="card" id="iaC" style="grid-column:1/-1"><h2>投資分析指數</h2><div class="small muted">計算中…</div></div>';
     const tickOf = (p) => (isUs(sym) ? 0.01 : twTick(p, etf));
     const sigs = kbarSignals(b, etf, tickOf);
     const drawKa = async (weekly) => {
@@ -4312,10 +4312,17 @@ Object.assign(VIEWS.s, {
     drawKa(!!this._kaW);
     this.rings(sym, b, etf);
     const v = volaOf(b); const kr = klineAnalyze(b);
+    this.sumSet(sym, { ka: kr ? { dir: kr.dir, str: kr.strength, n: sigs.length, sup: kr.x.support, res: kr.x.resistance } : 0, vo: v || 0 });
     if (v) { $('#voC').innerHTML = voCardHtml(v, kr && kr.plan); drawSeries($('#voChart'), v.series.map((x) => x[0]), [{ v: v.series.map((x) => x[1]), color: '#f59e0b', name: '年化波動', fill: true }], { h: 180, fmt: (x) => x.toFixed(0) + '%', key: 'vo' + sym }); }
     else $('#voC').innerHTML = '<h2>波動</h2><div class="small muted">資料不足</div>';
-    try { const a = await investAnalysis(sym, b); if (this.sym !== sym || this.tab() !== 'ta') return; $('#iaC').innerHTML = a ? iaCardHtml(a) : '<h2>投資分析指數</h2><div class="small muted">資料不足</div>'; }
-    catch (e) { if ($('#iaC')) $('#iaC').innerHTML = '<h2>投資分析指數</h2>' + sapiErr(e); }
+    try { const a = await investAnalysis(sym, b); if (this.sym !== sym || this.tab() !== 'ta') return; $('#iaC').innerHTML = a ? iaCardHtml(a) : '<h2>投資分析指數</h2><div class="small muted">資料不足</div>'; this.sumSet(sym, { ia: a || 0 }); }
+    catch (e) { if ($('#iaC')) $('#iaC').innerHTML = '<h2>投資分析指數</h2>' + sapiErr(e); this.sumSet(sym, { ia: 0 }); }
+  },
+  /** 分析總結方框：各單項結果各自一格、依結果變色（分歧效果）；點方框捲到該項卡片 */
+  sumSet(sym, o) {
+    const E = $('#sumC'); if (!E || this.sym !== sym || !this._sm || this._sm.sym !== sym) return;
+    Object.assign(this._sm, o); E.innerHTML = sumHtml(this._sm);
+    $$('[data-smgo]', E).forEach((x) => x.onclick = () => { const t = $('#' + x.dataset.smgo); if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
   },
   /** 三環條件卡（與 App K 線分頁 TargetRingsCard 相同判定；停損模式 S.pref.ringMode：0 波段（日 K）／1 存股（週 K）） */
   async rings(sym, b, etf) {
@@ -4325,6 +4332,7 @@ Object.assign(VIEWS.s, {
       const d = klineAnalyze(b), wk = w.length >= 60 ? klineAnalyze(w) : null; const q = S.q[sym] || {}; const price = q.price || b[b.length - 1].c; const us = isUs(sym);
       if (d && wk) st = ringsEval(ringsInput(price, d, wk), mode, us ? (v) => Math.round(v * 100) / 100 : (v) => twSnap(v, etf), us ? 0.01 : twTick(price, etf)); } catch (e) {}
     if (!el()) return;
+    this.sumSet(sym, { rg: st || 0 });
     const E = el(); E.classList.add('rx'); E.innerHTML = ringsCardHtml(st, mode);
     if (st && $('#rxFx', E)) rxRun($('#rxFx', E), rxData(st), S.pref.ringSty == null ? 3 : +S.pref.ringSty, S.pref.ringAnim !== false);
     $$('[data-rgm]', E).forEach((x) => x.onclick = () => { S.pref.ringMode = +x.dataset.rgm; savePref(); this.rings(sym, b, etf); });
@@ -6545,6 +6553,55 @@ function rxSvg(sty, s, t, size = 150, mini = false) {
   const br = `<path d="M4,16 V4 H16 M104,4 H116 V16 M116,104 V116 H104 M16,116 H4 V104" fill="none" stroke="${c}" stroke-width="1.4" opacity=".8"/>`;
   const rd = mini ? '' : `<rect x="24" y="108" width="72" height="9" fill="#050a14"/><text x="60" y="114" text-anchor="middle" ${M} font-size="7" fill="${c}" letter-spacing="1">${s.b ? 'STOP BREACH' : 'LV ' + s.lv + '/3 · RR 1:' + (s.rr || 0).toFixed(1)}</text>`;
   return `<svg viewBox="0 0 120 120" width="${size}" height="${size}" style="flex:none;display:block"><defs><filter id="${id}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>${mini ? '' : br}<g filter="url(#${id})">${x}${rd}</g></svg>`;
+}
+// ───────── 分析總結方框（各單項一格，依結果變色：紅偏多／黃中性／綠偏弱／灰虛線失效） ─────────
+const SM_C = { up: '#FF5A6E', mid: '#F2B544', dn: '#22C58B', off: '#6B7A94', ld: '#2E5470' };
+const SM_IC = {
+  rg: '<circle cx="10" cy="10" r="8"/><circle cx="10" cy="10" r="5"/><circle cx="10" cy="10" r="1.6" fill="currentColor"/>',
+  ka: '<line x1="5" y1="3" x2="5" y2="17"/><rect x="3" y="6" width="4" height="7" fill="currentColor"/><line x1="14" y1="2" x2="14" y2="16"/><rect x="12" y="5" width="4" height="8"/>',
+  ia: '<path d="M3 15a7 7 0 0 1 14 0"/><line x1="10" y1="15" x2="14" y2="8"/>',
+  vo: '<path d="M2 10h3l2-5 3 10 3-7 2 2h3"/>' };
+function smStyleInject() {
+  if (document.getElementById('smCss')) return; const el = document.createElement('style'); el.id = 'smCss';
+  el.textContent = `.smg{position:relative;display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.smb{position:relative;border-radius:12px;padding:10px 11px;background:linear-gradient(160deg,var(--c1),#07101e 72%);border:1.5px solid var(--c);box-shadow:0 0 12px -3px var(--c),inset 0 0 16px -8px var(--c);cursor:pointer;min-width:0}
+.smb:before,.smb:after{content:"";position:absolute;width:11px;height:11px;border:2px solid var(--c)}.smb:before{top:4px;left:4px;border-right:0;border-bottom:0}.smb:after{bottom:4px;right:4px;border-left:0;border-top:0}
+.smb .k{display:flex;align-items:center;gap:6px;font-size:12px;color:#9fb0cc}.smb .k svg{width:17px;height:17px;flex:none;color:var(--c)}.smb .k em{margin-left:auto;font-style:normal;font-size:11px;color:#6f84a3}
+.smb .r{font-size:20px;font-weight:800;color:var(--c);margin:3px 0 1px;text-shadow:0 0 10px var(--c);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.smb .s{font-size:11.5px;color:#c4d0e4;line-height:1.5}.smb .m{display:flex;gap:4px;margin-top:6px}.smb .m i{flex:1;height:5px;border-radius:3px;background:#22304d}.smb .m i.on{background:var(--c);box-shadow:0 0 6px var(--c)}
+.smb.off{border-style:dashed}.smb.off .r{text-decoration:line-through;text-shadow:none}.smb.ld .r{color:#6f84a3;text-shadow:none;font-size:15px}
+@media (max-width:360px){.smb .r{font-size:17px}}`;
+  document.head.appendChild(el);
+}
+/** o：{ rg: ringsEval 結果, ka: {dir,str,n,sup,res}, ia: investAnalysis 結果, vo: volaOf 結果 }；undefined＝計算中、0＝資料不足 */
+function sumHtml(o) {
+  rxStyleInject(); smStyleInject(); const f = fmtPx;
+  const seg = (n, t) => `<div class="m">${Array.from({ length: t }, (_, i) => `<i class="${i < n ? 'on' : ''}"></i>`).join('')}</div>`;
+  const bar = (v) => `<div class="m" style="gap:0;background:#22304d;border-radius:3px"><i class="on" style="flex:none;width:${Math.max(2, Math.min(100, v))}%"></i></div>`;
+  const box = (k, go, name, tone, r, sub, meter) => `<div class="smb ${tone}" style="--c:${SM_C[tone]};--c1:${SM_C[tone]}26" data-smgo="${go}"><div class="k"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6">${SM_IC[k]}</svg>${name}<em>詳情 ›</em></div><div class="r">${r}</div><div class="s">${sub}</div>${meter || ''}</div>`;
+  const ld = (k, go, name, v) => box(k, go, name, 'ld', v === 0 ? '資料不足' : '計算中…', '', '');
+  const tn = []; let h = '';
+  const g = o.rg;
+  if (!g) h += ld('rg', 'rgC', '三環條件', g);
+  else { const lv = g.broken ? 0 : g.level; const t = g.broken ? 'off' : lv >= 2 ? 'up' : lv === 1 ? 'mid' : 'dn'; tn.push(t);
+    h += box('rg', 'rgC', '三環條件', t, g.broken ? '失效' : lv + ' / 3 環', (g.broken ? '收盤跌破停損 ' + f(g.stop) + '<br>條件重置' : ['週 K 條件未成立', '週 K 成立・日 K 待確認', '日 K 已確認・即時待確認', '三環條件全數成立'][lv] + (g.zoneLo ? '<br>區間 ' + f(g.zoneLo) + '–' + f(g.zoneHi) : '')), seg(lv, 3)); }
+  const k = o.ka;
+  if (!k) h += ld('ka', 'kaC', 'K 線形態', k);
+  else { const t = k.dir > 0 ? 'up' : k.dir < 0 ? 'dn' : 'mid'; tn.push(t);
+    h += box('ka', 'kaC', 'K 線形態', t, DIRL[k.dir], '日 K 強度 ' + k.str + (k.n ? '・訊號 ' + k.n : '') + '<br>支撐 ' + f(k.sup) + '／壓力 ' + f(k.res), bar(k.str)); }
+  const a = o.ia;
+  if (!a) h += ld('ia', 'iaC', '投資分析指數', a);
+  else { const t = a.score >= 58 ? 'up' : a.score < 45 ? 'dn' : 'mid'; tn.push(t);
+    h += box('ia', 'iaC', '投資分析指數', t, a.score + ' ' + esc(a.label), esc(a.verdict.title) + '<br>模型試算 ' + a.verdict.ratio + '%', bar(a.score)); }
+  const v = o.vo;
+  if (!v) h += ld('vo', 'voC', '波動', v);
+  else { const t = v.regime >= 1.25 ? 'dn' : v.regime <= 0.7 ? 'up' : 'mid';
+    h += box('vo', 'voC', '波動', t, esc(v.label) + ' ×' + v.regime.toFixed(1), '年化 ' + v.annual.toFixed(0) + '%・ATR ' + v.atrPct.toFixed(1) + '%' + (v.regime >= 1.25 ? '<br>停損距離需放寬' : ''), bar(Math.min(100, v.regime * 50))); }
+  const nu = tn.filter((x) => x === 'up').length, nd = tn.filter((x) => x === 'dn' || x === 'off').length, nm = tn.length - nu - nd;
+  const tag = tn.length < 3 ? ['計算中', SM_C.ld] : nu && nd ? ['分歧', SM_C.mid] : nu === 3 ? ['3 偏多・同向', SM_C.up] : nd === 3 ? ['3 偏弱・同向', SM_C.dn]
+    : [[nu && nu + ' 偏多', nm && nm + ' 中性', nd && nd + ' 偏弱'].filter(Boolean).join('・'), nu > nd ? SM_C.up : nd > nu ? SM_C.dn : SM_C.mid];
+  return `<h2 style="position:relative;display:flex;align-items:center;gap:8px;white-space:nowrap">分析總結 <span class="small" style="color:#6f84a3;font-weight:400">// SUMMARY</span><span style="margin-left:auto;font-size:12px;padding:2px 9px;border-radius:99px;border:1px solid ${tag[1]};color:${tag[1]}">${tag[0]}</span></h2>
+    <div class="smg">${h}</div><div class="small" style="position:relative;color:#6f84a3;margin-top:8px">各方框為單項結果：紅＝偏多、黃＝中性、綠＝偏弱、灰虛線＝失效（波動：紅＝低波動、綠＝高波動）。點方框看完整分析。僅為分析成果彙整，不構成投資建議。</div>`;
 }
 function rxStyleInject() {
   if (document.getElementById('rxCss')) return; const el = document.createElement('style'); el.id = 'rxCss';
