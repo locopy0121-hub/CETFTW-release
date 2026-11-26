@@ -1107,7 +1107,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"v1.1.438","sha":"45cc736","at":"2026-11-26 19:18"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"7e7d878","at":"2026-11-26 20:48"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -6187,7 +6187,7 @@ const STAR_MKTS = [['TW', '台股'], ['ETF', 'ETF'], ['US', '美股']];
 const STAR_STOPS = [['KLINE', 'K 線防守價'], ['VWAP', '盤中均價'], ['FIXED', '固定 %']];
 const STAR_US_CORE = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA', 'AVGO', 'JPM', 'LLY', 'V', 'MA', 'UNH', 'XOM',
   'COST', 'NFLX', 'AMD', 'ORCL', 'CRM', 'ADBE', 'PLTR', 'TSM', 'ASML', 'MU', 'QCOM', 'INTC', 'ARM', 'COIN'];
-const STAR_ANIM = { motion: 'GRAVITY', eject: 'BURST', whaleBeam: true, magnet: true, flow: true, haze: false, scale: 0.65, turbulence: 0.5, whaleX: 2, height: 0.42, listSec: 4, scanMin: 3, anim: true, galaxy: true, density: 0.75 };
+const STAR_ANIM = { motion: 'GRAVITY', eject: 'BURST', whaleBeam: true, magnet: true, flow: true, haze: false, scale: 0.65, turbulence: 0.5, whaleX: 2, height: 0.42, listSec: 4, scanMin: 3, anim: true, style: 'GALAXY', density: 0.75 };
 function starRuleDef(m) {
   const etf = m === 'ETF';
   return { maxN: 8, minScore: etf ? 70 : 75, exitScore: etf ? 63 : 68, rings: 2, requireK: true, wC: 0.4, wR: 0.3, wK: 0.3, stop: 'KLINE', pct: etf ? 1.5 : 2.5 };
@@ -6310,7 +6310,7 @@ function starBearRings(price, ma20, ma60, kLevel, trend) {
 const ST = { el: null, eng: null, loop: 0, busy: '', prog: 0, inp: {}, scanAt: {}, qAt: {}, snap: {}, sel: null, ej: [], ejId: 0 };
 function starPref() { const p = S.pref.star || (S.pref.star = {}); p.rules = p.rules || {}; return p; }
 function starRule(m) { return starSane({ ...starRuleDef(m), ...(starPref().rules[m] || {}) }); }
-function starAnimCfg() { return { ...STAR_ANIM, ...(starPref().anim || {}) }; }
+function starAnimCfg() { const a = { ...STAR_ANIM, ...(starPref().anim || {}) }; if (!['GALAXY', 'NEURAL', 'CLASSIC'].includes(a.style)) a.style = a.galaxy === false ? 'CLASSIC' : 'GALAXY'; delete a.galaxy; return a; }
 function starMkt() { const m = starPref().mkt; return STAR_MKTS.some((x) => x[0] === m) ? m : 'TW'; }
 function starOpen(m) { return m === 'US' ? usOpen() : twOpen(); }
 function starSnap(m) { if (!(m in ST.snap)) ST.snap[m] = store.get('star_snap_' + m, null); return ST.snap[m]; }
@@ -6409,13 +6409,17 @@ function starFx(cv, src) {
   const E = { raf: 0, vis: true, last: 0, t: 0, rot: 0, dead: false, io: null, col: null, colAt: 0, beam: 0, flow: 0, handled: src().ejects.reduce((s, x) => Math.max(s, x.id), 0) };
   // 螺旋星系恆星（與 App 相同的配置：約 22% 核球、12% 盤面散星、其餘沿兩條旋臂；固定亂數種子）
   const GS = 900, TW = 4, TILT = 0.78, GT = new Float32Array(GS * 2), GA = new Float32Array(GS * 2), GB = new Uint8Array(GS * 2);
+  const HXA = new Float32Array(36), HXD = new Float32Array(36), HXL = new Uint8Array(36), DUS = []; E.pu = []; E.puAcc = 0; E.clk = 0;
   { let sd = 20260117; const rnd = () => { sd = (sd + 0x6D2B79F5) | 0; let t = Math.imul(sd ^ (sd >>> 15), 1 | sd); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
     const gs = () => (rnd() + rnd() + rnd() - 1.5) / 0.5;
     for (let i = 0; i < GS * 2; i++) { const q = rnd();
       if (q < 0.22) { GT[i] = Math.min(1, Math.abs(gs()) * 0.12); GA[i] = rnd() * 6.283; }
       else if (q < 0.34) { GT[i] = 0.1 + rnd() * 0.95; GA[i] = rnd() * 6.283; }
       else { const t = 0.08 + Math.pow(rnd(), 0.8) * 0.92; GT[i] = t * (1 + gs() * 0.04); GA[i] = (rnd() < 0.5 ? 0 : Math.PI) + t * TW + gs() * 0.18 * (1.1 - t * 0.5); }
-      const b = rnd(); GB[i] = b < 0.62 ? 0 : b < 0.9 ? 1 : 2; } }
+      const b = rnd(); GB[i] = b < 0.62 ? 0 : b < 0.9 ? 1 : 2; }
+    // 神經網路：外圍節點（角度、距離比例、連到第幾名）與背景微塵（與 App 相同配置）
+    for (let i = 0; i < 36; i++) { HXA[i] = rnd() * 6.283; HXD[i] = 0.55 + rnd() * 0.55; HXL[i] = 1 + Math.floor(rnd() * 15); }
+    for (let i = 0; i < 160; i++) DUS.push([rnd(), rnd(), rnd(), rnd() * 6.283]); }
   const mix = (c, k) => { const m = /^#([0-9a-f]{6})$/i.exec(String(c).trim()); if (!m) return c; const v = parseInt(m[1], 16), f = (x) => Math.round(x + (255 - x) * k); return `rgb(${f(v >> 16)},${f((v >> 8) & 255)},${f(v & 255)})`; };
   try { E.io = new IntersectionObserver((es) => { E.vis = es.some((x) => x.isIntersecting); }); E.io.observe(cv); } catch (e) {}
   const fx = (o) => { if (F.length >= 150) F.shift(); F.push(o); };
@@ -6431,9 +6435,10 @@ function starFx(cv, src) {
     g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
     if (!E.col || ts - E.colAt > 2000) { E.col = { up: css('--up') || '#dc2626', dn: css('--down') || '#16a34a', tx: css('--text') || '#111', t2: css('--text2') || '#888', bd: css('--border') || '#ddd' }; E.colAt = ts; }
     const C = E.col, cy = H * 0.57, maxR = Math.min(W * 0.21, H * 0.36), cx = (s) => (s === 'bull' ? W * 0.25 : W * 0.75), col = (s) => (s === 'bull' ? C.up : C.dn);
-    const gal = !!a.galaxy, GR = Math.min(W * 0.26, H * 0.44 / TILT), sg = (s) => (s === 'bull' ? 1 : -1);
+    const gal = a.style === 'GALAXY', neu = a.style === 'NEURAL', GR = Math.min(W * 0.26, H * 0.44 / TILT), sg = (s) => (s === 'bull' ? 1 : -1);
     const gx = (s, t, an) => cx(s) + Math.cos(sg(s) * (an - E.rot)) * GR * t, gy = (s, t, an) => cy + Math.sin(sg(s) * (an - E.rot)) * GR * t * TILT;
-    if (gal && moving) E.rot += dt * 0.05 * (0.4 + a.turbulence); else if (!moving) E.rot = 0;
+    if ((gal || neu) && moving) { E.rot += dt * 0.05 * (0.4 + a.turbulence); E.clk += dt; } else if (!moving) { E.rot = 0; E.pu = []; }
+    const NR = Math.min(W * 0.22, H * 0.4), nx = (s, dv, an) => cx(s) + Math.cos(an + sg(s) * E.rot * 0.8) * NR * dv, ny = (s, dv, an) => cy + Math.sin(an + sg(s) * E.rot * 0.8) * NR * dv * 0.85;
     // 背景：螺旋星系（深空、盤面霧光、旋臂恆星、核心光芒）或分隔線
     if (gal) {
       g.fillStyle = '#070A14'; g.fillRect(0, 0, W, H);
@@ -6445,6 +6450,32 @@ function starFx(cv, src) {
           g.beginPath(); for (let k = 0; k < cnt; k++) { const i = o + k; if (GB[i] !== b) continue; const t = GT[i], an = GA[i] - E.rot * (0.35 / (0.35 + t) - 0.3); const x = gx(s, t, an), y = gy(s, t, an); g.moveTo(x + z / 2, y); g.arc(x, y, z / 2, 0, 6.283); } g.fill(); }
         g.globalAlpha = 1; const cr = g.createRadialGradient(x0, cy, 0, x0, cy, GR * 0.26); cr.addColorStop(0, 'rgba(255,255,255,0.95)'); cr.addColorStop(0.45, mix(c, 0.2)); cr.addColorStop(1, 'rgba(0,0,0,0)');
         g.globalAlpha = 0.9; g.fillStyle = cr; g.beginPath(); g.arc(x0, cy, GR * 0.26, 0, 6.283); g.fill(); g.globalAlpha = 1; g.globalCompositeOperation = 'source-over'; });
+    } else if (neu) {
+      // 神經網路：深色底＋微塵、外圍節點細線、名次連線（分數越高越粗越亮）、流向中樞的資料脈衝、兩網中樞匯流
+      g.fillStyle = '#04060B'; g.fillRect(0, 0, W, H); const den = Math.max(0.3, Math.min(1, a.density || 0.75));
+      for (let k = 0; k < Math.round(160 * den); k++) { const [x, y, z, ph] = DUS[k], tw = 0.5 + 0.5 * Math.sin(E.clk * 1.3 + ph); g.fillStyle = `rgba(70,140,255,${0.25 * tw * z})`; g.fillRect(x * W, (((y - E.clk * 0.004 * z) % 1) + 1) % 1 * H, 1.1, 1.1); }
+      const BS = { bull: [], bear: [] }; N.forEach((o) => { if (o.st === 1 && o.rank <= 15) BS[o.side][o.rank] = o; });
+      const cv2 = (A, B) => [A.x, A.y, (A.x + B.x) / 2 + 8, (A.y + B.y) / 2 - 8, B.x, B.y];
+      ['bull', 'bear'].forEach((s, si) => { const c = col(s), bs = BS[s]; let mk = 0; for (let k = 1; k <= 15; k++) if (bs[k]) mk = k; if (!mk) return;
+        g.lineWidth = 0.6; g.strokeStyle = c; g.fillStyle = c;
+        for (let k = 0; k < Math.max(6, Math.round(18 * den)); k++) { const h = si * 18 + k, hx = nx(s, HXD[h], HXA[h] * 0.7), hy = ny(s, HXD[h], HXA[h] * 0.7); let tk = Math.min(HXL[h], mk); while (tk > 1 && !bs[tk]) tk--;
+          if (bs[tk]) { g.globalAlpha = 0.10; g.beginPath(); g.moveTo(hx, hy); g.lineTo(bs[tk].x, bs[tk].y); g.stroke(); } g.globalAlpha = 0.35; g.fillRect(hx - 0.8, hy - 0.8, 1.6, 1.6); g.globalAlpha = 1; }
+        for (let k = 2; k <= mk; k++) { const B = bs[k]; if (!B) continue; const wv = Math.max(0, Math.min(1, ((B.fin || 50) - 50) / 50));
+          g.strokeStyle = c; g.globalAlpha = (0.12 + wv * 0.3) * Math.max(0, Math.min(1, B.a)); g.lineWidth = 0.7 + wv * 1.2;
+          [Math.floor((k - 2) / 2) + 1, k > 3 ? k - 1 : 0].forEach((pk) => { const A = bs[pk]; if (!pk || !A) return; const q = cv2(A, B); g.beginPath(); g.moveTo(q[0], q[1]); g.quadraticCurveTo(q[2], q[3], q[4], q[5]); g.stroke(); }); }
+        g.globalAlpha = 1; g.lineWidth = 1;
+        E.pu.forEach((p) => { if (p.si !== si || p.k > mk) return; const A = bs[Math.floor((p.k - 2) / 2) + 1], B = bs[p.k]; if (!A || !B) return; const q = cv2(A, B), u = 1 - p.u, v = 1 - u;
+          const x = v * v * q[0] + 2 * v * u * q[2] + u * u * q[4], y = v * v * q[1] + 2 * v * u * q[3] + u * u * q[5];
+          g.fillStyle = c; g.globalAlpha = 0.18; g.beginPath(); g.arc(x, y, 6, 0, 6.283); g.fill(); g.globalAlpha = 0.55; g.beginPath(); g.arc(x, y, 2.6, 0, 6.283); g.fill(); g.globalAlpha = 0.9; g.fillStyle = '#fff'; g.beginPath(); g.arc(x, y, 1.2, 0, 6.283); g.fill(); g.globalAlpha = 1; }); });
+      if (moving) { const wh = Array.from(N.values()).filter((o) => o.st === 1 && o.whale).length; E.puAcc += dt * (3 + a.turbulence * 6 + (a.whaleBeam ? wh * 2 : 0));
+        while (E.puAcc >= 1) { E.puAcc -= 1; const si = Math.random() < 0.5 ? 0 : 1, n = Math.min(15, (si ? d.bear : d.bull).length); if (n >= 2 && E.pu.length < 80) E.pu.push({ si, k: 2 + Math.floor(Math.random() * (n - 1)), u: 0, sp: 0.5 + Math.random() * 0.6 }); }
+        E.pu = E.pu.filter((p) => (p.u += dt * p.sp) < 1); }
+      const HA = BS.bull[1], HB = BS.bear[1];
+      if (a.flow && HA && HB) { const toBull = d.bull.reduce((s, x) => s + x.final, 0) >= d.bear.reduce((s, x) => s + x.final, 0), mx = W / 2;
+        g.strokeStyle = 'rgba(70,140,255,0.16)'; for (let k = -2; k <= 2; k++) { g.beginPath(); g.moveTo(HA.x, HA.y); g.bezierCurveTo(mx - 30, HA.y + k * 22, mx + 30, HB.y + k * 22, HB.x, HB.y); g.stroke(); }
+        for (let k = 0; k < 14; k++) { const u0 = (E.clk * 0.35 + k / 14) % 1, u = toBull ? 1 - u0 : u0, kk = (k % 5) - 2, v = 1 - u;
+          const x = v * v * v * HA.x + 3 * v * v * u * (mx - 30) + 3 * v * u * u * (mx + 30) + u * u * u * HB.x, y = v * v * v * HA.y + 3 * v * v * u * (HA.y + kk * 22) + 3 * v * u * u * (HB.y + kk * 22) + u * u * u * HB.y;
+          g.fillStyle = u0 > 0.5 ? (toBull ? C.up : C.dn) : 'rgb(70,140,255)'; g.globalAlpha = 0.85; g.beginPath(); g.arc(x, y, 1.6, 0, 6.283); g.fill(); } g.globalAlpha = 1; }
     } else { g.strokeStyle = C.bd; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(W / 2, 22); g.lineTo(W / 2, H - 6); g.stroke(); g.setLineDash([]); }
     g.font = '600 12px system-ui,sans-serif'; g.textAlign = 'center'; g.fillStyle = C.up; g.fillText('多方看漲 ' + d.bull.length, W * 0.25, 15); g.fillStyle = C.dn; g.fillText(d.right + ' ' + d.bear.length, W * 0.75, 15);
     if (a.haze) ['bull', 'bear'].forEach((s) => { const gr = g.createRadialGradient(cx(s), cy, 0, cx(s), cy, maxR * 1.3); gr.addColorStop(0, col(s) + '33'); gr.addColorStop(1, col(s) + '00'); g.fillStyle = gr; g.fillRect(0, 0, W, H); });
@@ -6454,9 +6485,11 @@ function starFx(cv, src) {
       list.forEach((nd, i) => { const ang = i * 2.39996 + (side === 'bear' ? Math.PI : 0), dist = i === 0 ? 0 : maxR * Math.sqrt(i / Math.max(1, n - 1)) * 0.92;
         // 星系模式：第 1 名在核心，其餘依名次沿兩條旋臂由內而外，隨星系旋轉
         const gt = i === 0 ? 0 : 0.3 + 0.65 * (i - 1) / Math.max(1, n - 2), ga = ((i + 1) % 2) * Math.PI + gt * TW;
+        // 神經網路：第 1 名為中樞，其餘依名次以黃金角向外
+        const dv = i === 0 || n <= 1 ? 0 : 0.22 + 0.7 * Math.sqrt(i / Math.max(1, n - 1)), na = (i + 1) * 2.39996 + (side === 'bear' ? Math.PI : 0);
         let o = N.get(nd.symbol);
         if (!o || o.side !== side || o.st !== 1) { o = { x: cx(side) + (Math.random() - 0.5) * maxR * 2, y: cy + (Math.random() - 0.5) * maxR * 1.6, vx: 0, vy: 0, a: 0, side, st: 1, rp: 0 }; N.set(nd.symbol, o); }
-        Object.assign(o, { tx: gal ? gx(side, gt, ga) : cx(side) + Math.cos(ang) * dist, ty: gal ? gy(side, gt, ga) : cy + Math.sin(ang) * dist * 0.85, r: Math.max(3, (4 + nd.final / 10) * a.scale * (i === 0 ? 1.35 : 1)), rank: nd.rank, whale: nd.whale, hot: nd.hot, sym: nd.symbol }); live.add(nd.symbol); }); });
+        Object.assign(o, { tx: gal ? gx(side, gt, ga) : neu ? nx(side, dv, na) : cx(side) + Math.cos(ang) * dist, ty: gal ? gy(side, gt, ga) : neu ? ny(side, dv, na) : cy + Math.sin(ang) * dist * 0.85, fin: nd.final, r: Math.max(3, (4 + nd.final / 10) * a.scale * (i === 0 ? 1.35 : 1)), rank: nd.rank, whale: nd.whale, hot: nd.hot, sym: nd.symbol }); live.add(nd.symbol); }); });
     // 彈出事件
     d.ejects.slice().reverse().forEach((ev) => { if (ev.id <= E.handled) return; E.handled = ev.id;
       const o = N.get(ev.e.symbol), x = o ? o.x : cx(ev.e.side), y = o ? o.y : cy, c = ev.e.forced ? '#f59e0b' : col(ev.e.side);
@@ -6467,7 +6500,7 @@ function starFx(cv, src) {
     N.forEach((o, s) => { if (o.st === 1 && !live.has(s)) o.st = 3; if (o.st === 2) N.delete(s); });
     // 大量光束、多空流向
     if (moving && a.whaleBeam && (E.beam += dt) >= 1.2) { E.beam = 0; const wh = Array.from(N.values()).filter((o) => o.st === 1 && o.whale); if (wh.length) { const o = wh[Math.floor(Math.random() * wh.length)]; fx({ k: 1, x: o.x + (Math.random() - 0.5) * 40, y: -4, vx: 0, vy: 0, life: 3, max: 3, sz: 2, c: '#fbbf24', tgt: o }); } }
-    if (moving && a.flow) { const sb = d.bull.reduce((s, x) => s + x.final, 0), sr = d.bear.reduce((s, x) => s + x.final, 0), df = sb - sr;
+    if (moving && a.flow && !neu) { const sb = d.bull.reduce((s, x) => s + x.final, 0), sr = d.bear.reduce((s, x) => s + x.final, 0), df = sb - sr;
       if (Math.abs(df) > 20 && (E.flow += dt * Math.min(12, Math.abs(df) / 60)) >= 1) { E.flow = 0; const from = df > 0 ? 'bear' : 'bull', to = df > 0 ? 'bull' : 'bear', y0 = cy + (Math.random() - 0.5) * maxR;
         fx({ k: 2, x: cx(from), y: y0, vx: (cx(to) - cx(from)) / 2.2, vy: (Math.random() - 0.5) * 20, life: 2.2, max: 2.2, sz: 1.6, c: col(to) }); } }
     // 節點
@@ -6475,10 +6508,14 @@ function starFx(cv, src) {
       if (o.st === 3) { o.a -= dt * 1.5; o.r *= 1 - dt; if (o.a <= 0) { N.delete(s); return; } }
       else if (!moving) { o.x = o.tx; o.y = o.ty; o.a = 1; o.vx = o.vy = 0; }
       else { const tu = a.turbulence * 50; o.vx += ((o.tx - o.x) * 12 - o.vx * 5) * dt + (Math.random() - 0.5) * tu * dt; o.vy += ((o.ty - o.y) * 12 - o.vy * 5) * dt + (Math.random() - 0.5) * tu * dt; o.x += o.vx * dt; o.y += o.vy * dt; o.a = Math.min(1, o.a + dt * 2); }
-      const pr = (moving && a.motion === 'PULSE' ? 1 + 0.14 * Math.sin(E.t * 3 + o.rank) : 1) * (gal ? 0.7 : 1), r = o.r * pr, c = col(o.side);
-      g.globalAlpha = Math.max(0, o.a) * (o.rank <= 3 || gal ? 1 : 0.7);
+      const pr = (moving && a.motion === 'PULSE' ? 1 + 0.14 * Math.sin(E.t * 3 + o.rank) : 1) * (gal ? 0.7 : neu ? 0.4 : 1), r = o.r * pr, c = col(o.side);
+      g.globalAlpha = Math.max(0, o.a) * (o.rank <= 3 || gal || neu ? 1 : 0.7);
       if (o.hot) { g.fillStyle = '#f9731633'; g.beginPath(); g.arc(o.x, o.y, r + 5, 0, 6.283); g.fill(); }
-      if (gal) {
+      if (neu) {
+        // 網路節點：柔光＋側色環＋白色核心
+        const al = g.globalAlpha; g.fillStyle = c; g.globalAlpha = al * 0.12; g.beginPath(); g.arc(o.x, o.y, r * 4, 0, 6.283); g.fill(); g.globalAlpha = al * 0.25; g.beginPath(); g.arc(o.x, o.y, r * 2.4, 0, 6.283); g.fill();
+        g.globalAlpha = al * 0.9; g.strokeStyle = c; g.lineWidth = 1; g.beginPath(); g.arc(o.x, o.y, r * 1.3, 0, 6.283); g.stroke(); g.fillStyle = '#fff'; g.globalAlpha = al * 0.95; g.beginPath(); g.arc(o.x, o.y, r * 0.6, 0, 6.283); g.fill(); g.globalAlpha = al;
+      } else if (gal) {
         // 亮星：光暈＋白色星核＋側色光環；前 3 名加四芒星光
         const al = g.globalAlpha; g.globalAlpha = al * 0.35; g.fillStyle = c; g.beginPath(); g.arc(o.x, o.y, r * 1.8, 0, 6.283); g.fill();
         if (o.rank <= 3 && o.st === 1) { g.globalAlpha = al * 0.55; g.strokeStyle = '#fff'; g.lineWidth = 1; const fl = r * 3.2; g.beginPath(); g.moveTo(o.x - fl, o.y); g.lineTo(o.x + fl, o.y); g.moveTo(o.x, o.y - fl); g.lineTo(o.x, o.y + fl); g.stroke(); }
@@ -6487,8 +6524,8 @@ function starFx(cv, src) {
       if (o.whale) { g.strokeStyle = '#fbbf24'; g.lineWidth = 1.2; g.beginPath(); g.arc(o.x, o.y, r + 2.5, 0, 6.283); g.stroke(); }
       if (o.rp > 0) { g.strokeStyle = '#fbbf24'; g.globalAlpha = o.rp; g.beginPath(); g.arc(o.x, o.y, r + (1 - o.rp) * 18, 0, 6.283); g.stroke(); o.rp = Math.max(0, o.rp - dt * 1.6); }
       if (moving && a.magnet && o.rank === 1 && o.st === 1) { const f = (E.t * 0.6 + (o.side === 'bull' ? 0 : 0.5)) % 1; g.strokeStyle = c; g.globalAlpha = (1 - f) * 0.6; g.lineWidth = 1; g.beginPath(); g.arc(o.x, o.y, r + 4 + f * 30, 0, 6.283); g.stroke(); }
-      if (d.sel === s) { g.globalAlpha = 1; g.strokeStyle = gal ? '#fff' : C.tx; g.lineWidth = 2; g.beginPath(); g.arc(o.x, o.y, r + 4, 0, 6.283); g.stroke(); }
-      if (o.rank <= 3 && o.st === 1) { g.globalAlpha = Math.max(0, o.a); g.fillStyle = gal ? '#fff' : C.tx; g.font = '600 11px system-ui,sans-serif'; g.fillText(s, o.x, o.y - r - 5); }
+      if (d.sel === s) { g.globalAlpha = 1; g.strokeStyle = gal || neu ? '#fff' : C.tx; g.lineWidth = 2; g.beginPath(); g.arc(o.x, o.y, r + 4, 0, 6.283); g.stroke(); }
+      if (o.rank <= 3 && o.st === 1) { g.globalAlpha = Math.max(0, o.a); g.fillStyle = gal || neu ? '#fff' : C.tx; g.font = '600 11px system-ui,sans-serif'; g.fillText(s, o.x, o.y - r - 5); }
       g.globalAlpha = 1; g.lineWidth = 1;
     });
     // 特效粒子
@@ -6571,7 +6608,7 @@ async function starSettings() {
       <div class="small" style="margin-top:6px">停損防守價</div>${sg(r, 'stop', STAR_STOPS)}${rg(r, 'pct', '固定 %（其他模式缺資料時也用這個）', 0.5, 15, 0.5, '%')}
       <div class="small muted" style="margin:6px 0">已入選者分數 ≥ 剔除分就保留（緩衝帶防洗榜）；觸及防守價立即移出，30 分鐘內不重新入選。</div><button type="button" class="btn sm" id="stRst">重設此市場</button>`; }
     return `<div>${ck(an, 'anim', '動畫')}</div><div class="small">動態</div>${sg(an, 'motion', [['GRAVITY', '引力向心'], ['PULSE', '能量脈動']])}<div class="small" style="margin-top:4px">跳離特效</div>${sg(an, 'eject', [['BURST', '放射爆散'], ['SHATTER', '碎裂淡出'], ['DISSOLVE', '簡單消散']])}
-      <div>${ck(an, 'whaleBeam', '大量光束')}${ck(an, 'magnet', '磁吸脈衝')}${ck(an, 'flow', '多空流向粒子')}${ck(an, 'haze', '星雲光暈')}${ck(an, 'galaxy', '螺旋星系')}</div>${rg(an, 'density', '星系粒子密度', 0.3, 1, 0.05)}
+      <div>${ck(an, 'whaleBeam', '大量光束')}${ck(an, 'magnet', '磁吸脈衝')}${ck(an, 'flow', '多空流向粒子')}${ck(an, 'haze', '星雲光暈')}</div><div class="small" style="margin-top:4px">星團樣式</div>${sg(an, 'style', [['GALAXY', '螺旋星系'], ['NEURAL', '神經網路'], ['CLASSIC', '經典星團']])}${an.style === 'CLASSIC' ? '' : rg(an, 'density', an.style === 'NEURAL' ? '網路外圍節點與微塵密度' : '星系粒子密度', 0.3, 1, 0.05)}
       ${rg(an, 'scale', '星點大小', 0.3, 1, 0.05)}${rg(an, 'turbulence', '擾動', 0, 1, 0.05)}${rg(an, 'whaleX', '大量門檻（量比 ≥）', 1.2, 5, 0.1, ' 倍')}${rg(an, 'height', '雷達高度（畫面比例）', 0.25, 0.7, 0.01)}
       ${rg(an, 'listSec', '排行更新間隔', 2, 15, 1, ' 秒')}${rg(an, 'scanMin', '盤中重新分析間隔', 1, 15, 1, ' 分')}`; };
   let eng = null;
