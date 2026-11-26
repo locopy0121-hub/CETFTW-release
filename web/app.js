@@ -1107,7 +1107,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"v1.1.434","sha":"2376193","at":"2026-11-26 13:52"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"a56452e","at":"2026-11-26 14:01"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -1888,6 +1888,7 @@ VIEWS.s = {
       <button class="btn" id="sell">賣出</button><button class="btn primary" id="buy">買進</button></div>
       <div id="stags" class="row wrap" style="gap:6px;margin:-4px 0 10px"></div>
       <div id="sq"></div>
+      <div id="vflow"></div>
       ${(S.pref.stabL || {}).pos === 'top' ? stabBar(this) : ''}
       <div class="card" style="margin-top:12px"><div class="row wrap" style="margin-bottom:8px"><div class="seg" id="rg" style="flex-wrap:wrap">${Object.keys(RANGES).map((k) => `<button data-r="${k}" class="${S.pref.range === k ? 'on' : ''}">${RANGE_N[k]}</button>`).join('')}<button data-r="C" class="${S.pref.range === 'C' ? 'on' : ''}" title="自訂區間">${S.pref.rcDays ? '自訂 ' + rcLabel(S.pref.rcDays) : '自訂…'}</button></div>
         <div class="seg" id="ctp">${CTYPES.map(([k, n]) => `<button data-ct="${k}" class="${(S.pref.ctype || 'candle') === k ? 'on' : ''}">${n}</button>`).join('')}</div>
@@ -1929,10 +1930,10 @@ VIEWS.s = {
     this._fs = () => setTimeout(() => this.chart(), 60); document.addEventListener('fullscreenchange', this._fs);
     $$('[data-st]').forEach((b) => b.onclick = () => { this._tab = b.dataset.st; S.pref.stab = b.dataset.st; savePref(); $$('[data-st]').forEach((x) => x.classList.toggle('on', x === b)); this.info(); });
     $('#stabE').onclick = () => stabEditor();
-    this.chart(); this.info(); this.tags();
+    this.chart(); this.info(); this.tags(); vfMount(sym);
     this._rs = () => this.chart(); window.addEventListener('resize', this._rs);
   },
-  leave() { window.removeEventListener('resize', this._rs); document.removeEventListener('fullscreenchange', this._fs); if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); },
+  leave() { vfStop(); window.removeEventListener('resize', this._rs); document.removeEventListener('fullscreenchange', this._fs); if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); },
   async chart() {
     const sym = this.sym; const [range, count, iv] = rangeOf(S.pref.range); const ctype = S.pref.ctype || 'candle';
     $('#sb').style.visibility = range === '1d' ? 'hidden' : '';
@@ -2082,11 +2083,55 @@ VIEWS.s = {
 const SIMB = { cash: 0, year: new Date().getFullYear(), realized: 0, divTw: 0, divUs: 0 };
 function simTrades() { return kjson('sim:trades', []).map((t) => ({ t: t.t, s: t.s, d: t.d, n: t.q, p: t.p, x: t.fx || 1, fee: t.fee || 0, tax: t.tax || 0, id: t.id, o: t.o || '', note: t.n || '' })); }
 function simSave(list) { kset('sim:trades', JSON.stringify(list.map((t) => ({ t: t.t, s: t.s, d: t.d, q: t.n, p: t.p, fx: t.x || 1, fee: t.fee || 0, tax: t.tax || 0, id: t.id, o: t.o || '', n: t.note || '' }))), 's'); changed(); }
+// ───────── AI 模擬交易（唯讀：手機 App 執行，經雲端同步鍵 ai:sim 帶來精簡帳本） ─────────
+const AI_RULE = { COMBINED: '綜合評估', RINGS: '三環 3/3', KBAR: 'K 線訊號' };
+const AI_GRP = { TW: '台股', ETF: '台股 ETF', US: '美股' };
+function aiSim() { return kjson('ai:sim', null); }
+function aiPx(ai, s) { const q = S.q[s]; return (q && q.price) || (ai.px && ai.px[s]) || null; }
+function aiName(ai, s) { const n = D.name(s); return n && n !== s ? n : (ai.nm && ai.nm[s]) || ''; }
+function aiGrpOf(b) { return b.g || (b.m === 'US' ? 'US' : b.e ? 'ETF' : 'TW'); }
+function aiEq(ai, b) { return (b.c || 0) + (b.p || []).reduce((a, p) => a + (aiPx(ai, p.s) || p.a) * p.q * (p.sd || 1), 0); }
+function aiSimHtml() {
+  const ai = aiSim();
+  if (!ai || !Array.isArray(ai.books)) return `<div class="card"><h2>AI 模擬交易</h2><div class="text2">還沒有收到手機的 AI 模擬帳本。</div>
+    <ul class="text2 small"><li>AI 模擬交易在手機 App 盤中自動執行（持股 › AI 模擬交易）。</li><li>手機登入同一帳號，「帳號與同步」設為<b>手機為主</b>並開啟自動同步後，網頁就會顯示三組帳本（台股、台股 ETF、美股）。</li></ul></div>`;
+  const grps = Object.keys(AI_GRP); const g = grps.includes(S.pref.aiGrp) ? S.pref.aiGrp : 'TW';
+  const bs = ai.books.filter((b) => aiGrpOf(b) === g && AI_RULE[b.r]);
+  const rules = bs.map((b) => b.r); const r = rules.includes(S.pref.aiRule) ? S.pref.aiRule : rules[0];
+  const b = bs.find((x) => x.r === r); const us = g === 'US'; const cur = us ? '美元' : '元';
+  const on = ai.cfg && ai.cfg[{ TW: 'tw', ETF: 'et', US: 'us' }[g]] !== false;
+  let h = `<div class="notice" style="margin-bottom:12px">AI 模擬交易由手機 App 在盤中依規則自動執行，這裡是唯讀檢視（獨立虛擬帳本，不計入真實資產）。手機更新 ${ai.at ? esc(new Date(ai.at).toLocaleDateString('zh-TW') + ' ' + hm(ai.at)) : '—'}${ai.cfg && !ai.cfg.on ? ' · 手機目前已暫停自動執行' : ''}。損益為依規則試算的模擬結果，不是買賣指令。</div>
+    <div class="row wrap" style="margin-bottom:12px"><div class="seg" id="aiG">${grps.map((k) => `<button data-ag="${k}" class="${g === k ? 'on' : ''}">${AI_GRP[k]}</button>`).join('')}</div>${on ? '' : '<span class="small muted">此分組在手機已關閉</span>'}</div>`;
+  h += `<div class="card scroll-x" style="margin-bottom:12px"><h2>規則並排比較<span class="r small muted">${cur}</span></h2><table class="tbl"><thead><tr><th>規則</th><th>權益</th><th>報酬率</th><th>已實現</th><th>勝率</th><th>獲利因子</th><th>最大回撤</th><th>平倉筆數</th><th>持倉</th></tr></thead><tbody>${bs.map((x) => {
+    const eq = aiEq(ai, x), ret = x.b ? (eq - x.b) / x.b * 100 : 0, st = x.st || {};
+    return `<tr class="click" data-ar="${x.r}"><td class="nm">${r === x.r ? '▸ ' : ''}${esc(AI_RULE[x.r])}</td><td class="num">${fmtInt(eq)}</td><td class="num ${cls(ret)}">${fmtPct(ret)}</td><td class="num ${cls(st.real)}">${fmtSigned(st.real)}</td>
+      <td class="num">${st.win == null ? '—' : fmt(st.win * 100, 0) + '%'}</td><td class="num">${st.pf == null ? (st.n ? '∞' : '—') : fmt(st.pf, 2)}</td><td class="num">${st.mdd == null ? '—' : fmt(st.mdd, 1) + '%'}</td><td class="num">${st.n || 0}</td><td class="num">${(x.p || []).length}</td></tr>`; }).join('')}</tbody></table></div>`;
+  if (!b) return h + '<div class="empty">此分組沒有帳本。</div>';
+  const pos = (b.p || []).slice().sort((a, c) => (c.oa || 0) - (a.oa || 0));
+  h += `<div class="card scroll-x" style="margin-bottom:12px"><h2>${esc(AI_RULE[b.r])}・模擬持倉（${pos.length}）</h2>${pos.length ? `<table class="tbl"><thead><tr><th>個股</th><th>方向</th><th>股數</th><th>均價</th><th>現價</th><th>停損</th><th>目標</th><th>損益</th><th>報酬率</th><th>觸發條件</th></tr></thead><tbody>${pos.map((p) => {
+    const now = aiPx(ai, p.s) || p.a, sd = p.sd || 1, un = (now - p.a) * p.q * sd, pct = p.a ? (now - p.a) / p.a * 100 * sd : 0;
+    return `<tr class="click" data-go="#/s/${esc(p.s)}"><td class="nm">${esc(aiName(ai, p.s))} <span class="muted small num">${esc(p.s)}</span></td><td>${sd > 0 ? '多' : '空'}</td><td class="num">${fmt(p.q, p.q % 1 ? 2 : 0)}</td><td class="num">${fmtPrice(p.a)}</td><td class="num">${fmtPrice(now)}</td>
+      <td class="num">${fmtPrice(p.st)}</td><td class="num">${fmtPrice(p.tg)}</td><td class="num ${cls(un)}">${fmtSigned(un)}</td><td class="num ${cls(pct)}">${fmtPct(pct)}</td><td class="small">${esc(p.w || '')}${p.ad ? '・加碼 ' + p.ad + ' 次' : ''}</td></tr>`; }).join('')}</tbody></table>` : '<div class="muted small">目前沒有模擬持倉。</div>'}</div>`;
+  const rs = (b.st && b.st.rs) || [];
+  if (rs.length) h += `<div class="card scroll-x" style="margin-bottom:12px"><h2>依觸發條件統計</h2><table class="tbl"><thead><tr><th>條件</th><th>筆數</th><th>勝率</th><th>平均報酬</th></tr></thead><tbody>${rs.map((x) => `<tr><td>${esc(x.w)}</td><td class="num">${x.n}</td><td class="num">${fmt((x.win || 0) * 100, 0)}%</td><td class="num ${cls(x.avg)}">${fmtPct(x.avg)}</td></tr>`).join('')}</tbody></table></div>`;
+  const xs = (b.x || []).slice().reverse();
+  h += `<div class="card"><h2>已平倉（最近 ${xs.length} 筆）</h2>${xs.length ? `<div class="list">${xs.map((x) => `<div class="it click" data-go="#/s/${esc(x.s)}"><span class="tag ${(x.sd || 1) > 0 ? 'up' : 'down'}">${(x.sd || 1) > 0 ? '多' : '空'}</span>
+    <div class="l"><div class="t1">${esc(aiName(ai, x.s))} <span class="muted small num">${esc(x.s)}</span> <span class="muted small">${esc(String(x.od || '').slice(5).replace('-', '/'))} → ${esc(String(x.cd || '').slice(5).replace('-', '/'))}</span></div>
+    <div class="t2">${fmtPrice(x.a)} → ${fmtPrice(x.cl)}・${esc(x.w || '')}／${esc(x.e || '')}</div></div><div class="r num ${cls(x.pl)}">${fmtSigned(x.pl)}<div class="small">${fmtPct(x.pp)}</div></div></div>`).join('')}</div>` : '<div class="muted small">尚無平倉紀錄。</div>'}</div>`;
+  return h;
+}
+function aiSimBind() {
+  $$('[data-ag]').forEach((x) => x.onclick = () => { S.pref.aiGrp = x.dataset.ag; savePref(); VIEWS.sim.fill(); });
+  $$('[data-ar]').forEach((x) => x.onclick = () => { S.pref.aiRule = x.dataset.ar; savePref(); VIEWS.sim.fill(); });
+}
 VIEWS.sim = {
   title: '模擬交易',
-  render() { return head('模擬交易', `<span class="tag" style="color:#a855f7">模擬</span><button class="btn" id="sSell">模擬賣出</button><button class="btn primary" id="sBuy">＋ 模擬買進</button>`) + '<div id="dyn"></div>'; },
-  bind() { $('#sBuy').onclick = () => simModal('BUY'); $('#sSell').onclick = () => simModal('SELL'); },
+  render() { const ai = S.pref.simTab === 'ai';
+    return head('模擬交易', `<span class="seg" id="simT"><button data-st="man" class="${ai ? '' : 'on'}">手動模擬</button><button data-st="ai" class="${ai ? 'on' : ''}">AI 模擬交易</button></span>` + (ai ? '' : `<button class="btn" id="sSell">模擬賣出</button><button class="btn primary" id="sBuy">＋ 模擬買進</button>`)) + '<div id="dyn"></div>'; },
+  bind() { $$('[data-st]').forEach((b) => b.onclick = () => { S.pref.simTab = b.dataset.st; savePref(); route(); });
+    if ($('#sBuy')) { $('#sBuy').onclick = () => simModal('BUY'); $('#sSell').onclick = () => simModal('SELL'); } },
   fill() {
+    if (S.pref.simTab === 'ai') { $('#dyn').innerHTML = aiSimHtml(); aiSimBind(); return; }
     const ts = simTrades(); const lg = ledger(ts, { base: SIMB }); const fx = usdTwd();
     if (lg.err) { $('#dyn').innerHTML = `<div class="notice err">${esc(lg.err)}</div>`; return; }
     const rows = lg.holdings.map((h) => { const q = S.q[h.symbol] || {}; const us = isUs(h.symbol); const f = us ? fx : 1; const price = q.price || h.avgCost;
@@ -2112,7 +2157,7 @@ VIEWS.sim = {
     $$('[data-sd]').forEach((b) => b.onclick = async () => { const list = simTrades().filter((t) => String(t.id) !== b.dataset.sd); const r = ledger(list, { base: SIMB }); if (r.err) return toast('無法刪除：' + r.err, 3500);
       if ((await dialog('刪除模擬交易', '確定刪除？', [['', '取消'], ['ok', '刪除', 'primary']])) !== 'ok') return; simSave(list); this.fill(); });
   },
-  syms() { return Array.from(new Set(simTrades().map((t) => t.s))); },
+  syms() { if (S.pref.simTab === 'ai') { const ai = aiSim(); return ai && ai.books ? Array.from(new Set(ai.books.flatMap((b) => (b.p || []).map((p) => p.s)))) : []; } return Array.from(new Set(simTrades().map((t) => t.s))); },
 };
 async function simModal(side, sym0) {
   let made = null;
@@ -6054,6 +6099,191 @@ async function liveBars(sym, range = '2y') {
   const q = S.q[sym] || {}; const b = b0.slice(); const today = ymd();
   if (q.price && !isUs(sym) && twOpen()) { const last = b[b.length - 1]; const cur = { d: today, o: q.open || q.price, h: Math.max(q.high || q.price, q.price), l: Math.min(q.low || q.price, q.price), c: q.price, v: q.volLots || 0 }; if (last.d === today) b[b.length - 1] = cur; else b.push(cur); }
   return b;
+}
+// ───────── 三環條件（與 App TargetRings 同規則：週 K 定方向 → 日 K 找止跌 → 即時價位；只輸出達成幾環與試算價位） ─────────
+function ringsEval(x, mode, snap = (v) => v, tick = 0.01) {
+  const r = []; const p = x.price; const f = fmtPrice;
+  const wNear = Math.max(x.wAtr, p * 0.03);
+  const trendUp = x.wMa60 != null && x.wMa20 != null && x.wMa20 > x.wMa60;
+  const inBand = p >= x.wSupport - x.wAtr * 0.5 && p <= x.wSupport + wNear;
+  const outer = trendUp && inBand;
+  r.push(x.wMa60 == null ? '週 K 不足 60 根，無法判斷週 MA20／MA60' : '週 MA20 ' + f(x.wMa20) + (trendUp ? ' > ' : ' ≤ ') + '週 MA60 ' + f(x.wMa60));
+  r.push('週支撐帶 ' + f(x.wSupport - x.wAtr * 0.5) + '～' + f(x.wSupport + wNear) + (inBand ? '，現價在帶內' : '，現價不在帶內'));
+  const brakes = [x.bullReversal ? '多方反轉形態' : null, x.rsiTurn ? 'RSI 離開超賣' : null, x.noNewLow ? '近 3 根不破前低' : null].filter(Boolean);
+  const middle = brakes.length > 0;
+  r.push(middle ? '日 K 止跌跡象：' + brakes.join('、') : '日 K 尚無止跌跡象');
+  const dLo = x.dSupport, dHi = x.dSupport + x.dAtr, wLo = x.wSupport, wHi = x.wSupport + x.wAtr;
+  let lo = Math.max(dLo, wLo), hi = Math.min(dHi, wHi);
+  const overlap = lo <= hi;
+  if (!overlap) { lo = dLo; hi = dHi; }
+  lo = snap(lo); hi = snap(Math.max(hi, lo));
+  r.push('試算區間 ' + f(lo) + '～' + f(hi) + (overlap ? '（日／週支撐交集）' : '（日／週支撐無交集，暫以日支撐帶）'));
+  const stop0 = mode === 1 ? (x.wStop != null ? x.wStop : x.wSupport - x.wAtr * 0.5) : (x.dStop != null ? x.dStop : x.dSupport - x.dAtr * 0.3);
+  const stop = snap(stop0);
+  const broken = p > 0 && p < stop;
+  const rr = p > stop && x.target > p ? (x.target - p) / (p - stop) : 0;
+  const inZone = p >= lo - tick / 2 && p <= hi + tick / 2;
+  const center = (inZone || !!x.reclaim) && rr >= 2.0;
+  r.push((mode === 1 ? '存股模式（週 K 停損 ' : '波段模式（日 K 停損 ') + f(stop) + '），目標 ' + f(x.target) + '，試算風報比 1:' + rr.toFixed(2));
+  if (x.reclaim) r.push('今日帶量站回日 MA20 ' + f(x.dMa20));
+  if (broken) r.push('現價已低於停損價 ' + f(stop));
+  const level = broken || !outer ? 0 : !middle ? 1 : !center ? 2 : 3;
+  const three = [[hi, 40], [snap((lo + hi) / 2), 30], [lo, 30]];
+  const batches = mode === 1 && new Set(three.map((t) => t[0])).size === 3 ? three : [[hi, 100]];
+  return { level, outer, middle: outer && middle, center: outer && middle && center, broken, zoneLo: lo, zoneHi: hi, overlap, stop, target: x.target, rr, price: p, batches, cap: snap(hi + tick), reasons: r, mode };
+}
+/** 由日 K、週 K 的 klineAnalyze 結果萃取三環輸入（與 App TargetRings.inputOf 相同） */
+function ringsInput(price, d, w) {
+  const cs = d.cs, closes = cs.map((c) => c.c), n = cs.length;
+  const rsiNow = rsiW(closes);
+  const rsiHist = [1, 2, 3, 4, 5].map((k) => (n - k > 15 ? rsiW(closes.slice(0, n - k)) : null)).filter((v) => v != null);
+  const rsiPrev = rsiHist.length ? rsiHist[0] : null;
+  const rsiTurn = rsiNow != null && rsiPrev != null && rsiNow > rsiPrev && ((rsiPrev <= 30 && rsiNow > 30) || Math.min(...rsiHist) < 35);
+  const noNewLow = n >= 13 && Math.min(...cs.slice(n - 3).map((c) => c.l)) >= Math.min(...cs.slice(n - 13, n - 3).map((c) => c.l));
+  const bullReversal = d.latest.some((h) => KP[h.k][2] > 0 && KP[h.k][1] === '反轉');
+  const reclaim = n >= 2 && d.x.vol === 'C' && closes[n - 2] < d.x.ma20 && price > d.x.ma20;
+  const target = d.longPlan && d.longPlan.tp1 > price ? d.longPlan.tp1 : d.x.resistance;
+  return { price, wMa20: w.x.ma20, wMa60: w.x.ma60, wSupport: w.x.support, wAtr: w.x.atr, wStop: w.longPlan ? w.longPlan.stop : null,
+    dSupport: d.x.support, dAtr: d.x.atr, dStop: d.longPlan ? d.longPlan.stop : null, dMa20: d.x.ma20, target, bullReversal, rsiTurn, noNewLow, reclaim };
+}
+/** 台股價位對齊升降單位（無條件捨去，與 App TwSession.snap 相同） */
+function twSnap(v, etf) {
+  if (!(v > 0)) return v;
+  const x = Math.round(v * 1e4) / 1e4; const t = twTick(x, etf);
+  return Math.round(Math.floor(x / t + 1e-9) * t * 100) / 100;
+}
+// ───────── 量比預估（與 App VolEstimate 同規則：台股前高後低累積量曲線、開盤 15 分鐘平滑；只供視覺化） ─────────
+function volTwShare(m) {
+  if (m <= 0) return 0;
+  if (m < 265) return 0.88 * Math.pow(m / 265, 0.72);
+  if (m < 270) return 0.88 + 0.12 * (m - 265) / 5;
+  return 1;
+}
+function volEstimate(today, avg5, us, minutes) {
+  if (minutes == null) return today;
+  const m = Math.max(0, minutes);
+  const share = Math.max(0.01, us ? Math.min(1, Math.max(0, m / 390)) : volTwShare(m));
+  const raw = today / share;
+  if (avg5 <= 0) return raw;
+  const w = Math.min(1, Math.max(0, m / 15));
+  return w * raw + (1 - w) * avg5;
+}
+function volRatio(today, avg5, us, minutes) {
+  return today == null || !(today > 0) || !(avg5 > 0) ? null : volEstimate(today, avg5, us, minutes) / avg5;
+}
+/** 盤中回傳開盤後分鐘數，否則 null（台股 09:00～13:30、美股 09:30～16:00） */
+function volMinutesNow(us) {
+  if (!us) { const d = tpeNow(); const m = d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60 - 540; return d.getDay() >= 1 && d.getDay() <= 5 && m >= 0 && m <= 270 ? m : null; }
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(new Date()).map((x) => [x.type, x.value]));
+  const m = +p.hour * 60 + +p.minute + +p.second / 60 - 570;
+  return p.weekday !== 'Sat' && p.weekday !== 'Sun' && m >= 0 && m <= 390 ? m : null;
+}
+// ───────── 買賣量粒子（與 App VolumeFlowPanel 相同：左內盤、右外盤，粒子＝成交量，聚合圈＝買賣占比，量比決定密度） ─────────
+const VF = { sym: null, raf: 0, timer: 0, io: null, vis: true, st: null, ratio: null, avg5: 0, share: 0.5, est: true, P: null };
+function vfRadius(sd, share) { return 0.16 + 0.18 * Math.sqrt(Math.min(1, Math.max(0, sd > 0 ? share : 1 - share))); }
+function vfCx(sd, asp) { return sd > 0 ? asp * 0.76 : asp * 0.24; }
+function vfStop() { cancelAnimationFrame(VF.raf); VF.raf = 0; clearInterval(VF.timer); VF.timer = 0; if (VF.io) { VF.io.disconnect(); VF.io = null; } VF.sym = null; }
+function vfVerdict(st) {
+  if (!st) return ['計算中', css('--muted')];
+  if (st.broken) return ['破停損', css('--warn')];
+  return st.level >= 3 ? ['條件成立', css('--primary')] : ['觀望', css('--muted')];
+}
+function vfLine() {
+  const el = $('#vfTxt'); if (!el) return; const [t, c] = vfVerdict(VF.st);
+  el.innerHTML = `<b style="color:${c}">${esc(VF.noKa ? '—' : t)}</b>・三環 ${VF.st ? VF.st.level + '/3' : '—'}・量比 ${VF.ratio != null ? fmt(VF.ratio, 2) + ' 倍' : '—'}${VF.est ? '・買賣比例為估算' : ''}${VF.noKa ? '・三環條件為會員功能（K 線分析）' : ''}`;
+  const inP = 1 - VF.share; const bar = $('#vfBar');
+  if (bar) bar.innerHTML = `<span class="num down small">${fmt(inP * 100, 1)}%</span><span style="flex:1;height:6px;border-radius:3px;margin:0 8px;background:linear-gradient(90deg,var(--down) ${inP * 100}%,var(--up) ${inP * 100}%)"></span><span class="num up small">${fmt((1 - inP) * 100, 1)}%</span>`;
+}
+function vfUpdate(sym) {
+  const q = S.q[sym] || {}; const us = isUs(sym);
+  const fresh = q.time && Date.now() - q.time < 15 * 60000; const mins = fresh ? volMinutesNow(us) : null;
+  const today = us ? q.vol : (q.volLots != null ? q.volLots : null);
+  VF.ratio = volRatio(today, VF.avg5, us, mins); VF.live = mins != null;
+  const chg = q.price && q.prev ? (q.price / q.prev - 1) * 100 : 0;
+  VF.share = 0.5 + Math.min(0.3, Math.max(-0.3, chg / 10)); VF.est = true;
+  vfLine();
+  if (VF.redraw) VF.redraw();
+}
+async function vfMount(sym) {
+  vfStop(); const box = $('#vflow'); if (!box) return;
+  if (S.pref.vflow === false) { box.innerHTML = `<div class="row" style="margin:-4px 0 10px"><button class="btn sm" id="vfShow">顯示買賣量粒子</button></div>`; $('#vfShow').onclick = () => { S.pref.vflow = true; savePref(); vfMount(sym); }; return; }
+  const fx = S.pref.vfFx !== false; const mode = S.pref.ringMode === 1 ? 1 : 0;
+  box.innerHTML = `<div class="card" style="margin-bottom:12px"><h2>買賣量粒子<span class="r"><span class="seg" id="vfMode"><button data-vm="0" class="${mode === 0 ? 'on' : ''}" title="日 K 停損">波段</button><button data-vm="1" class="${mode === 1 ? 'on' : ''}" title="週 K 停損、三批試算">存股</button></span>
+    <button class="btn sm ${fx ? 'primary' : ''}" id="vfFx">動畫 ${fx ? '開' : '關'}</button><button class="btn sm" id="vfHide">隱藏</button></span></h2>
+    <div style="position:relative;height:180px;border-radius:12px;overflow:hidden;background:color-mix(in srgb,var(--bg) 70%,transparent)"><canvas id="vfC" style="width:100%;height:100%;display:block"></canvas>
+      <div style="position:absolute;left:10px;top:8px" class="down small"><b>內盤（賣）</b></div><div style="position:absolute;right:10px;top:8px" class="up small"><b>外盤（買）</b></div>
+      <div id="vfSt" class="small muted" style="position:absolute;left:0;right:0;bottom:8px;text-align:center"></div></div>
+    <div id="vfBar" class="row" style="margin-top:8px;align-items:center"></div><div id="vfTxt" class="small text2" style="margin-top:4px"></div>
+    <details class="small muted" style="margin-top:4px"><summary>說明</summary>左＝內盤（賣方成交）、右＝外盤（買方成交），粒子＝成交量，聚合圈大小＝買賣量占比（網頁沒有逐筆明細，依當日漲跌估算）；量比＝盤中預估量（或盤後當日量）÷ 5 日均量，越大粒子越密，放量帶拖尾。結論依三環條件：3/3「條件成立」，其餘「觀望」，跌破試算停損為「破停損」。僅為視覺化，不代表任何買賣建議。</details></div>`;
+  $('#vfHide').onclick = () => { S.pref.vflow = false; savePref(); vfMount(sym); };
+  $('#vfFx').onclick = () => { S.pref.vfFx = !fx; savePref(); vfMount(sym); };
+  $$('[data-vm]').forEach((b) => b.onclick = () => { S.pref.ringMode = +b.dataset.vm; savePref(); vfMount(sym); });
+  VF.sym = sym; VF.st = null; VF.ratio = null; VF.avg5 = 0; VF.noKa = !can('KLINE'); vfLine();
+  vfAnim(sym, fx);
+  try {
+    const b = await liveBars(sym, '2y'); if (VF.sym !== sym) return;
+    const b0 = barCache[sym + '2y'] || []; const today = ymd(); const hist = (b0.length && b0[b0.length - 1].d === today ? b0.slice(0, -1) : b0).slice(-5).map((x) => x.v).filter((v) => v > 0);
+    VF.avg5 = hist.length ? hist.reduce((a, v) => a + v, 0) / hist.length : 0;
+    vfUpdate(sym); VF.timer = setInterval(() => { if (VF.sym === sym) vfUpdate(sym); }, 15000);
+    if (!VF.noKa && b.length >= 60) {
+      const w = weeklyBars(await liveBars(sym, '5y')); if (VF.sym !== sym) return;
+      const d = klineAnalyze(b), wk = klineAnalyze(w); const q = S.q[sym] || {}; const price = q.price || b[b.length - 1].c;
+      const us = isUs(sym); const etf = D.isEtf(sym) || (!us && /^00/.test(sym)) || q.type === 'ETF';
+      if (d && wk) VF.st = ringsEval(ringsInput(price, d, wk), mode, us ? (v) => Math.round(v * 100) / 100 : (v) => twSnap(v, etf), us ? 0.01 : twTick(price, etf));
+    }
+    vfLine();
+  } catch (e) { vfLine(); }
+}
+function vfAnim(sym, fx) {
+  const cv = $('#vfC'); if (!cv) return; const g = cv.getContext('2d'); const N = 80;
+  const P = { x: new Float32Array(N), y: new Float32Array(N), vx: new Float32Array(N), vy: new Float32Array(N), age: new Float32Array(N), life: new Float32Array(N), sz: new Float32Array(N), sd: new Int8Array(N), on: new Uint8Array(N), n: 0, asp: 2 };
+  const spawn = (x, y, vx, vy, life, sz, sd) => { for (let i = 0; i < N; i++) if (!P.on[i]) { P.x[i] = x; P.y[i] = y; P.vx[i] = vx; P.vy[i] = vy; P.age[i] = 0; P.life[i] = life; P.sz[i] = sz; P.sd[i] = sd; P.on[i] = 1; P.n++; return; } };
+  const kill = (i) => { if (P.on[i]) { P.on[i] = 0; P.n--; } };
+  VF.io = new IntersectionObserver((es) => { VF.vis = es[0].isIntersecting; }); VF.io.observe(cv);
+  let W = 0, H = 0, last = 0, acc = 0, t = 0, up = css('--up'), dn = css('--down');
+  const size = () => { const r = cv.getBoundingClientRect(); const dpr = window.devicePixelRatio || 1; if (r.width && (Math.round(r.width * dpr) !== cv.width || Math.round(r.height * dpr) !== cv.height)) { cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr); up = css('--up'); dn = css('--down'); } W = cv.width; H = cv.height; P.asp = H ? W / H : 2; };
+  const target = () => { const rv = VF.ratio != null ? VF.ratio : 1; return Math.max(6, Math.min(N, Math.round((rv < 0.8 ? 18 : rv <= 1.5 ? 40 : 70) * 0.5 * (S.pref.vfStrong ? 2 : 1)))); };
+  const scatter = (seed) => { let s = seed; const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647); for (let k = 0; k < target(); k++) { const sd = rnd() < VF.share ? 1 : -1; const a = rnd() * 6.283, r = vfRadius(sd, VF.share) * Math.sqrt(rnd()); spawn(vfCx(sd, P.asp) + Math.cos(a) * r, 0.5 + Math.sin(a) * r, 0, 0, 1e9, 0.014 + rnd() * 0.012, sd); } };
+  const draw = (pulse, live, hot) => {
+    g.clearRect(0, 0, W, H); const h = H;
+    [-1, 1].forEach((sd) => { const col = sd > 0 ? up : dn; const cx = vfCx(sd, P.asp) * h, cy = 0.5 * h, r = vfRadius(sd, VF.share) * h; const gl = fx ? 0.75 + 0.25 * pulse : 0.85;
+      const gr = g.createRadialGradient(cx, cy, 0, cx, cy, r * 1.25); gr.addColorStop(0, hexA(col, 0.28 * gl)); gr.addColorStop(1, hexA(col, 0)); g.fillStyle = gr; g.beginPath(); g.arc(cx, cy, r * 1.25, 0, 6.2832); g.fill();
+      g.strokeStyle = hexA(col, 0.55); g.lineWidth = 1.5 * (window.devicePixelRatio || 1); g.beginPath(); g.arc(cx, cy, r, 0, 6.2832); g.stroke(); });
+    for (let i = 0; i < N; i++) { if (!P.on[i]) continue; const life = P.life[i], age = P.age[i];
+      const fade = life > 1e8 ? 0.85 : Math.min(1, Math.max(0, 1 - age / life)) * (age < 0.25 ? age / 0.25 : 1); const col = P.sd[i] > 0 ? up : dn; const s = P.sz[i] * h, px = P.x[i] * h, py = P.y[i] * h;
+      if (hot && live && fx) for (let k = 1; k <= 2; k++) { g.fillStyle = hexA(col, fade * (0.32 - 0.11 * k)); g.beginPath(); g.arc((P.x[i] - P.vx[i] * 0.05 * k) * h, (P.y[i] - P.vy[i] * 0.05 * k) * h, s * (1 - 0.2 * k), 0, 6.2832); g.fill(); }
+      g.fillStyle = hexA(col, 0.22 * fade); g.beginPath(); g.arc(px, py, s * 2.2, 0, 6.2832); g.fill();
+      g.fillStyle = hexA(col, fade); g.beginPath(); g.arc(px, py, s, 0, 6.2832); g.fill(); }
+  };
+  size();
+  if (!fx) { VF.redraw = () => { if (!cv.isConnected) return; P.on.fill(0); P.n = 0; size(); scatter(vfSeed(sym)); draw(0.5, false, false); }; VF.redraw(); $('#vfSt').textContent = '動畫關閉'; return; }
+  VF.redraw = null;
+  const loop = (now) => {
+    if (VF.sym !== sym || !cv.isConnected) return;
+    VF.raf = requestAnimationFrame(loop);
+    if (document.hidden || !VF.vis) { last = 0; return; }
+    const live = !!VF.live; const minStep = live ? 0 : 66;
+    if (last && now - last < minStep) return;
+    const dt = last ? Math.min(0.08, (now - last) / 1000) : 0.016; last = now; t += dt; size();
+    const hot = (VF.ratio || 1) > 1.5; const speed = live ? (hot ? 1.5 : 1) : 0.35; const tg = target(); const share = VF.share;
+    if (live) { acc += dt * tg / 3; while (acc >= 1) { acc -= 1; if (P.n < tg) { const sd = Math.random() < share ? 1 : -1; const top = Math.random() < 0.5; const px = P.asp * (0.3 + Math.random() * 0.4);
+        spawn(px, top ? -0.04 : 1.04, (vfCx(sd, P.asp) - px) * 0.4, top ? 0.25 : -0.25, 3 + Math.random() * 1.5, 0.012 + Math.random() * 0.01, sd); } } }
+    else if (P.n < tg) { const sd = Math.random() < share ? 1 : -1; const a = Math.random() * 6.283, r = vfRadius(sd, share) * Math.sqrt(Math.random()); spawn(vfCx(sd, P.asp) + Math.cos(a) * r, 0.5 + Math.sin(a) * r, 0, 0, 6 + Math.random() * 6, 0.012 + Math.random() * 0.01, sd); }
+    for (let i = 0; i < N; i++) { if (!P.on[i]) continue; const cx = vfCx(P.sd[i], P.asp), rad = vfRadius(P.sd[i], share); const dx = cx - P.x[i], dy = 0.5 - P.y[i]; const d = Math.max(1e-3, Math.hypot(dx, dy));
+      const pull = d > rad ? 2.6 : 0.6, swirl = d < rad * 1.3 ? 0.5 : 0;
+      P.vx[i] += (dx * pull - dy / d * swirl) * dt * speed; P.vy[i] += (dy * pull + dx / d * swirl) * dt * speed;
+      const damp = 1 - (d > rad ? 0.9 : 1.8) * dt; P.vx[i] *= damp; P.vy[i] *= damp; P.x[i] += P.vx[i] * dt * speed; P.y[i] += P.vy[i] * dt * speed; P.age[i] += dt; if (P.age[i] > P.life[i]) kill(i); }
+    $('#vfSt').textContent = live ? '' : '非盤中・低功耗';
+    draw(0.5 + 0.5 * Math.sin(t * (live ? 3 : 1.4)), live, hot);
+  };
+  VF.raf = requestAnimationFrame(loop);
+}
+function vfSeed(s) { let h = 7; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 2147483646; return h + 1; }
+/** #rrggbb（或 rgb()）加透明度 */
+function hexA(c, a) {
+  c = String(c || '').trim(); a = Math.max(0, Math.min(1, a));
+  if (c[0] === '#') { let h = c.slice(1); if (h.length === 3) h = h.split('').map((x) => x + x).join(''); const n = parseInt(h.slice(0, 6), 16); return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`; }
+  const m = c.match(/\d+(\.\d+)?/g); return m && m.length >= 3 ? `rgba(${m[0]},${m[1]},${m[2]},${a})` : `rgba(128,128,128,${a})`;
 }
 // ───────── 經典型態（與 App ChartPatterns 相同規則）：頭肩頂底、M 頭 W 底、三角、楔形、旗形、支撐壓力轉換、訂單塊 ─────────
 const CP_T = {
