@@ -1164,7 +1164,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"cb67b72","at":"2026-11-27 20:22"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"ed18616","at":"2026-11-27 23:20"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -1396,6 +1396,267 @@ function oddMount() {
   const host = $('#ovOdd'); if (!host) return;
   ODD.el = host; oddRender();
   if (!ODD.loop) { ODD.loop = setInterval(oddTick, 10000); oddTick(); }
+}
+// ───────── 即時 K 棒動畫（個股頁「即時 K 棒」卡；10 款樣式，設定 `S.pref.kfx`；App 端列入待送交清單） ─────────
+// 當日 5 分 K（Yahoo）為底，盤中以 S.q 最新報價逐筆更新最後一根；只有最後一根與事件會動；分頁隱藏或卡片不在畫面時停止。
+const KFX_STY = [
+  { k: 'clean', n: '流暢經典', d: 'K 棒平滑成長、漲跌閃光、現價線與滾動數字', P: { bg: '#ffffff', grid: '#eef0f4', txt: '#6b7280', up: '#e5484d', dn: '#1f9d55' } },
+  { k: 'neon', n: '霓虹 HUD', d: '發光 K 棒、呼吸光暈、掃描線、HUD 價格框', P: { bg: '#060a13', grid: '#122039', txt: '#6f86b0', up: '#ff4d6d', dn: '#22e39a' } },
+  { k: 'part', n: '粒子能量', d: '成交化成光點匯入、大單爆開、內外盤分色量柱', P: { bg: '#0a0f1f', grid: '#18213a', txt: '#7d8db0', up: '#ff5a6a', dn: '#2fe0a0' } },
+  { k: 'ripple', n: '脈衝漣漪', d: '每筆成交漣漪、穿過關鍵價時整條線亮起並沿線擴散', P: { bg: '#fbfbfd', grid: '#eceef3', txt: '#6b7280', up: '#e5484d', dn: '#1f9d55', lvl: '#2563eb' } },
+  { k: 'heat', n: '熱力殘影', d: 'K 棒殘影、當日價量分布、現價熱帶', P: { bg: '#110c0a', grid: '#2a1f19', txt: '#a08a7a', up: '#ff5b4f', dn: '#35d08a' } },
+  { k: 'wire', n: '極簡線框', d: '紙白細線、上漲空心、每跳一次描線重描外框', P: { bg: '#fafaf7', grid: '#ececE6', txt: '#77776f', up: '#d0342c', dn: '#178a4c', acc: '#111111' } },
+  { k: 'crt', n: '復古終端', d: '綠色磷光像素、打字機報價、掃描線（單色，漲跌以亮度與 ▲▼ 區分）', P: { bg: '#021a0c', grid: '#0b3a1e', txt: '#2fae62', up: '#57ff9a', dn: '#1f8f4f' } },
+  { k: 'ink', n: '水墨', d: '宣紙筆觸 K 棒、墨滴暈染、大單朱紅印章', P: { bg: '#f2eadb', grid: '#e2d6c0', txt: '#8a7a62', up: '#b8322a', dn: '#2e6b55' } },
+  { k: 'iso', n: '立體方柱', d: '3D 方柱、頂面亮光、升降動畫', P: { bg: '#0f1622', grid: '#1c2636', txt: '#7e8ca3', up: '#ff5d5d', dn: '#2fd38a' } },
+  { k: 'glass', n: '玻璃質感', d: '流動光斑、玻璃 K 棒、液面晃動、大單氣泡', P: { bg: '#eef2f8', grid: 'rgba(90,110,150,.12)', txt: '#66728a', up: '#e5484d', dn: '#1f9d55' } },
+];
+const KFX_DARK = new Set(['neon', 'part', 'heat', 'crt', 'iso']);
+const KFX_DEF = { sty: 'clean', pick: true, ev: true, lvl: true, bigX: 5, N: 30, spd: 1, still: false };
+function kfxCfg() { const c = { ...KFX_DEF, ...(S.pref.kfx || {}) }; const cl = (v, a, b, d) => (isFinite(+v) ? Math.min(b, Math.max(a, +v)) : d);
+  return { ...c, sty: KFX_STY.some((s) => s.k === c.sty) ? c.sty : 'clean', bigX: cl(c.bigX, 2, 20, 5), N: cl(c.N, 16, 60, 30), spd: cl(c.spd, 0.5, 2, 1) }; }
+const kfxSty = (k) => KFX_STY.find((s) => s.k === k) || KFX_STY[0];
+const KFX = { list: new Set(), raf: 0, lt: 0 };
+const kfxRgba = (hex, a) => { if (hex[0] !== '#') return hex; const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; };
+const kfxEase = (x) => 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3);
+const kfxFmt = (v) => (v == null || !isFinite(v) ? '—' : v.toFixed(v >= 1000 ? 1 : 2));
+/** 建立一張即時 K 棒狀態；cs＝[{o,h,l,c,v,vi,vo,t}]（t 為該根起始毫秒），o＝{ sym, levels:[{v,label}], pb（價量分布刻度）, demo } */
+function kfxNew(cv, cs, o) {
+  const b = cs[cs.length - 1];
+  const st = { cv, ctx: cv.getContext('2d'), cs, o, cfg: kfxCfg(), disp: { c: b.c, h: b.h, l: b.l, v: b.v }, shift: 0, ymin: 0, ymax: 0, fl: [], rp: [], pt: [], gh: [], prof: {}, dv: [],
+    dir: b.c >= b.o ? 1 : -1, tag: { cur: kfxFmt(b.c), prev: '', t0: 0 }, lt: -1e9, msg: '', msgT: -1e9, lvT: -1e9, lvHit: null, vis: true, dirty: true, pp: null, seed: 7 };
+  st.sty = kfxSty(st.cfg.sty);
+  cs.slice(-60).forEach((x) => { const n = Math.max(1, Math.round((x.h - x.l) / o.pb) + 1), v = (x.v || 0) / n; for (let i = 0; i < n; i++) { const k = Math.round((x.l + i * o.pb) / o.pb); st.prof[k] = (st.prof[k] || 0) + v; } });
+  return st;
+}
+/** 一筆新成交：p 價格、dv 新增量、bt 所屬 K 棒起始時間（換根時新增一根） */
+function kfxTick(st, p, dv, now, bt, forceBig) {
+  const cs = st.cs; let b = cs[cs.length - 1];
+  if (bt && b.t && bt > b.t) { cs.push({ o: p, h: p, l: p, c: p, v: 0, vi: 0, vo: 0, t: bt }); if (cs.length > 240) cs.shift(); b = cs[cs.length - 1]; st.disp = { c: p, h: p, l: p, v: 0 }; st.shift = 1; st.gh = []; }
+  const old = b.c; b.c = p; b.h = Math.max(b.h, p); b.l = Math.min(b.l, p);
+  const dir = p > old ? 1 : p < old ? -1 : st.dir; st.dir = dir; dv = Math.max(0, dv || 0);
+  b.v = (b.v || 0) + dv; if (dir > 0) b.vo = (b.vo || 0) + dv; else b.vi = (b.vi || 0) + dv;
+  const nz = st.dv.filter((x) => x > 0), avg = nz.length ? nz.reduce((a, x) => a + x, 0) / nz.length : 0;
+  const big = forceBig || (dv > 0 && nz.length >= 8 && dv >= avg * st.cfg.bigX); if (dv > 0) { st.dv.push(dv); if (st.dv.length > 60) st.dv.shift(); }
+  const pk = Math.round(p / st.o.pb); st.prof[pk] = (st.prof[pk] || 0) + Math.max(dv, 1);
+  st.fl.push({ t: now, dir }); st.rp.push({ t: now, p, dir, big }); if (st.rp.length > 40) st.rp.shift();
+  st.gh.push({ o: b.o, h: b.h, l: b.l, c: p }); if (st.gh.length > 9) st.gh.shift();
+  const rnd = () => (st.seed = st.seed * 16807 % 2147483647) / 2147483647;
+  for (let k = 0, n = big ? 30 : 4; k < n; k++) st.pt.push({ t: now, dir, big, a: rnd() * Math.PI * 2, sp: 0.4 + rnd() * 0.8, ox: rnd(), oy: rnd(), life: 700 + rnd() * 500 });
+  if (st.pt.length > 400) st.pt.splice(0, st.pt.length - 400);
+  if (big && st.cfg.ev) { st.msg = (dir > 0 ? '外盤大單 ' : '內盤大單 ') + fmtInt(dv) + (isUs(st.o.sym || '') ? ' 股' : ' 張'); st.msgT = now; st.bigT = now; }
+  (st.o.levels || []).forEach((L) => { if (old < L.v && p >= L.v) { st.lvT = now; st.lvHit = L.v; if (st.cfg.ev) { st.msg = '突破' + L.label + ' ' + kfxFmt(L.v); st.msgT = now; } } else if (old > L.v && p <= L.v) { st.lvT = now; st.lvHit = L.v; if (st.cfg.ev) { st.msg = '跌破' + L.label + ' ' + kfxFmt(L.v); st.msgT = now; } } });
+  const tg = kfxFmt(p); if (tg !== st.tag.cur) st.tag = { cur: tg, prev: st.tag.cur, t0: now };
+  st.lt = now; st.dirty = true;
+}
+function kfxPaper(st, W, H) { if (st.pp && st.pp.width === W && st.pp.height === H) return st.pp; const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const g = cv.getContext('2d');
+  let s = 99; const r = () => (s = s * 16807 % 2147483647) / 2147483647; g.fillStyle = '#f2eadb'; g.fillRect(0, 0, W, H);
+  for (let i = 0; i < W * H / 40; i++) { g.fillStyle = `rgba(120,95,60,${r() * 0.06})`; g.fillRect(r() * W, r() * H, 1 + r() * 2, 1); }
+  for (let i = 0; i < 40; i++) { g.strokeStyle = `rgba(150,120,80,${0.04 + r() * 0.05})`; g.beginPath(); const x = r() * W, y = r() * H; g.moveTo(x, y); g.quadraticCurveTo(x + r() * 40, y + r() * 10, x + 20 + r() * 60, y + r() * 6); g.stroke(); }
+  return (st.pp = cv); }
+function kfxPrism(c, x, y1, y2, bw, col, topA, al) { const dx = bw * 0.5, dy = bw * 0.36, h = Math.max(1.5, y2 - y1);
+  c.fillStyle = kfxRgba(col, al); c.fillRect(x - bw / 2, y1, bw, h);
+  c.fillStyle = kfxRgba(col, 0.55 * al); c.beginPath(); c.moveTo(x + bw / 2, y1); c.lineTo(x + bw / 2 + dx, y1 - dy); c.lineTo(x + bw / 2 + dx, y1 - dy + h); c.lineTo(x + bw / 2, y1 + h); c.closePath(); c.fill();
+  c.fillStyle = `rgba(255,255,255,${topA})`; c.beginPath(); c.moveTo(x - bw / 2, y1); c.lineTo(x - bw / 2 + dx, y1 - dy); c.lineTo(x + bw / 2 + dx, y1 - dy); c.lineTo(x + bw / 2, y1); c.closePath(); c.fill();
+  c.fillStyle = kfxRgba(col, 0.9); c.globalAlpha = 0.5 * al; c.fill(); c.globalAlpha = 1; }
+/** 樣式是否有持續性動畫（不只在有成交時動） */
+const kfxCont = (k) => k === 'neon' || k === 'crt' || k === 'glass' || k === 'iso';
+function kfxDraw(st, now, dt) {
+  const cv = st.cv, W = cv.clientWidth, H = cv.clientHeight; if (!W || !H) return; const dpr = Math.min(2, pxRatio());
+  if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+  const c = st.ctx; c.setTransform(dpr, 0, 0, dpr, 0, 0); const P = st.sty.P, k = st.sty.k, cs = st.cs, sp = st.cfg.spd;
+  const rm = 64, top = 26, ph = H * 0.62, vt = top + ph + 10, vh = H - vt - 18;
+  const N = Math.min(st.cfg.N, Math.max(12, Math.floor((W - rm) / 7))), cw = (W - rm - 6) / N;
+  const b = cs[cs.length - 1], D = st.disp, a = 1 - Math.exp(-dt * sp / 90);
+  D.c += (b.c - D.c) * a; D.h += (b.h - D.h) * a; D.l += (b.l - D.l) * a; D.v += ((b.v || 0) - D.v) * a;
+  D.h = Math.max(D.h, D.c, b.o); D.l = Math.min(D.l, D.c, b.o);
+  st.shift = Math.max(0, st.shift - dt * sp / 450);
+  const vis = cs.slice(-N - 1);
+  const lvs = st.cfg.lvl ? (st.o.levels || []) : [];
+  let lo = Math.min(...vis.map((x) => x.l)), hi = Math.max(...vis.map((x) => x.h));
+  lvs.forEach((L) => { if (L.v > lo - (hi - lo) * 0.6 && L.v < hi + (hi - lo) * 0.6) { lo = Math.min(lo, L.v); hi = Math.max(hi, L.v); } });
+  const pad = (hi - lo) * 0.08 || Math.max(0.01, hi * 0.002);
+  if (!st.ymax) { st.ymin = lo - pad; st.ymax = hi + pad; } st.ymin += (lo - pad - st.ymin) * a * 0.6; st.ymax += (hi + pad - st.ymax) * a * 0.6;
+  const Y = (v) => top + (st.ymax - v) / (st.ymax - st.ymin) * ph;
+  const vmax = Math.max(...vis.map((x) => x.v || 0), D.v, 1e-9);
+  const X = (kk) => 4 + (N - 1 - kk + st.shift) * cw + cw / 2;
+  if (k === 'ink') c.drawImage(kfxPaper(st, W, H), 0, 0, W, H);
+  else if (k === 'iso') { const g = c.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#162032'); g.addColorStop(1, '#0a0f18'); c.fillStyle = g; c.fillRect(0, 0, W, H); }
+  else { c.fillStyle = P.bg; c.fillRect(0, 0, W, H); }
+  if (k === 'glass') { const t = now / 9000; [[0.25 + 0.15 * Math.sin(t), 0.3 + 0.2 * Math.cos(t * 1.3), 'rgba(255,150,190,.38)'], [0.7 + 0.12 * Math.cos(t * 0.8), 0.55 + 0.2 * Math.sin(t * 1.1), 'rgba(120,170,255,.38)'], [0.45 + 0.2 * Math.sin(t * 0.6 + 2), 0.85, 'rgba(110,230,190,.3)']].forEach(([fx, fy, col]) => { const x = fx * W, y = fy * H, R = Math.max(W, H) * 0.45; const g = c.createRadialGradient(x, y, 0, x, y, R); g.addColorStop(0, col); g.addColorStop(1, 'rgba(255,255,255,0)'); c.fillStyle = g; c.fillRect(0, 0, W, H); }); }
+  // 格線與價格刻度
+  c.font = '500 11px ui-monospace,Menlo,monospace'; c.textBaseline = 'middle'; c.textAlign = 'left';
+  const raw = (st.ymax - st.ymin) / 4, mag = Math.pow(10, Math.floor(Math.log10(raw || 1))), stepP = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((x) => x >= raw) || raw;
+  for (let p = Math.ceil(st.ymin / stepP) * stepP; p < st.ymax; p += stepP) { const y = Y(p); if (y < top - 4 || y > top + ph + 4) continue; c.strokeStyle = P.grid; c.lineWidth = 1; c.beginPath(); c.moveTo(0, y); c.lineTo(W - rm, y); c.stroke(); c.fillStyle = P.txt; c.fillText(kfxFmt(p), W - rm + 8, y); }
+  c.strokeStyle = P.grid; c.beginPath(); c.moveTo(0, vt - 4); c.lineTo(W - rm, vt - 4); c.stroke();
+  // 時間刻度
+  c.fillStyle = P.txt; c.font = '500 10px ui-monospace,Menlo,monospace'; c.textBaseline = 'bottom';
+  for (let i = 0; i < vis.length; i++) { const kk = vis.length - 1 - i; if (kk % 6 || !vis[i].t) continue; const x = X(kk); if (x < 14 || x > W - rm - 14) continue; c.textAlign = 'center'; c.fillText(hm(vis[i].t), x, H - 2); }
+  c.textAlign = 'left'; c.textBaseline = 'middle';
+  c.save(); c.beginPath(); c.rect(0, 0, W - rm, H - 14); c.clip();
+  if (k === 'neon') { const sy = top + ((now * sp / 2600) % 1) * (ph + 40) - 20; const g = c.createLinearGradient(0, sy - 30, 0, sy + 4); g.addColorStop(0, 'rgba(80,140,255,0)'); g.addColorStop(1, 'rgba(80,140,255,.16)'); c.fillStyle = g; c.fillRect(0, sy - 30, W - rm, 34); }
+  if (k === 'heat') { const ks = Object.keys(st.prof); const pm = Math.max(1, ...ks.map((x) => st.prof[x])); const bh = Math.max(2, Math.abs(Y(0) - Y(st.o.pb)) - 1);
+    ks.forEach((x) => { const v = st.prof[x] / pm, y = Y(+x * st.o.pb); if (y < top - 4 || y > top + ph + 4) return; const L = 70 * v; const g = c.createLinearGradient(W - rm - L, 0, W - rm, 0); g.addColorStop(0, 'rgba(255,120,40,0)'); g.addColorStop(1, `rgba(255,${150 + 90 * v | 0},60,${0.25 + 0.55 * v})`); c.fillStyle = g; c.fillRect(W - rm - L, y - bh / 2, L, bh); });
+    const y = Y(D.c), g = c.createLinearGradient(0, y - 14, 0, y + 14); g.addColorStop(0, 'rgba(255,110,40,0)'); g.addColorStop(0.5, 'rgba(255,110,40,.14)'); g.addColorStop(1, 'rgba(255,110,40,0)'); c.fillStyle = g; c.fillRect(0, y - 14, W - rm, 28); }
+  // 關鍵價（三關）
+  if (lvs.length) { const age = now - st.lvT, hot = age < 1400 / sp, lc = P.lvl || (KFX_DARK.has(k) ? '#8fb3ff' : '#2563eb');
+    lvs.forEach((L) => { const y = Y(L.v); if (y < top - 2 || y > top + ph + 2) return; const strong = hot && st.lvHit === L.v && k === 'ripple';
+      c.setLineDash(strong ? [] : [6, 5]); c.strokeStyle = strong ? lc : kfxRgba(lc, k === 'ripple' ? 0.55 : 0.35); c.lineWidth = strong ? 1 + 3 * (1 - age * sp / 1400) : 1; c.beginPath(); c.moveTo(0, y); c.lineTo(W - rm, y); c.stroke(); c.setLineDash([]);
+      c.fillStyle = kfxRgba(lc, 0.85); c.font = '500 11px system-ui,sans-serif'; c.textBaseline = 'bottom'; c.fillText(L.label + ' ' + kfxFmt(L.v), 6, y - 3); c.textBaseline = 'middle'; });
+    if (k === 'ripple' && hot && st.lvHit != null) { const y = Y(st.lvHit), x0 = X(0), e = kfxEase(age * sp / 1400); for (const s of [-1, 1]) { c.fillStyle = kfxRgba(lc, 1 - e); c.beginPath(); c.arc(x0 + s * e * W * 0.7, y, 4 + 3 * (1 - e), 0, 7); c.fill(); }
+      c.strokeStyle = kfxRgba(lc, 0.7 * (1 - e)); c.lineWidth = 2; c.beginPath(); c.arc(x0, y, 8 + 40 * e, 0, 7); c.stroke(); } }
+  if (k === 'clean') { st.fl = st.fl.filter((f) => now - f.t < 450 / sp); const f = st.fl[st.fl.length - 1]; if (f) { c.fillStyle = kfxRgba(f.dir > 0 ? P.up : P.dn, 0.22 * (1 - (now - f.t) * sp / 450)); c.fillRect(X(0) - cw / 2, top - 6, cw, ph + 12); } }
+  if (k === 'heat') st.gh.forEach((g, i) => { const n = st.gh.length, al = 0.08 + 0.22 * (i / n), off = (n - i) * 2.2; const x = X(0) - off, col = g.c >= g.o ? P.up : P.dn; c.strokeStyle = kfxRgba(col, al); c.lineWidth = 1; const y1 = Y(Math.max(g.o, g.c)), y2 = Y(Math.min(g.o, g.c)); c.strokeRect(x - cw * 0.34, y1, cw * 0.68, Math.max(1, y2 - y1)); });
+  // K 棒與量柱
+  const rr = (xx, yy, ww, hh, r) => { c.beginPath(); if (c.roundRect) c.roundRect(xx, yy, ww, hh, Math.max(0, Math.min(r, ww / 2, hh / 2))); else c.rect(xx, yy, ww, hh); };
+  for (let i = 0; i < vis.length; i++) {
+    const kk = vis.length - 1 - i, x = X(kk); if (x < -cw || x > W - rm + cw) continue; const bar = vis[i], last = kk === 0;
+    const o = bar.o, cl = last ? D.c : bar.c, h = last ? D.h : bar.h, l = last ? D.l : bar.l, up = cl >= o, col = up ? P.up : P.dn;
+    const bw = Math.max(2, cw * 0.66), y1 = Y(Math.max(o, cl)), y2 = Y(Math.min(o, cl));
+    const vv = last ? D.v : (bar.v || 0), vhh = vv / vmax * vh, bh = Math.max(1.2, y2 - y1);
+    if (k === 'neon') { c.fillStyle = kfxRgba(col, last ? 0 : 0.13); c.fillRect(x - bw / 2 - 2, y1 - 2, bw + 4, bh + 4);
+      if (last) { const br = 0.55 + 0.45 * Math.sin(now * sp / 420); const R = cw * 2.2 + 8 * br, gy = (y1 + y2) / 2; const g = c.createRadialGradient(x, gy, 1, x, gy, R); g.addColorStop(0, kfxRgba(col, 0.45 * br + 0.15)); g.addColorStop(1, kfxRgba(col, 0)); c.fillStyle = g; c.fillRect(x - R, gy - R, R * 2, R * 2); } }
+    if (k === 'wire') { c.strokeStyle = col; c.lineWidth = 1; c.beginPath(); c.moveTo(x, Y(h)); c.lineTo(x, y1); c.moveTo(x, y1 + bh); c.lineTo(x, Y(l)); c.stroke();
+      if (up) { c.lineWidth = 1.2; c.strokeRect(x - bw / 2 + 0.6, y1 + 0.6, bw - 1.2, Math.max(1, bh - 1.2)); } else { c.fillStyle = col; c.fillRect(x - bw / 2, y1, bw, bh); }
+      if (last) { const e = kfxEase((now - st.lt) * sp / 340), L = 2 * (bw + bh) * e; c.strokeStyle = P.acc; c.lineWidth = 2; c.beginPath(); const x0 = x - bw / 2, pts = [[x0, y1], [x0 + bw, y1], [x0 + bw, y1 + bh], [x0, y1 + bh], [x0, y1]]; let rem = L; c.moveTo(x0, y1);
+        for (let j = 1; j < pts.length && rem > 0; j++) { const [ax, ay] = pts[j - 1], [bx, by] = pts[j], sl = Math.hypot(bx - ax, by - ay) || 1, t = Math.min(1, rem / sl); c.lineTo(ax + (bx - ax) * t, ay + (by - ay) * t); rem -= sl; } c.stroke(); }
+      c.fillStyle = kfxRgba(col, 0.28); c.fillRect(x - 0.6, vt + vh - vhh, 1.2, vhh); c.fillRect(x - bw / 2, vt + vh - 1, bw, 1); continue; }
+    if (k === 'crt') { const sn = (v) => Math.round(v / 3) * 3, fl = last ? 0.75 + 0.25 * Math.sin(now / 37) * Math.sin(now / 91) : 1;
+      c.fillStyle = kfxRgba(col, 0.9 * fl); c.fillRect(sn(x) - 1, sn(Y(h)), 2, sn(Y(l)) - sn(Y(h)));
+      if (up) c.fillRect(sn(x - bw / 2), sn(y1), sn(bw), Math.max(3, sn(bh))); else { c.strokeStyle = kfxRgba(col, 0.9 * fl); c.lineWidth = 2; c.strokeRect(sn(x - bw / 2) + 1, sn(y1) + 1, sn(bw) - 2, Math.max(2, sn(bh) - 2)); }
+      for (let yy = vt + vh - 3; yy > vt + vh - vhh; yy -= 4) c.fillRect(sn(x - bw / 2), yy, sn(bw), 3); continue; }
+    if (k === 'ink') { const sd = (j) => Math.sin((bar.t || i) * 0.0001 + i * 12.9898 + j * 78.233) * 0.5; c.strokeStyle = kfxRgba(col, 0.75); c.lineWidth = 1.3; c.lineCap = 'round'; c.beginPath(); c.moveTo(x + sd(1), Y(h)); c.quadraticCurveTo(x + sd(2) * 2, (Y(h) + Y(l)) / 2, x + sd(3), Y(l)); c.stroke();
+      for (let j = 0; j < 3; j++) { c.fillStyle = kfxRgba(col, 0.32 + 0.1 * j); rr(x - bw / 2 + sd(j + 4) * 2, y1 + sd(j + 7) * 2, bw - j, bh, 4); c.fill(); }
+      c.fillStyle = kfxRgba(col, 0.16); c.fillRect(x - bw / 2, vt + vh - vhh, bw, vhh); c.lineCap = 'butt'; continue; }
+    if (k === 'iso') { c.strokeStyle = kfxRgba(col, 0.8); c.lineWidth = 1; c.beginPath(); c.moveTo(x, Y(h)); c.lineTo(x, Y(l)); c.stroke();
+      kfxPrism(c, x, y1, y1 + bh, bw * 0.86, col, last ? 0.35 + 0.25 * Math.sin(now * sp / 300) : 0.18, 1); kfxPrism(c, x, vt + vh - vhh, vt + vh, bw * 0.86, col, 0.08, 0.5); continue; }
+    if (k === 'glass') { c.strokeStyle = kfxRgba(col, 0.55); c.lineWidth = 1.2; c.lineCap = 'round'; c.beginPath(); c.moveTo(x, Y(h)); c.lineTo(x, y1); c.moveTo(x, y1 + bh); c.lineTo(x, Y(l)); c.stroke(); c.lineCap = 'butt';
+      const gh = Math.max(last ? 16 : 4, bh); rr(x - bw / 2, y1, bw, gh, bw / 2); c.fillStyle = 'rgba(255,255,255,.35)'; c.fill(); c.fillStyle = kfxRgba(col, last ? 0.12 : 0.3); c.fill(); c.strokeStyle = kfxRgba(col, 0.75); c.lineWidth = 1; c.stroke();
+      if (last) { c.save(); rr(x - bw / 2, y1, bw, gh, bw / 2); c.clip(); const amp = 3.5 * Math.exp(-(now - st.lt) * sp / 520), lv = y1 + gh * 0.18; c.fillStyle = kfxRgba(col, 0.62); c.beginPath(); c.moveTo(x - bw / 2 - 2, y1 + gh + 2);
+        for (let xx = -bw / 2 - 2; xx <= bw / 2 + 2; xx += 2) c.lineTo(x + xx, lv + Math.sin(xx * 0.5 + now * sp / 90) * amp); c.lineTo(x + bw / 2 + 2, y1 + gh + 2); c.closePath(); c.fill();
+        st.pt.forEach((p) => { if (!p.big) return; const e = (now - p.t) / p.life; if (e >= 1) return; c.strokeStyle = `rgba(255,255,255,${0.9 * (1 - e)})`; c.lineWidth = 1; c.beginPath(); c.arc(x - bw / 2 + 3 + p.ox * (bw - 6), y1 + gh - e * (gh + 20) * p.sp, 1.2 + p.oy * 2, 0, 7); c.stroke(); }); c.restore(); }
+      c.fillStyle = 'rgba(255,255,255,.6)'; c.fillRect(x - bw / 2 + 2, y1 + 2, Math.max(1, bw * 0.16), Math.max(0, gh - 4));
+      rr(x - bw / 2, vt + vh - vhh, bw, Math.max(3, vhh), 3); c.fillStyle = kfxRgba(col, 0.22); c.fill(); c.strokeStyle = kfxRgba(col, 0.5); c.stroke(); continue; }
+    c.strokeStyle = col; c.lineWidth = 1; c.beginPath(); c.moveTo(x, Y(h)); c.lineTo(x, Y(l)); c.stroke();
+    c.fillStyle = col; c.fillRect(x - bw / 2, y1, bw, bh);
+    if (k === 'part') { const tot = Math.max(1e-9, (bar.vi || 0) + (bar.vo || 0)), hi2 = vhh * (bar.vo || 0) / tot; c.fillStyle = kfxRgba(P.dn, 0.75); c.fillRect(x - bw / 2, vt + vh - vhh, bw, vhh - hi2); c.fillStyle = kfxRgba(P.up, 0.85); c.fillRect(x - bw / 2, vt + vh - vhh, bw, hi2); }
+    else { c.fillStyle = kfxRgba(col, last ? 0.8 : 0.45); c.fillRect(x - bw / 2, vt + vh - vhh, bw, vhh); }
+  }
+  // 漣漪／墨滴／印章／粒子
+  if (k === 'ripple') { st.rp = st.rp.filter((p) => now - p.t < (p.big ? 1100 : 700) / sp); st.rp.forEach((p) => { const e = kfxEase((now - p.t) * sp / (p.big ? 1100 : 700)); c.strokeStyle = kfxRgba(p.dir > 0 ? P.up : P.dn, 0.6 * (1 - e)); c.lineWidth = p.big ? 2.5 : 1.5; c.beginPath(); c.arc(X(0), Y(p.p), 4 + (p.big ? 46 : 20) * e, 0, 7); c.stroke(); }); }
+  if (k === 'ink') { st.rp = st.rp.filter((p) => now - p.t < 1600 / sp); st.rp.forEach((p) => { const e = kfxEase((now - p.t) * sp / 1600), R = 3 + (p.big ? 30 : 13) * e, y = Y(p.p), x = X(0); const g = c.createRadialGradient(x, y, 0, x, y, R); g.addColorStop(0, `rgba(30,25,20,${0.22 * (1 - e)})`); g.addColorStop(1, 'rgba(30,25,20,0)'); c.fillStyle = g; c.beginPath(); c.arc(x, y, R, 0, 7); c.fill(); });
+    const sa = now - (st.bigT || -1e9); if (sa < 1800) { const sc = 1 + 0.5 * (1 - kfxEase(sa / 220)), al = sa < 1400 ? 0.9 : 0.9 * (1 - (sa - 1400) / 400); c.save(); c.translate(W - rm - 46, top + 30); c.rotate(-0.14); c.scale(sc, sc); c.globalAlpha = al; c.fillStyle = '#c0392b'; c.fillRect(-22, -22, 44, 44); c.strokeStyle = '#f2eadb'; c.lineWidth = 2; c.strokeRect(-18, -18, 36, 36); c.fillStyle = '#f7efe0'; c.font = '900 15px serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('大單', 0, 1); c.restore(); } }
+  st.pt = st.pt.filter((p) => now - p.t < p.life / sp);
+  if (k === 'part') { const tx = X(0), ty = Y(D.c); c.globalCompositeOperation = 'lighter';
+    st.pt.forEach((p) => { const e = (now - p.t) * sp / p.life, col = p.dir > 0 ? P.up : P.dn; let x, y;
+      if (p.big) { const R = 10 + 90 * kfxEase(e) * p.sp; x = tx + Math.cos(p.a) * R; y = ty + Math.sin(p.a) * R; }
+      else { const sx = W - rm - 10 - p.ox * 60, sy = vt + vh * p.oy, ee = kfxEase(e); x = sx + (tx - sx) * ee + Math.sin(e * 6 + p.a) * 6 * (1 - ee); y = sy + (ty - sy) * ee; }
+      c.fillStyle = kfxRgba(col, 0.9 * (1 - e) + 0.1); c.beginPath(); c.arc(x, y, p.big ? 2.2 : 1.8, 0, 7); c.fill(); }); c.globalCompositeOperation = 'source-over'; }
+  // 現價線
+  const py = Y(D.c), pc = st.dir > 0 ? P.up : P.dn;
+  c.setLineDash(k === 'neon' || k === 'crt' ? [2, 4] : k === 'wire' ? [] : [5, 4]); c.strokeStyle = k === 'wire' ? 'rgba(17,17,17,.5)' : kfxRgba(pc, 0.75); c.lineWidth = k === 'wire' ? 0.6 : 1; c.beginPath(); c.moveTo(0, py); c.lineTo(W - rm, py); c.stroke(); c.setLineDash([]);
+  // 事件字幕
+  const ma = now - st.msgT; if (ma < 1800 && st.msg && !(k === 'ink' && /大單/.test(st.msg)) && k !== 'crt') { const al = ma < 1400 ? 1 : 1 - (ma - 1400) / 400, dk = KFX_DARK.has(k); c.font = '700 13px system-ui,sans-serif'; c.textBaseline = 'top'; const tw = c.measureText(st.msg).width + 16;
+    c.fillStyle = dk ? `rgba(255,255,255,${0.1 * al})` : `rgba(17,24,39,${0.07 * al})`; c.fillRect(8, 4, tw, 20); c.fillStyle = dk ? `rgba(240,244,255,${al})` : `rgba(17,24,39,${al})`; c.fillText(st.msg, 16, 7); c.textBaseline = 'middle'; }
+  if (k === 'crt') { const s = `> ${st.tag.cur} ${st.dir > 0 ? '▲' : '▼'}`, nn = Math.min(s.length, Math.floor((now - st.lt) / 28)); c.font = '700 12px ui-monospace,Menlo,monospace'; c.fillStyle = P.up; c.textBaseline = 'top'; c.fillText(s.slice(0, Math.max(1, nn)) + ((now / 400 | 0) % 2 ? '█' : ' '), 8, 6); c.textBaseline = 'middle'; }
+  c.restore();
+  if (k === 'crt') { c.fillStyle = 'rgba(0,0,0,.22)'; for (let y = 0; y < H; y += 3) c.fillRect(0, y, W, 1); const g = c.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, W * 0.75); g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,.55)'); c.fillStyle = g; c.fillRect(0, 0, W, H); }
+  // 右側價格標籤（滾動數字）
+  const th = 20, ty0 = Math.min(H - th, Math.max(0, py - th / 2)), hud = k === 'neon' || k === 'crt';
+  if (hud) { c.strokeStyle = pc; c.lineWidth = 1.2; c.fillStyle = kfxRgba(pc, 0.14); c.fillRect(W - rm + 3, ty0, rm - 6, th); c.beginPath(); c.moveTo(W - rm + 3, ty0 + 5); c.lineTo(W - rm + 3, ty0); c.lineTo(W - rm + 9, ty0); c.moveTo(W - 9, ty0 + th); c.lineTo(W - 3, ty0 + th); c.lineTo(W - 3, ty0 + th - 5); c.stroke(); }
+  else { c.fillStyle = pc; c.beginPath(); c.moveTo(W - rm, py); c.lineTo(W - rm + 6, ty0); c.lineTo(W - 2, ty0); c.lineTo(W - 2, ty0 + th); c.lineTo(W - rm + 6, ty0 + th); c.closePath(); c.fill(); }
+  c.save(); c.beginPath(); c.rect(W - rm + 4, ty0, rm - 6, th); c.clip(); c.font = '700 12px ui-monospace,Menlo,monospace'; c.fillStyle = hud ? pc : '#fff'; c.textAlign = 'left';
+  const e = k !== 'part' && k !== 'heat' ? kfxEase((now - st.tag.t0) * sp / 260) : 1, cx = W - rm + 9, cy = ty0 + th / 2;
+  if (e < 1 && st.tag.prev) { const s = st.dir > 0 ? 1 : -1; c.globalAlpha = 1 - e; c.fillText(st.tag.prev, cx, cy - s * th * e); c.globalAlpha = e; c.fillText(st.tag.cur, cx, cy + s * th * (1 - e)); c.globalAlpha = 1; } else c.fillText(st.tag.cur, cx, cy);
+  c.restore();
+  st.dirty = false;
+}
+/** 共用動畫迴圈：只畫看得到、且正在動（近 2.5 秒有成交、或樣式有持續動畫且盤中）的卡片 */
+function kfxRun() {
+  if (KFX.raf) return;
+  const loop = (now) => {
+    const dt = Math.min(100, now - (KFX.lt || now)); KFX.lt = now; let any = false;
+    KFX.list.forEach((st) => {
+      if (!st.cv.isConnected) { KFX.list.delete(st); if (st.iv) clearInterval(st.iv); if (st.io) st.io.disconnect(); return; }
+      if (st.feed) st.feed(now);
+      if (document.hidden || !st.vis) return;
+      const moving = !st.cfg.still && (now - st.lt < 2500 || st.shift > 0 || (kfxCont(st.sty.k) && st.live));
+      if (moving || st.dirty) kfxDraw(st, now, moving ? dt : 1000);
+      any = true;
+    });
+    KFX.raf = KFX.list.size ? requestAnimationFrame(loop) : 0; if (!any && !KFX.list.size) KFX.lt = 0;
+  };
+  KFX.raf = requestAnimationFrame(loop);
+}
+const kfxLive = (sym) => (isUs(sym) ? ['PRE', 'REG', 'POST'].includes(usPhase().k) : twOpen());
+/** 個股頁「即時 K 棒」卡 */
+async function kfxMount(host, sym) {
+  if (!host) return; const cfg = kfxCfg(), sty = kfxSty(cfg.sty);
+  const pick = cfg.pick ? `<div class="seg" id="kfxPick" style="flex-wrap:nowrap;overflow-x:auto;max-width:100%;scrollbar-width:none;margin:2px 0 8px">${KFX_STY.map((s) => `<button data-kx="${s.k}" class="${s.k === sty.k ? 'on' : ''}" style="white-space:nowrap;flex:none">${s.n}</button>`).join('')}</div>` : '';
+  host.innerHTML = `<div class="card"><h2>即時 K 棒<span class="r" style="display:inline-flex;gap:6px;align-items:center"><span class="small muted">5 分 K · ${esc(sty.n)}</span><button class="btn sm" id="kfxG" title="即時 K 棒設定">⚙</button></span></h2>${pick}
+    <div style="position:relative;height:300px;border-radius:10px;overflow:hidden"><canvas style="position:absolute;inset:0;width:100%;height:100%;display:block"></canvas></div>
+    <div class="row between small muted" style="margin-top:4px"><span id="kfxS">載入當日 5 分 K…</span></div>
+    <div class="small muted" style="margin-top:4px">動畫只呈現價格與成交量的變化，不代表任何買賣建議。</div></div>`;
+  $('#kfxG', host).onclick = async () => { if (await kfxSettings()) kfxMount(host, sym); };
+  $$('[data-kx]', host).forEach((b) => b.onclick = () => { S.pref.kfx = { ...(S.pref.kfx || {}), sty: b.dataset.kx }; savePref(); kfxMount(host, sym); });
+  const cur = $('#kfxPick .on', host); if (cur) cur.scrollIntoView({ block: 'nearest', inline: 'center' });
+  const us = isUs(sym), r = await fetchYahoo(ysym(sym), '5d', '5m', 30);
+  if (!host.isConnected) return; const msg = $('#kfxS', host);
+  if (!r || !r.timestamp) { msg.textContent = '無法取得當日 5 分 K'; return; }
+  const q0 = r.indicators.quote[0], day = (t) => new Date((t + 8 * 3600) * 1000).toISOString().slice(0, 10);
+  const lastDay = day(r.timestamp[r.timestamp.length - 1]);
+  let cs = r.timestamp.map((t, i) => (q0.close[i] == null || q0.open[i] == null || day(t) !== lastDay ? null : { t: t * 1000, o: q0.open[i], h: q0.high[i], l: q0.low[i], c: q0.close[i], v: us ? q0.volume[i] || 0 : (q0.volume[i] || 0) / 1000 })).filter(Boolean);
+  if (!cs.length) { msg.textContent = '沒有當日 5 分 K 資料'; return; }
+  cs.forEach((x) => { if (x.c >= x.o) { x.vo = x.v; x.vi = 0; } else { x.vi = x.v; x.vo = 0; } });
+  const lastC = cs[cs.length - 1].c, pb = us ? Math.max(0.01, lastC * 0.001) : twTick(lastC, D.isEtf(sym));
+  let levels = [];
+  if (cfg.lvl) { try { const dk = sym + '2y'; const daily = barCache[dk] || (barCache[dk] = await loadBars(sym, '2y')); const kl = keyLevelsOf(daily, sym); if (kl) levels = kl.lv.map((x) => ({ v: x.v, label: x.label })); } catch (e) {} }
+  if (!host.isConnected) return;
+  const cv = $('canvas', host), st = kfxNew(cv, cs, { sym, levels, pb });
+  const q = S.q[sym] || {}; st.lastP = q.price; st.lastV = us ? q.vol : q.volLots;
+  st.io = new IntersectionObserver((en) => { st.vis = en[0].isIntersecting; if (st.vis) st.dirty = true; }); st.io.observe(cv);
+  const status = () => { const live = st.live = kfxLive(sym); msg.textContent = live ? '盤中即時 · 最後一筆 ' + (st.lt > 0 ? new Date(Date.now() - (performance.now() - st.lt)).toLocaleTimeString('zh-TW', { hour12: false }) : '等待成交') : '非交易時段 · 顯示 ' + lastDay.replace(/-/g, '/') + ' 的 5 分 K'; };
+  st.feed = () => { const q = S.q[sym]; if (!q || !(q.price > 0) || !st.live) return; const v = us ? q.vol : q.volLots;
+    if (q.price === st.lastP && v === st.lastV) return; const dv = st.lastV != null && v != null ? v - st.lastV : 0; st.lastP = q.price; st.lastV = v;
+    const nowMs = Date.now(); kfxTick(st, q.price, dv, performance.now(), Math.floor(nowMs / 300000) * 300000); status(); };
+  status(); st.iv = setInterval(() => { status(); if (st.live && !(us ? false : fgFresh(sym)) && Date.now() - ((S.q[sym] || {}).time || 0) > 8000) refreshQuotes([sym]).catch(() => {}); }, 10000);
+  KFX.list.add(st); kfxRun();
+}
+/** 示範資料（設定頁預覽用） */
+function kfxDemo(seed) {
+  let s = seed; const r = () => (s = s * 16807 % 2147483647) / 2147483647; const T = 0.05, qz = (v) => Math.round(v / T) * T;
+  const cs = []; let p = 52.3; const t0 = Date.now() - 30 * 300000;
+  for (let i = 0; i < 30; i++) { const o = p; let h = o, l = o, c = o, vi = 0, vo = 0; for (let k = 0; k < 12; k++) { const d = qz((r() - 0.5 + 0.08 * Math.sin(i / 5)) * 0.32); c = qz(c + d); h = Math.max(h, c); l = Math.min(l, c); const v = 20 + r() * 60; if (d >= 0) vo += v; else vi += v; }
+    cs.push({ o, h, l, c, vi, vo, v: vi + vo, t: t0 + i * 300000 }); p = c; }
+  return { cs, r, T, qz };
+}
+/** 即時 K 棒設定：頂端即時預覽（示範報價，可模擬大單／突破）＋樣式卡＋細項；儲存才套用 */
+async function kfxSettings() {
+  const C = kfxCfg(); const OPEN = new Set(['sty', 'ev']); let st = null, acc = 0, n = 0;
+  const RS = { sty: ['sty', 'pick'], ev: ['ev', 'bigX'], lvl: ['lvl'], view: ['N', 'spd', 'still'] };
+  const form = () => fxSec(OPEN, 'sty', '樣式', kfxSty(C.sty).n, `<div class="grid g2" style="gap:6px">${KFX_STY.map((s) => `<button type="button" class="btn${s.k === C.sty ? ' primary' : ''}" data-sg="sty" data-v2="${s.k}" style="text-align:left;height:auto;padding:8px 10px;white-space:normal"><b>${s.n}</b><div class="small" style="opacity:.8;font-weight:400">${s.d}</div></button>`).join('')}</div>` + `<div>${fxCk(C, 'pick', '卡片上方顯示樣式切換列')}</div>`, C)
+    + fxSec(OPEN, 'ev', '事件提示', C.ev ? '大單＝平均量 ' + C.bigX + ' 倍' : '關閉', fxRg(C, 'bigX', '大單門檻（單筆量 ≥ 近期平均的幾倍）', 2, 20, 1, ' 倍') + '<div class="small muted">事件提示會在圖上短暫顯示「外盤大單／內盤大單」與「突破／跌破三關價」。</div>', C, 'ev')
+    + fxSec(OPEN, 'lvl', '三關價線', C.lvl ? '顯示' : '不顯示', '<div class="small muted">依前一交易日高低點計算上關、中關、下關；價格穿過時觸發事件（脈衝漣漪款有亮線與擴散）。</div>', C, 'lvl')
+    + fxSec(OPEN, 'view', '顯示與速度', C.N + ' 根・' + C.spd + '×', fxRg(C, 'N', '顯示根數', 16, 60, 2, ' 根') + fxRg(C, 'spd', '動畫速度', 0.5, 2, 0.1, '×') + `<div>${fxCk(C, 'still', '靜態模式（不播放動畫，只更新數字，最省電）')}</div>`, C)
+    + '<div style="text-align:right;margin-top:4px"><button type="button" class="btn sm" data-rall>全部回預設</button></div>';
+  const ok = await dialog('即時 K 棒設定', `<div style="position:sticky;top:-18px;z-index:3;background:var(--card);padding:2px 0 4px"><div style="position:relative;height:220px;border-radius:10px;overflow:hidden"><canvas id="kxPv" style="position:absolute;inset:0;width:100%;height:100%;display:block"></canvas></div>
+    <div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;margin-top:4px"><span class="small muted" style="align-self:center;margin-right:auto">預覽為示範資料</span><button type="button" class="btn sm" id="kxB">模擬大單</button><button type="button" class="btn sm" id="kxK">模擬突破</button></div></div><div id="kxF"></div>`, [['', '取消'], ['ok', '儲存', 'primary']], (root) => {
+    const F = $('#kxF', root), dm = kfxDemo(4321); let bias = 0;
+    st = kfxNew($('#kxPv', root), dm.cs, { sym: '', levels: [{ v: dm.qz(dm.cs[dm.cs.length - 1].c + 0.25), label: '上關' }], pb: dm.T }); st.cfg = C; st.live = true;
+    st.feed = (now) => { if (!document.body.contains(root)) { KFX.list.delete(st); return; } st.cfg = C; if (st.sty.k !== C.sty) { st.sty = kfxSty(C.sty); st.pp = null; st.dirty = true; }
+      acc += 16; if (acc < 500 / 1) return; acc = 0; const b = st.cs[st.cs.length - 1]; let d = (dm.r() - 0.5) * 2.2; if (bias > 0) { d = Math.abs(d) + 0.8; bias--; }
+      const np = dm.qz(b.c + (dm.r() < 0.3 ? 0 : Math.round(d)) * dm.T); const big = st._big; st._big = false; const v = (12 + dm.r() * 40) * (big ? 9 : 1);
+      if (++n >= 16) { n = 0; } kfxTick(st, np, v, now, n === 0 ? b.t + 300000 : b.t, big);
+      const L = st.o.levels[0]; if (L.v - np > 0.8 || L.v <= np - 0.4) L.v = dm.qz(np + 0.3); };
+    const redraw = () => { F.innerHTML = form(); fxBind(F, () => C, OPEN, RS, KFX_DEF, redraw, () => { st.dirty = true; });
+      $$('[data-rall]', F).forEach((x) => x.onclick = () => { Object.assign(C, KFX_DEF); redraw(); }); st.dirty = true; };
+    $('#kxB', root).onclick = () => { st._big = true; };
+    $('#kxK', root).onclick = () => { const b = st.cs[st.cs.length - 1]; st.o.levels[0].v = dm.qz(b.c + 0.2); bias = 10; };
+    redraw(); KFX.list.add(st); kfxRun();
+  });
+  if (st) KFX.list.delete(st);
+  if (ok !== 'ok') return false;
+  S.pref.kfx = { ...C }; savePref(); toast('已儲存即時 K 棒設定'); return true;
 }
 const OV_CARDS = [['tiles', '資產摘要', 2], ['trend', '資產走勢', 1], ['focus', '今日焦點', 1], ['alloc', '資產配置', 1], ['events', '近期行事', 1], ['movers', '持股今日漲跌', 1],
   ['watch', '自選行情牆', 2], ['divs', '持股除權息', 2], ['cal', '損益日曆', 2], ['mkt', '大盤摘要', 1], ['news', '持股新聞', 1], ['star', '雙極星團雷達（多空排行）', 2], ['odd', '零股價差排行', 1]];
@@ -2107,6 +2368,7 @@ VIEWS.s = {
         <span class="sp"></span><button class="btn sm ${S.pref.boll ? 'primary' : ''}" id="boll">布林通道</button><a class="btn sm" href="#/compare/${sym}">比較</a><span class="seg" id="kopt"><button id="kpat" class="${S.pref.kpat !== false ? 'on' : ''}" title="在 K 線上標示型態">型態</button><button id="kavg" class="${S.pref.kavg !== false ? 'on' : ''}" title="顯示我的持股均價線">均價</button><button id="kxh" class="${S.pref.xh !== false ? 'on' : ''}" title="顯示十字線（價格與日期）">十字</button><button id="kma" title="設定均線週期">均線</button><button id="kfs" title="全螢幕">⛶</button><button id="kpng" title="下載圖表圖片">⤓</button></span><span class="seg" id="zm" title="滑鼠滾輪縮放、拖曳平移、雙擊還原"><button data-z="0.7">＋</button><button data-z="1.4">－</button><button data-z="0">還原</button></span>
         <div class="seg" id="sb">${['KD', 'RSI', 'MACD'].map((k) => `<button data-s="${k}" class="${S.pref.sub === k ? 'on' : ''}">${k}</button>`).join('')}</div></div>
         <div class="chart-wrap"><canvas></canvas><div class="chart-tip"></div></div><div class="row between small muted" style="margin-top:4px"><span id="cmsg"></span><span class="zinfo"></span><span class="d-only">滾輪縮放 · 拖曳平移 · 雙擊還原</span></div></div>
+      <div id="kfxC" style="margin-top:12px"></div>
       ${(S.pref.stabL || {}).pos === 'top' ? '' : stabBar(this)}
       <div id="si" class="grid g2 stack" style="margin-top:12px"></div>`;
   },
@@ -2146,7 +2408,7 @@ VIEWS.s = {
     sqmInject(); if (this._io) this._io.disconnect();
     this._io = new IntersectionObserver(([en]) => { const m = $('#shd'); if (m) m.classList.toggle('stuck', !en.isIntersecting && en.boundingClientRect.top < 0); });
     if ($('#shdS')) this._io.observe($('#shdS'));
-    this.chart(); this.info(); this.tags();
+    this.chart(); this.info(); this.tags(); kfxMount($('#kfxC'), sym);
     this._rs = () => this.chart(); window.addEventListener('resize', this._rs);
   },
   leave() { if (this._io) { this._io.disconnect(); this._io = null; } window.removeEventListener('resize', this._rs); document.removeEventListener('fullscreenchange', this._fs); if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); },
