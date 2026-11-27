@@ -1164,7 +1164,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"ad6debb","at":"2026-11-27 20:12"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"cb67b72","at":"2026-11-27 20:22"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -1264,7 +1264,7 @@ const VIEWS = {};
 const ODD = { el: null, loop: 0, tab: '', pools: {}, pool: [], names: {}, q: {}, at: 0, done: 0, busy: false, err: '', slow: false, direct: null, ws: null, wsSyms: '' };
 const ODD_N = 20, ODD_TOP = 3, ODD_CORE = ['0050', '0056', '00878'];
 /** 零股排行設定（`S.pref.odd`；App 對應 `OddLot.Cfg`） */
-const ODD_DEF = { top: 3, poolN: 20, mine: true, mineMax: 10, core: true, extra: '', minVol: 1, minPct: 0, sort: 'pct', iv: 30, sub: true, arrow: true, keep: true, hlOn: true, hl: 1.5 };
+const ODD_DEF = { top: 3, poolN: 20, mineOnly: false, tag: true, mine: true, mineMax: 10, core: true, extra: '', minVol: 1, minPct: 0, sort: 'pct', iv: 30, sub: true, arrow: true, keep: true, hlOn: true, hl: 1.5 };
 function oddCfg() { const c = { ...ODD_DEF, ...(S.pref.odd || {}) }; const cl = (v, a, b, d) => (isFinite(+v) ? Math.min(b, Math.max(a, +v)) : d);
   return { ...c, top: cl(c.top, 1, 10, 3), poolN: cl(c.poolN, 5, 40, 20), mineMax: cl(c.mineMax, 0, 20, 10), minVol: cl(c.minVol, 1, 100000, 1), minPct: cl(c.minPct, 0, 5, 0), iv: cl(c.iv, 15, 300, 30), hl: cl(c.hl, 0.1, 10, 1.5), sort: c.sort === 'ticks' ? 'ticks' : 'pct', extra: String(c.extra || '') }; }
 /** 純函數：依零股相對整股的價差排行，溢價（零股＞整股）與折價各取前 n；零股成交量 < minVol（預設 1 股）或價差 < minPct% 的略過；ticks＝差幾個升降單位；sort 'pct' 依幅度、'ticks' 依檔數 */
@@ -1279,11 +1279,13 @@ function oddRank(rows, n, o = {}) {
 const oddEtf = (x) => /^00/.test(x);
 function oddTab() { if (!ODD.tab) { const t = store.get('odd_tab', 'stk'); ODD.tab = t === 'etf' ? 'etf' : 'stk'; } return ODD.tab; }
 async function oddPool() {
-  const tab = oddTab(), etf = tab === 'etf', P = ODD.pools[tab], c = oddCfg(), sig = [c.poolN, c.mine, c.mineMax, c.core, c.extra].join('|');
+  const tab = oddTab(), etf = tab === 'etf', P = ODD.pools[tab], c = oddCfg(), sig = [c.poolN, c.mineOnly, c.mine, c.mineMax, c.core, c.extra].join('|');
   if (P && P.list.length && P.sig === sig && Date.now() - P.at < 1800000) return (ODD.pool = P.list);
   const tw = (x) => x && !isUs(x) && /^\d{4}[0-9A-Z]{0,2}$/.test(x) && oddEtf(x) === etf;
   const out = new Set(c.extra.toUpperCase().split(/[\s,，、]+/).filter(tw));
-  if (c.mine) holdings().map((h) => h.symbol).concat(D.quotes().map((q) => q.s)).filter(tw).slice(0, c.mineMax).forEach((x) => out.add(x));
+  const my = holdings().map((h) => h.symbol).concat(D.quotes().map((q) => q.s)).filter(tw);
+  if (c.mineOnly) { const list = Array.from(new Set([...out, ...my])).slice(0, 40); ODD.pools[tab] = { list, at: Date.now(), sig }; return (ODD.pool = list); }
+  if (c.mine) my.slice(0, c.mineMax).forEach((x) => out.add(x));
   if (etf) {
     if (c.core) ODD_CORE.forEach((x) => out.add(x));
     try { const rows = (await loadEtfMarket()).rows.filter((r) => r.value > 0).sort((a, b) => b.value - a.value); rows.forEach((r) => { ODD.names[r.code] = r.name; }); for (const r of rows) { if (out.size >= c.poolN) break; out.add(r.code); } } catch (e) {}
@@ -1330,15 +1332,15 @@ async function oddTick() {
   if (!aiHas('fugle')) { ODD.err = 'nokey'; oddRender(); return; }
   const now = Date.now(), iv = oddCfg().iv * 1000; if (now - ODD.at < (ODD.slow ? Math.max(90000, iv) : iv) - 1000) { oddRender(); return; }
   ODD.busy = true; ODD.at = now;
-  try { const pool = await oddPool(); await refreshQuotes(pool).catch(() => {}); await oddFetch(pool); ODD.done = Date.now(); } catch (e) { ODD.err = e.message || 'err'; } finally { ODD.busy = false; }
+  try { const pool = await oddPool(); if (pool.length) { await refreshQuotes(pool).catch(() => {}); await oddFetch(pool); } ODD.done = Date.now(); } catch (e) { ODD.err = e.message || 'err'; } finally { ODD.busy = false; }
   oddRender();
 }
 /** 卡片 HTML（卡片與設定預覽共用）：r＝{up,dn}；o＝{tab,st,msg,n,gear} */
 function oddCardHtml(r, c, o) {
-  const line = (x, i, up) => { const hot = c.hlOn && Math.abs(x.pct) >= c.hl; return `<div class="it" data-go="#/s/${esc(x.s)}"${hot ? ` style="background:color-mix(in srgb, var(--${up ? 'up' : 'down'}) 10%, transparent);border-radius:8px"` : ''}><div class="l"><div class="t1">No.${i + 1}（<span class="num">${esc(x.s)}</span>）${esc(x.name || '')}</div>${c.sub ? `<div class="t2 small muted num">零股 ${fmtPrice(x.odd)}／整股 ${fmtPrice(x.board)} · 差 ${x.ticks} 檔</div>` : ''}</div><div class="r"><div class="num ${up ? 'up' : 'down'}" style="font-weight:${hot ? 800 : 700};white-space:nowrap">${Math.abs(x.pct).toFixed(2)}%${c.arrow ? (up ? ' ⬆️' : ' ⬇️') : ''}</div></div></div>`; };
+  const line = (x, i, up) => { const hot = c.hlOn && Math.abs(x.pct) >= c.hl; return `<div class="it" data-go="#/s/${esc(x.s)}"${hot ? ` style="background:color-mix(in srgb, var(--${up ? 'up' : 'down'}) 10%, transparent);border-radius:8px"` : ''}><div class="l"><div class="t1">No.${i + 1}（<span class="num">${esc(x.s)}</span>）${esc(x.name || '')}${c.tag && o.mine && o.mine[x.s] ? ` <span class="tag" style="color:var(--primary)">${o.mine[x.s]}</span>` : ''}</div>${c.sub ? `<div class="t2 small muted num">零股 ${fmtPrice(x.odd)}／整股 ${fmtPrice(x.board)} · 差 ${x.ticks} 檔</div>` : ''}</div><div class="r"><div class="num ${up ? 'up' : 'down'}" style="font-weight:${hot ? 800 : 700};white-space:nowrap">${Math.abs(x.pct).toFixed(2)}%${c.arrow ? (up ? ' ⬆️' : ' ⬇️') : ''}</div></div></div>`; };
   const sec = (title, list, up) => `<div class="small" style="margin:8px 0 2px;font-weight:600"><span class="${up ? 'up' : 'down'}">${title}</span></div><div class="list">${list && list.length ? list.map((x, i) => line(x, i, up)).join('') : '<div class="muted small" style="padding:6px 0">（無）</div>'}</div>`;
   return `<div class="card"><h2>零股價差排行<span class="r" style="display:inline-flex;gap:6px;align-items:center"><span class="seg" id="oddTab"><button data-ot="stk" class="${o.tab === 'stk' ? 'on' : ''}">個股</button><button data-ot="etf" class="${o.tab === 'etf' ? 'on' : ''}">ETF</button></span>${o.gear ? '<button class="btn sm" data-oddg title="零股排行設定">⚙</button>' : ''}</span></h2>
-    <div class="small muted">${esc(o.st)} · ${o.tab === 'etf' ? 'ETF' : '個股'} ${o.n} 檔</div>${o.msg ? `<div class="notice" style="margin:6px 0">${esc(o.msg)}</div>` : ''}
+    <div class="small muted" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span style="flex:1;min-width:0">${esc(o.st)} · ${o.tab === 'etf' ? 'ETF' : '個股'} ${o.n} 檔</span><label class="small" style="display:inline-flex;gap:4px;align-items:center;white-space:nowrap"><input type="checkbox" data-oddm style="width:auto;flex:none;margin:0" ${c.mineOnly ? 'checked' : ''}>只看自選／持股</label></div>${c.mineOnly && !o.n ? '<div class="small muted" style="margin:4px 0">這一頁沒有你的自選或持股。</div>' : ''}${o.msg ? `<div class="notice" style="margin:6px 0">${esc(o.msg)}</div>` : ''}
     ${sec('零股溢價（零股＞整股）', r && r.up, true)}${sec('零股折價（零股＜整股）', r && r.dn, false)}
     <div class="small muted" style="margin-top:6px">比較同一時間零股與整股的最近成交價；差幾檔＝依升降單位換算。僅呈現兩個市場的價格差異，不代表任何買賣建議。</div></div>`;
 }
@@ -1352,7 +1354,9 @@ function oddRender() {
   const msg = ODD.err === 'nokey' ? '需要富果金鑰：到「設定 › 即時行情」填入（金鑰只存在這個瀏覽器）。' : ODD.err === 'auth' ? '富果金鑰驗證失敗，請到「設定 › 即時行情」更新。' : ODD.err === 'rate' ? '富果查詢次數達方案上限，已放慢為每 ' + Math.max(90, c.iv) + ' 秒更新。'
     : ODD.err === 'net' ? '暫時連不上富果，稍後自動重試。' : /^ws/.test(ODD.err) ? '富果串流：' + ODD.err.slice(3) : ODD.err === 'ws' ? '無法建立富果串流連線。' : ODD.err ? ODD.err : '';
   const st = live ? (ODD.done ? '盤中 · ' + tm(ODD.done) + ' 更新 · 每 ' + (ODD.slow ? Math.max(90, c.iv) : c.iv) + ' 秒' + (ODD.direct === false ? '（串流）' : '') : '盤中 · 載入中…') : at && c.keep ? '盤後 · 顯示 ' + tm(at) + ' 最後一次盤中結果' : '盤中 09:00–13:30 自動更新';
-  el.innerHTML = oddCardHtml(r, c, { tab, st, msg, n: ODD.pool.length || c.poolN, gear: true });
+  const mine = {}; D.quotes().forEach((q) => { mine[q.s] = '自選'; }); holdings().forEach((h) => { if (!h.short) mine[h.symbol] = '持股'; });
+  el.innerHTML = oddCardHtml(r, c, { tab, st, msg, n: ODD.pools[tab] ? ODD.pool.length : c.poolN, gear: true, mine });
+  const mo = $('[data-oddm]', el); if (mo) mo.onchange = () => { S.pref.odd = { ...(S.pref.odd || {}), mineOnly: mo.checked }; savePref(); ODD.at = 0; ODD.done = 0; oddRender(); oddTick(); };
   $$('.it[data-go]', el).forEach((x) => x.onclick = () => { location.hash = x.dataset.go; });
   $$('#oddTab button', el).forEach((b) => b.onclick = () => { const t = b.dataset.ot; if (t === ODD.tab) return; ODD.tab = t; store.set('odd_tab', t); ODD.at = 0; ODD.done = 0; ODD.err = ''; oddRender(); oddTick(); });
   const g = $('[data-oddg]', el); if (g) g.onclick = async (e) => { e.stopPropagation(); if (await oddSettings()) { ODD.pools = {}; ODD.at = 0; oddRender(); oddTick(); } };
@@ -1362,11 +1366,11 @@ async function oddSettings() {
   const C = oddCfg(); let tab = 0, dt = oddTab(); const OPEN = new Set(['rank', 'pool', 'upd', 'look']);
   const DEMO = { stk: [['2330', '台積電', 1085, 1095, 820], ['6112', '仁大', 60.2, 61.3, 1500], ['2317', '鴻海', 212.5, 213, 3200], ['2454', '聯發科', 1360, 1355, 90], ['2603', '長榮', 188, 186.5, 2400], ['3231', '緯創', 118, 117.5, 600], ['2882', '國泰金', 66.3, 66.4, 5000], ['1101', '台泥', 30.1, 29.95, 40]],
     etf: [['0050', '元大台灣50', 196.5, 196.8, 9000], ['00878', '國泰永續高股息', 21.3, 21.36, 52000], ['0056', '元大高股息', 36.1, 36.05, 30000], ['00919', '群益台灣精選高息', 22.4, 22.31, 18000], ['00929', '復華台灣科技優息', 18.2, 18.23, 26000], ['006208', '富邦台50', 113.2, 113, 700], ['00940', '元大台灣價值高息', 9.6, 9.58, 40000], ['00713', '元大台灣高息低波', 52.1, 52.3, 5]] };
-  const RS = { rank: ['top', 'sort'], filt: ['minVol', 'minPct'], pool: ['poolN', 'mine', 'mineMax', 'core', 'extra'], upd: ['iv', 'keep'], look: ['sub', 'arrow'], hl: ['hlOn', 'hl'] };
+  const RS = { rank: ['top', 'sort', 'tag'], filt: ['minVol', 'minPct'], pool: ['mineOnly', 'poolN', 'mine', 'mineMax', 'core', 'extra'], upd: ['iv', 'keep'], look: ['sub', 'arrow'], hl: ['hlOn', 'hl'] };
   const qpm = () => Math.round(C.poolN * 60 / C.iv);
-  const form = () => { if (tab === 0) return fxSec(OPEN, 'rank', '排行', '每欄前 ' + C.top + ' 名・' + (C.sort === 'ticks' ? '依檔數' : '依幅度'), fxRg(C, 'top', '每欄顯示名次', 1, 10, 1, ' 名') + `<div class="small" style="margin-top:4px">排序依據</div>${fxSg(C, 'sort', [['pct', '價差幅度（%）'], ['ticks', '差幾檔（升降單位）']])}`, C)
+  const form = () => { if (tab === 0) return fxSec(OPEN, 'rank', '排行', '每欄前 ' + C.top + ' 名・' + (C.sort === 'ticks' ? '依檔數' : '依幅度'), fxRg(C, 'top', '每欄顯示名次', 1, 10, 1, ' 名') + `<div class="small" style="margin-top:4px">排序依據</div>${fxSg(C, 'sort', [['pct', '價差幅度（%）'], ['ticks', '差幾檔（升降單位）']])}<div>${fxCk(C, 'tag', '標示「持股」「自選」')}</div>`, C)
       + fxSec(OPEN, 'filt', '過濾雜訊', '零股成交 ≥ ' + C.minVol + ' 股・價差 ≥ ' + C.minPct + '%', fxRg(C, 'minVol', '零股今日最少成交（股）', 1, 2000, 1, ' 股') + fxRg(C, 'minPct', '最小價差（低於不列入）', 0, 2, 0.05, '%') + '<div class="small muted">零股量太少時一筆成交就會拉開價差，可提高門檻排除。</div>', C)
-      + fxSec(OPEN, 'pool', '選股池', '每頁 ' + C.poolN + ' 檔', fxRg(C, 'poolN', '每頁檔數', 5, 40, 5, ' 檔') + `<div>${fxCk(C, 'mine', '自選／持股優先', 1)}</div>` + (C.mine ? fxRg(C, 'mineMax', '自選／持股最多', 0, 20, 1, ' 檔') : '') + `<div>${fxCk(C, 'core', 'ETF 頁固定加入 0050、0056、00878')}</div>`
+      + fxSec(OPEN, 'pool', '選股池', C.mineOnly ? '只看自選／持股' : '每頁 ' + C.poolN + ' 檔', `<div>${fxCk(C, 'mineOnly', '只看自選／持股（含自訂代號，最多 40 檔，不用成交值補位）', 1)}</div>` + (C.mineOnly ? '' : fxRg(C, 'poolN', '每頁檔數', 5, 40, 5, ' 檔')) + (C.mineOnly ? '' : `<div>${fxCk(C, 'mine', '自選／持股優先', 1)}</div>`) + (C.mine && !C.mineOnly ? fxRg(C, 'mineMax', '自選／持股最多', 0, 20, 1, ' 檔') : '') + (C.mineOnly ? '' : `<div>${fxCk(C, 'core', 'ETF 頁固定加入 0050、0056、00878')}</div>`)
         + `<div class="field" style="margin:6px 0"><label class="small">自訂加入代號（逗號或空白分隔，個股與 ETF 自動分頁）</label><input id="oddEx" value="${esc(C.extra)}" placeholder="例：2330, 00919"></div><div class="small muted">其餘名額依前一日成交值由高到低補滿；選股池 30 分鐘更新一次。</div>`, C)
       + '<div style="text-align:right;margin-top:4px"><button type="button" class="btn sm" data-rall>全部回預設</button></div>';
     return fxSec(OPEN, 'upd', '更新頻率', '每 ' + C.iv + ' 秒', fxSg(C, 'iv', [[15, '15 秒'], [30, '30 秒'], [60, '60 秒'], [90, '90 秒'], [180, '3 分']]) + `<div class="small muted">目前設定約每分鐘 ${qpm()} 次富果查詢（只查正在看的那一頁）；超過方案上限會自動放慢。</div><div>${fxCk(C, 'keep', '收盤後保留當天最後一次盤中結果')}</div>`, C)
@@ -1377,7 +1381,7 @@ async function oddSettings() {
     <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:4px"><span class="small muted" style="align-self:center;margin-right:auto">預覽為示範資料</span><button type="button" class="btn sm" id="odPt">切換個股／ETF</button></div></div>
     <span class="seg" style="margin-top:6px"><button type="button" data-tb="0" class="on">排行與選股池</button><button type="button" data-tb="1">更新與顯示</button></span><div id="odF"></div>`, [['', '取消'], ['ok', '儲存', 'primary']], (root) => {
     const F = $('#odF', root);
-    const pv = () => { const rows = DEMO[dt].map(([s, name, board, odd, oddVol]) => ({ s, name, board, odd, oddVol })); $('#odPv', root).innerHTML = '<div style="pointer-events:none">' + oddCardHtml(oddRank(rows, C.top, C), C, { tab: dt, st: '盤中 · 示範 · 每 ' + C.iv + ' 秒', msg: '', n: C.poolN }) + '</div>'; };
+    const pv = () => { const rows = DEMO[dt].map(([s, name, board, odd, oddVol]) => ({ s, name, board, odd, oddVol })); $('#odPv', root).innerHTML = '<div style="pointer-events:none">' + oddCardHtml(oddRank(rows, C.top, C), C, { tab: dt, st: '盤中 · 示範 · 每 ' + C.iv + ' 秒', msg: '', n: C.poolN, mine: { 6112: '持股', 2317: '自選', '00878': '持股', '0056': '自選' } }) + '</div>'; };
     const redraw = () => { F.innerHTML = form(); fxBind(F, () => C, OPEN, RS, ODD_DEF, redraw, pv);
       $$('[data-rall]', F).forEach((x) => x.onclick = () => { (tab === 0 ? [...RS.rank, ...RS.filt, ...RS.pool] : [...RS.upd, ...RS.look, ...RS.hl]).forEach((k) => { C[k] = ODD_DEF[k]; }); redraw(); });
       const ex = $('#oddEx', F); if (ex) ex.oninput = () => { C.extra = ex.value; }; pv(); };
