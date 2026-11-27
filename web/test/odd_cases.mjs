@@ -18,6 +18,8 @@ t('溢價與折價分欄', (ok) => { const o = L.oddRank([r('A', 60.2, 61.3), r(
 t('依幅度排序取前 3', (ok) => { const o = L.oddRank([r('A', 100, 101), r('B', 100, 103), r('C', 100, 102), r('D', 100, 104), r('E', 100, 96), r('F', 100, 98)], 3); ok(syms(o.up) === 'D,B,C', syms(o.up)); ok(syms(o.dn) === 'E,F', syms(o.dn)); });
 t('零股未成交或缺價略過', (ok) => { const o = L.oddRank([r('A', 100, 101, 0), r('B', null, 101), r('C', 100, null), r('D', 100, 102)], 3); ok(syms(o.up) === 'D', syms(o.up)); });
 t('ETF 升降單位', (ok) => { const o = L.oddRank([r('0050', 45, 45.05)], 3); ok(o.up[0].ticks === 5, o.up[0].ticks); });
+t('門檻：最少零股量與最小價差', (ok) => { const o = L.oddRank([r('A', 100, 101, 5), r('B', 100, 100.5, 500), r('C', 100, 102, 500)], 3, { minVol: 10, minPct: 0.6 }); ok(syms(o.up) === 'C', syms(o.up)); });
+t('依檔數排序', (ok) => { const o = L.oddRank([r('A', 100, 101), r('B', 600, 605)], 3, { sort: 'ticks' }); ok(syms(o.up) === 'B,A', syms(o.up)); ok(o.up[0].ticks === 5 && o.up[1].ticks === 2, 'ticks'); ok(syms(L.oddRank([r('A', 100, 101), r('B', 600, 605)], 3).up) === 'A,B', '預設依幅度'); });
 
 if (fail) { console.log(`網頁版零股排行：${fail} 個案例失敗`); process.exit(1); }
 console.log('網頁版零股排行：全部案例通過');
