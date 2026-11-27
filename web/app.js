@@ -1164,7 +1164,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"","sha":"c0ffa4e","at":"2026-11-27 16:24"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"bf6ce56","at":"2026-11-27 17:03"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -1260,8 +1260,8 @@ function tickerHtml() {
 const VIEWS = {};
 // 總覽卡片：鍵、名稱、預設寬度（2＝整列）
 // ───────── 零股價差排行（盤中零股 vs 整股；使用者自己的富果金鑰；與 App OddLot 相同） ─────────
-// 選股池 20 檔：自選／持股（≤10）＋常見 ETF＋前一日成交值前段；每 30 秒以富果 REST（type=oddlot）查零股，瀏覽器擋跨網域時改用富果串流零股頻道。
-const ODD = { el: null, loop: 0, pool: [], poolAt: 0, names: {}, q: {}, at: 0, done: 0, busy: false, err: '', slow: false, direct: null, ws: null, wsSyms: '' };
+// 分「個股」「ETF」兩頁（`odd_tab`），各自選股池 20 檔：自選／持股（≤10）＋（ETF 頁加常見 ETF）＋前一日成交值前段；只查目前這一頁；每 30 秒以富果 REST（type=oddlot）查零股，瀏覽器擋跨網域時改用富果串流零股頻道。
+const ODD = { el: null, loop: 0, tab: '', pools: {}, pool: [], names: {}, q: {}, at: 0, done: 0, busy: false, err: '', slow: false, direct: null, ws: null, wsSyms: '' };
 const ODD_N = 20, ODD_TOP = 3, ODD_CORE = ['0050', '0056', '00878'];
 /** 純函數：依零股相對整股的價差排行，溢價（零股＞整股）與折價各取前 n；今日零股未成交或價格缺漏的略過；ticks＝差幾個升降單位 */
 function oddRank(rows, n) {
@@ -1269,13 +1269,20 @@ function oddRank(rows, n) {
     .map((r) => { const d = r.odd - r.board; return { ...r, pct: d / r.board * 100, ticks: Math.max(1, Math.round(Math.abs(d) / twTick(r.board, /^00/.test(r.s)))) }; });
   return { up: ok.filter((r) => r.pct > 0).sort((a, b) => b.pct - a.pct || b.ticks - a.ticks).slice(0, n), dn: ok.filter((r) => r.pct < 0).sort((a, b) => a.pct - b.pct || b.ticks - a.ticks).slice(0, n) };
 }
+const oddEtf = (x) => /^00/.test(x);
+function oddTab() { if (!ODD.tab) { const t = store.get('odd_tab', 'stk'); ODD.tab = t === 'etf' ? 'etf' : 'stk'; } return ODD.tab; }
 async function oddPool() {
-  if (ODD.pool.length && Date.now() - ODD.poolAt < 1800000) return ODD.pool;
-  const tw = (x) => x && !isUs(x) && /^\d{4}[0-9A-Z]{0,2}$/.test(x);
+  const tab = oddTab(), etf = tab === 'etf', P = ODD.pools[tab];
+  if (P && P.list.length && Date.now() - P.at < 1800000) return (ODD.pool = P.list);
+  const tw = (x) => x && !isUs(x) && /^\d{4}[0-9A-Z]{0,2}$/.test(x) && oddEtf(x) === etf;
   const out = new Set(holdings().map((h) => h.symbol).concat(D.quotes().map((q) => q.s)).filter(tw).slice(0, 10));
-  ODD_CORE.forEach((x) => out.add(x));
-  try { const rows = (await scrUniverse()).rows.filter((r) => r.val != null).sort((a, b) => b.val - a.val); rows.forEach((r) => { ODD.names[r.s] = r.n; }); for (const r of rows) { if (out.size >= ODD_N) break; out.add(r.s); } } catch (e) {}
-  ODD.pool = Array.from(out).slice(0, ODD_N); ODD.poolAt = Date.now(); return ODD.pool;
+  if (etf) {
+    ODD_CORE.forEach((x) => out.add(x));
+    try { const rows = (await loadEtfMarket()).rows.filter((r) => r.value > 0).sort((a, b) => b.value - a.value); rows.forEach((r) => { ODD.names[r.code] = r.name; }); for (const r of rows) { if (out.size >= ODD_N) break; out.add(r.code); } } catch (e) {}
+  } else {
+    try { const rows = (await scrUniverse()).rows.filter((r) => r.val != null).sort((a, b) => b.val - a.val); rows.forEach((r) => { ODD.names[r.s] = r.n; }); for (const r of rows) { if (out.size >= ODD_N) break; out.add(r.s); } } catch (e) {}
+  }
+  const list = Array.from(out).slice(0, ODD_N); ODD.pools[tab] = { list, at: Date.now() }; return (ODD.pool = list);
 }
 function oddApply(d) {
   if (!d || !d.symbol) return; const n = (v) => (v == null || isNaN(+v) ? null : +v); const lt = d.lastTrade || {};
@@ -1321,18 +1328,20 @@ async function oddTick() {
 function oddRender() {
   const el = ODD.el; if (!el || !el.isConnected) return;
   const tm = (t) => new Date(t).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false });
+  const tab = oddTab(), lk = 'odd_last_' + tab; ODD.pool = (ODD.pools[tab] || {}).list || [];
   const live = twOpen(); let r = null, at = ODD.done;
-  if (Object.keys(ODD.q).length) { r = oddRank(oddRows(), ODD_TOP); if (live && (r.up.length || r.dn.length)) store.set('odd_last', { at, up: r.up, dn: r.dn }); }
-  if (!r || (!live && !r.up.length && !r.dn.length)) { const L = store.get('odd_last', null); if (L) { r = L; at = L.at; } }
+  if (ODD.pool.some((x) => ODD.q[x])) { r = oddRank(oddRows(), ODD_TOP); if (live && (r.up.length || r.dn.length)) store.set(lk, { at, up: r.up, dn: r.dn }); }
+  if (!r || (!live && !r.up.length && !r.dn.length)) { const L = store.get(lk, null); if (L) { r = L; at = L.at; } }
   const line = (x, i, up) => `<div class="it" data-go="#/s/${esc(x.s)}"><div class="l"><div class="t1">No.${i + 1}（<span class="num">${esc(x.s)}</span>）${esc(x.name || '')}</div><div class="t2 small muted num">零股 ${fmtPrice(x.odd)}／整股 ${fmtPrice(x.board)} · 差 ${x.ticks} 檔</div></div><div class="r"><div class="num ${up ? 'up' : 'down'}" style="font-weight:700;white-space:nowrap">${Math.abs(x.pct).toFixed(2)}% ${up ? '⬆️' : '⬇️'}</div></div></div>`;
   const sec = (title, list, up) => `<div class="small" style="margin:8px 0 2px;font-weight:600"><span class="${up ? 'up' : 'down'}">${title}</span></div><div class="list">${list && list.length ? list.map((x, i) => line(x, i, up)).join('') : '<div class="muted small" style="padding:6px 0">（無）</div>'}</div>`;
   const msg = ODD.err === 'nokey' ? '需要富果金鑰：到「設定 › 即時行情」填入（金鑰只存在這個瀏覽器）。' : ODD.err === 'auth' ? '富果金鑰驗證失敗，請到「設定 › 即時行情」更新。' : ODD.err === 'rate' ? '富果查詢次數達方案上限，已放慢為每 90 秒更新。'
     : ODD.err === 'net' ? '暫時連不上富果，稍後自動重試。' : /^ws/.test(ODD.err) ? '富果串流：' + ODD.err.slice(3) : ODD.err === 'ws' ? '無法建立富果串流連線。' : ODD.err ? ODD.err : '';
   const st = live ? (ODD.done ? '盤中 · ' + tm(ODD.done) + ' 更新 · 每 ' + (ODD.slow ? 90 : 30) + ' 秒' + (ODD.direct === false ? '（串流）' : '') : '盤中 · 載入中…') : at ? '盤後 · 顯示 ' + tm(at) + ' 最後一次盤中結果' : '盤中 09:00–13:30 自動更新';
-  el.innerHTML = `<div class="card"><h2>零股價差排行<span class="r small muted">${ODD.pool.length || ODD_N} 檔</span></h2>
-    <div class="small muted">${esc(st)}</div>${msg ? `<div class="notice" style="margin:6px 0">${esc(msg)}</div>` : ''}
+  el.innerHTML = `<div class="card"><h2>零股價差排行<span class="r"><span class="seg" id="oddTab"><button data-ot="stk" class="${tab === 'stk' ? 'on' : ''}">個股</button><button data-ot="etf" class="${tab === 'etf' ? 'on' : ''}">ETF</button></span></span></h2>
+    <div class="small muted">${esc(st)} · ${tab === 'etf' ? 'ETF' : '個股'} ${ODD.pool.length || ODD_N} 檔</div>${msg ? `<div class="notice" style="margin:6px 0">${esc(msg)}</div>` : ''}
     ${sec('零股溢價（零股＞整股）', r && r.up, true)}${sec('零股折價（零股＜整股）', r && r.dn, false)}
     <div class="small muted" style="margin-top:6px">比較同一時間零股與整股的最近成交價；差幾檔＝依升降單位換算。僅呈現兩個市場的價格差異，不代表任何買賣建議。</div></div>`;
+  $$('#oddTab button', el).forEach((b) => b.onclick = () => { const t = b.dataset.ot; if (t === ODD.tab) return; ODD.tab = t; store.set('odd_tab', t); ODD.at = 0; ODD.done = 0; ODD.err = ''; oddRender(); oddTick(); });
 }
 function oddMount() {
   const host = $('#ovOdd'); if (!host) return;
