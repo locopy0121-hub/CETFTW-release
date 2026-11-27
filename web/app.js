@@ -1164,7 +1164,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"v1.1.440","sha":"727275c","at":"2026-11-27 07:02"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"88df92f","at":"2026-11-27 12:23"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -6968,6 +6968,18 @@ function starBoard(rule, inputs) {
   });
   return { bull: rank('bull'), bear: rank('bear') };
 }
+/** 盤中即時排行（與 App StarRank.live 相同）：成員在前（met），其餘名額以 starBoard 候選補位（cand）；冷卻中與成員不列入；prev＝{代號:[方向,名次]} */
+function starLive(rule, inputs, res, now, cooldown = {}, prev = {}) {
+  const r = starSane(rule); const skip = new Set(Object.keys(res.members || {})); Object.keys(cooldown).forEach((k) => { if (cooldown[k] > now) skip.add(k); });
+  const b = starBoard(r, inputs.filter((x) => !skip.has(x.symbol)));
+  const merge = (mem, cands, side) => {
+    const out = mem.map((n) => ({ ...n, met: true, cand: false }));
+    for (const c of cands) { if (out.length >= r.maxN) break; const rk = out.length + 1; const p = prev[c.symbol];
+      out.push({ ...c, rank: rk, rankDelta: !p || p[0] !== side ? STAR_NEW : p[1] - rk, met: false, cand: true }); }
+    return out;
+  };
+  return { bull: merge(res.bull, b.bull, 'bull'), bear: merge(res.bear, b.bear, 'bear') };
+}
 /** RSI(14)（Wilder 平滑）；資料不足回 null */
 function starRsi(c, n = 14) {
   if (c.length <= n) return null;
@@ -6987,7 +6999,8 @@ function starBearRings(price, ma20, ma60, kLevel, trend) {
   return Math.min(n, 3);
 }
 // —— 執行期（瀏覽器端計算；成員、快照存在這個瀏覽器，不上傳、不共用；Alpaca 資料只在本機使用） ——
-const ST = { el: null, eng: null, loop: 0, busy: '', prog: 0, inp: {}, scanAt: {}, qAt: {}, snap: {}, sel: null, ej: [], ejId: 0 };
+const ST = { el: null, eng: null, loop: 0, busy: '', prog: 0, inp: {}, scanAt: {}, qAt: {}, snap: {}, sel: null, ej: [], ejId: 0, rs: '', rsAt: {}, rsDone: {} };
+const STAR_RESCORE_MS = 30000;
 function starPref() { const p = S.pref.star || (S.pref.star = {}); p.rules = p.rules || {}; return p; }
 function starRule(m) { return starSane({ ...starRuleDef(m), ...(starPref().rules[m] || {}) }); }
 function starAnimCfg() { const a = { ...STAR_ANIM, ...(starPref().anim || {}) }; if (!STAR_STYLES.some(([k]) => k === a.style)) a.style = a.galaxy === false ? 'CLASSIC' : 'GALAXY'; delete a.galaxy; return a; }
@@ -7049,6 +7062,18 @@ async function starScan(m) {
     ST.inp[m] = inp; ST.scanAt[m] = ST.qAt[m] = Date.now(); starRecompute(m);
   } finally { ST.busy = ''; starStatus(); }
 }
+/** 盤中即時重新評估：每 STAR_RESCORE_MS 以最新報價重跑每一檔 starInput（K 線沿用快取、當日 K 換成現價），分數與名次隨盤勢變動；重掃中略過 */
+async function starRescore(m) {
+  const now = Date.now(); if (ST.busy || ST.rs || !starOpen(m) || !ST.inp[m] || now - (ST.rsAt[m] || 0) < STAR_RESCORE_MS - 1000) return;
+  ST.rs = m; ST.rsAt[m] = now;
+  try {
+    const syms = Object.keys(ST.inp[m]); const fresh = {}; let i = 0;
+    const work = async () => { while (i < syms.length) { const s = syms[i++]; try { const x = await starInput(s); if (x) fresh[s] = x; } catch (e) {} } };
+    await Promise.all([work(), work(), work(), work()]);
+    const cur = ST.inp[m]; if (!cur) return; Object.keys(fresh).forEach((s) => { if (cur[s]) cur[s] = fresh[s]; });
+    if (Object.keys(fresh).length) ST.rsDone[m] = Date.now();
+  } finally { ST.rs = ''; }
+}
 /** 快更新：只換現價／漲跌／盤中均價再重新排行（K 線與評估沿用上次分析） */
 function starPatch(m) {
   const inp = ST.inp[m]; if (!inp) return;
@@ -7066,7 +7091,10 @@ function starRecompute(m) {
   const now = Date.now(); const cd = store.get('star_cd_' + m, {}); Object.keys(cd).forEach((k) => { if (cd[k] < now) delete cd[k]; });
   const r = starStep(starRule(m), Object.values(inp), store.get('star_mem_' + m, {}), now, cd);
   r.ejects.forEach((e) => { if (e.forced) cd[e.symbol] = now + 1800000; ST.ej.unshift({ id: ++ST.ejId, m, e, at: now }); }); ST.ej = ST.ej.slice(0, 30);
-  ST.snap[m] = { bull: r.bull, bear: r.bear, at: now, live: starOpen(m), pool: Object.keys(inp).length };
+  // 即時排行：成員在前、候選補位，避免盤中兩側空白
+  const ps = ST.snap[m] || {}; const prevRk = {}; [...(ps.bull || []), ...(ps.bear || [])].forEach((n) => { prevRk[n.symbol] = [n.side, n.rank]; });
+  const lv = starLive(starRule(m), Object.values(inp), r, now, cd, prevRk);
+  ST.snap[m] = { bull: lv.bull, bear: lv.bear, at: now, live: starOpen(m), pool: Object.keys(inp).length };
   store.set('star_mem_' + m, r.members); store.set('star_cd_' + m, cd); store.set('star_snap_' + m, ST.snap[m]);
   if (m === starMkt()) starRender();
 }
@@ -7077,7 +7105,7 @@ function starTick() {
   if (!ST.inp[m] ? open || !snap || now - snap.at > 6 * 3600000 || (!(snap.bull || []).length && !(snap.bear || []).length) : open && now - (ST.scanAt[m] || 0) >= a.scanMin * 60000) { starScan(m); return; }
   if (!ST.inp[m]) return;
   if (!open) { if (snap && snap.live) starRecompute(m); return; } // 剛收盤：改為盤後排行
-  if (now - (ST.qAt[m] || 0) >= 20000) { ST.qAt[m] = now; refreshQuotes(Object.keys(ST.inp[m])).catch(() => {}).then(() => starPatch(m)); } else starPatch(m);
+  if (now - (ST.qAt[m] || 0) >= 20000) { ST.qAt[m] = now; refreshQuotes(Object.keys(ST.inp[m])).catch(() => {}).then(() => starRescore(m)).catch(() => {}).then(() => starPatch(m)); } else starPatch(m);
 }
 function starSrc() {
   const m = starMkt(); const s = starSnap(m) || {};
@@ -7319,19 +7347,19 @@ function starFx(cv, src) {
   return { stop, get dead() { return E.dead; }, pick(x, y) { let best = null, bd = 1e9; N.forEach((o, s) => { if (o.st !== 1) return; const dd = Math.hypot(o.x - x, o.y - y); if (dd < o.r + 14 && dd < bd) { bd = dd; best = s; } }); return best; } };
 }
 function starRowsHtml(list, side, m) {
-  if (!list.length) return '<div class="small muted" style="padding:8px 0">' + ((starSnap(m) || {}).live === false ? '最近收盤沒有綜合評估達 55 分且 K 線不反向的標的' : '目前沒有符合條件的標的') + '</div>';
+  if (!list.length) return '<div class="small muted" style="padding:8px 0">' + ((starSnap(m) || {}).live === false ? '最近收盤沒有綜合評估達 55 分且 K 線不反向的標的' : '選股池中沒有綜合評估達 55 分且 K 線不反向的標的') + '</div>';
   const us = m === 'US';
   return list.map((n) => { const dl = n.rankDelta >= STAR_NEW ? '<span class="tag" style="font-size:10px;padding:0 4px">NEW</span>' : n.rankDelta > 0 ? `<span class="up">▲${n.rankDelta}</span>` : n.rankDelta < 0 ? `<span class="down">▼${-n.rankDelta}</span>` : '<span class="muted">－</span>'; const sb = n.slBuffer;
     return `<div data-go="#/s/${esc(n.symbol)}" style="display:flex;gap:6px;align-items:center;padding:5px 2px;border-bottom:1px solid var(--border);cursor:pointer;${ST.sel === n.symbol ? 'background:var(--card2);' : ''}">
       <span class="num" style="min-width:18px;font-weight:700;color:var(${side === 'bull' ? '--up' : '--down'})">${n.rank}</span>
-      <div style="flex:1;min-width:0"><div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;font-size:13px">${n.met ? `<span style="color:var(${side === 'bull' ? '--up' : '--down'})" title="已達入選條件">✓</span> ` : ''}${esc(n.symbol)} <span class="small muted" style="font-weight:400">${esc(n.name === n.symbol ? '' : n.name)}</span></div>
+      <div style="flex:1;min-width:0"><div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;font-size:13px">${n.met ? `<span style="color:var(${side === 'bull' ? '--up' : '--down'})" title="已達入選條件">✓</span> ` : n.cand ? '<span class="small muted" style="font-weight:400" title="尚未入選，依綜合評估補位">候選</span> ' : ''}${esc(n.symbol)} <span class="small muted" style="font-weight:400">${esc(n.name === n.symbol ? '' : n.name)}</span></div>
       <div class="small num" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><span class="${cls(n.chgPct)}">${fmtPrice(n.price, us)} ${fmtPct(n.chgPct)}</span>${sb != null ? ` <span style="color:${sb < 1 ? '#f97316' : 'var(--text2)'}" title="距停損防守價">緩衝 ${fmt(sb, 1)}%</span>` : ''}</div></div>
       <span class="small" style="min-width:26px;text-align:right">${dl}</span></div>`; }).join('');
 }
 function starStatus() {
   const el = ST.el && $('#stSt', ST.el); if (!el) return; const m = starMkt(), s = starSnap(m), open = starOpen(m);
   const tm = (t) => new Date(t).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false });
-  el.textContent = ST.busy === m ? '分析中 ' + Math.round(ST.prog * 100) + '%' : (starPref().paused ? '已暫停 · ' : '') + (s ? '更新 ' + tm(s.at) + (s.pool ? ' · 選股池 ' + s.pool + ' 檔' : '') : '尚未分析') + (open ? ' · 盤中' : s && s.live === false ? ' · 盤後排行（最近收盤評估，✓＝已達入選條件）' : ' · 非盤中（顯示最近一次結果）') + (m === 'US' && !apHas() ? ' · 未設定 Alpaca 金鑰，只用大型股與自選' : '');
+  el.textContent = ST.busy === m ? '分析中 ' + Math.round(ST.prog * 100) + '%' : (starPref().paused ? '已暫停 · ' : '') + (s ? '更新 ' + tm(s.at) + (s.pool ? ' · 選股池 ' + s.pool + ' 檔' : '') : '尚未分析') + (open ? ' · 盤中即時排行（✓＝星團成員、候選＝依綜合評估補位）' + (ST.rsDone[m] ? ' · 評分每 30 秒重算（' + tm(ST.rsDone[m]) + '）' : '') : s && s.live === false ? ' · 盤後排行（最近收盤評估，✓＝已達入選條件）' : ' · 非盤中（顯示最近一次結果）') + (m === 'US' && !apHas() ? ' · 未設定 Alpaca 金鑰，只用大型股與自選' : '');
 }
 function starRender() {
   const el = ST.el; if (!el) return; const m = starMkt(), s = starSnap(m) || {}, p = starPref();
@@ -7351,7 +7379,7 @@ function starBuild() {
     <canvas id="stC" style="width:100%;display:block;margin-top:6px;cursor:pointer"></canvas>
     <div id="stSt" class="small muted"></div><div id="stSel" class="small" style="margin-top:2px"></div><div id="stEj" class="small" style="margin-top:2px"></div>
     <div id="stL" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px"></div>
-    <details class="small muted" style="margin-top:6px"><summary>說明</summary>左＝多方看漲、右＝空方看跌（ETF 為轉弱／回檔）；入選需綜合進場評估達入選分、三環同向達門檻、（可選）K 線訊號同向；已入選者分數不低於剔除分就保留，觸及停損防守價立即移出（30 分鐘內不重新入選）。星點大小＝總排行分，第 1 名在中心；金色光束＝量比達大量門檻。點星點看明細，再點一次開個股頁。資料在這個瀏覽器計算與保存；非盤中改為盤後排行（依最近收盤評估，綜合評估 ≥ 55 且 K 線不反向，✓＝已達入選條件，不影響盤中成員）。僅為依規則計算的視覺化，不代表任何買賣建議。</details>`;
+    <details class="small muted" style="margin-top:6px"><summary>說明</summary>左＝多方看漲、右＝空方看跌（ETF 為轉弱／回檔）；入選需綜合進場評估達入選分、三環同向達門檻、（可選）K 線訊號同向；已入選者分數不低於剔除分就保留，觸及停損防守價立即移出（30 分鐘內不重新入選）。星點大小＝總排行分，第 1 名在中心；金色光束＝量比達大量門檻。點星點看明細，再點一次開個股頁。資料在這個瀏覽器計算與保存；盤中每 30 秒以最新報價重新評估每一檔（綜合評估、三環、K 線分數與名次即時變動），成員（✓）排前面，其餘名額以候選（綜合評估 ≥ 55 且 K 線不反向）補位並隨每次更新重排，候選不會彈出；非盤中改為盤後排行（依最近收盤評估，✓＝已達入選條件，不影響盤中成員）。僅為依規則計算的視覺化，不代表任何買賣建議。</details>`;
   $$('[data-stm]', el).forEach((b) => b.onclick = () => { starPref().mkt = b.dataset.stm; savePref(); ST.sel = null; starRender(); starTick(); });
   $('#stP', el).onclick = () => { const p = starPref(); p.paused = !p.paused; savePref(); starRender(); if (!p.paused) starTick(); };
   $('#stG', el).onclick = () => starSettings();

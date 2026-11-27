@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const src = fs.readFileSync(path.join(here, '..', 'app.js'), 'utf8');
 const grab = (name) => { const i = src.indexOf('\nfunction ' + name + '('); if (i < 0) throw new Error('找不到 ' + name); const j = src.indexOf('\n}\n', i); return src.slice(i, j + 3); };
-const names = ['starRuleDef', 'starSane', 'starKScore', 'starComp', 'starRingsOf', 'starFinal', 'starStopOf', 'starBreached', 'starQualifies', 'starStep', 'starBoard', 'starRsi', 'starBearRings'];
+const names = ['starRuleDef', 'starSane', 'starKScore', 'starComp', 'starRingsOf', 'starFinal', 'starStopOf', 'starBreached', 'starQualifies', 'starStep', 'starBoard', 'starLive', 'starRsi', 'starBearRings'];
 const STAR_STOPS = [['KLINE'], ['VWAP'], ['FIXED']];
 const L = new Function('STAR_NEW', 'STAR_STOPS', names.map(grab).join('\n') + '\nreturn {' + names.join(',') + '};')(1e9, STAR_STOPS);
 const NEW = 1e9;
@@ -41,6 +41,13 @@ t('固定 % 以入選價為準', (ok) => {
 t('權重排行與名次變化', (ok) => {
   const r1 = L.starStep(rule, [x('A', 80, { k: 1, bull: 2 }), x('B', 90, { k: 2, bull: 3 })], {}, 0); ok(syms(r1.bull) === 'B,A', syms(r1.bull)); ok(near(r1.bull[0].final, 96, 1e-3), r1.bull[0].final);
   const r2 = L.starStep(rule, [x('A', 99, { k: 2, bull: 3 }), x('B', 80, { k: 1, bull: 2 })], r1.members, 1); ok(syms(r2.bull) === 'A,B', syms(r2.bull)); ok(r2.bull[0].rankDelta === 1 && r2.bull[1].rankDelta === -1, 'delta');
+});
+t('盤中即時排行補位', (ok) => {
+  const ins = [x('A', 80), x('B', 60, { k: 0, bull: 1 }), x('C', 62, { k: 0, bull: 1 }), x('N', 52)];
+  const res = L.starStep(rule, ins, {}, 0, { C: 10 }); const lv = L.starLive(rule, ins, res, 0, { C: 10 });
+  ok(syms(lv.bull) === 'A,B', syms(lv.bull)); ok(lv.bull[0].met === true && lv.bull[1].cand === true && lv.bull[1].rank === 2 && lv.bull[1].rankDelta === NEW, 'flags'); ok(!lv.bear.length, 'bear');
+  const lv2 = L.starLive(rule, ins, L.starStep(rule, ins, res.members, 1, {}), 1, {}, { B: ['bull', 2], C: ['bull', 4] });
+  ok(syms(lv2.bull) === 'A,C,B', syms(lv2.bull)); ok(lv2.bull[1].rankDelta === 2 && lv2.bull[2].rankDelta === -1, 'delta');
 });
 t('顯示上限只影響顯示', (ok) => { const r = L.starStep({ ...rule, maxN: 5 }, Array.from({ length: 12 }, (_, i) => x('S' + (i + 1), 77 + i)), {}, 0); ok(r.bull.length === 5, r.bull.length); ok(Object.keys(r.members).length === 12, Object.keys(r.members).length); });
 t('資料暫缺保留成員', (ok) => { const r1 = L.starStep(rule, [x('A', 80)], {}, 0); const r2 = L.starStep(rule, [], r1.members, 1); ok('A' in r2.members, '保留'); ok(!r2.ejects.length, '不彈出'); });
