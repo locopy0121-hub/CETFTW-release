@@ -1164,7 +1164,7 @@ async function loadBars(sym, range, interval = '1d') {
 }
 
 // ───────── 網頁版本（發布時由 .github/public/sync.sh 填入：正式版號、commit、時間）─────────
-const WEB_VER = /*WEBVER*/{"v":"v1.1.444","sha":"8adfc5a","at":"2026-11-28 02:18"};
+const WEB_VER = /*WEBVER*/{"v":"","sha":"decdd23","at":"2026-11-28 18:54"};
 function webVerText(short) {
   const v = WEB_VER; if (!v) return short ? '開發版' : '開發版（未經正式發布）';
   const tag = v.v ? (/^v/i.test(v.v) ? v.v : 'v' + v.v) : '最新原始碼';
@@ -8052,7 +8052,8 @@ function cpTriangle(x, pv) {
     const e = n - 1;
     const segs = [{ i1: h1.i, v1: h1.v, i2: e, v2: up(e), kind: 'L', label: type === 'ASC_TRIANGLE' ? '壓力' : '上緣' }, { i1: l1.i, v1: l1.v, i2: e, v2: lo(e), kind: 'L', label: type === 'DESC_TRIANGLE' ? '支撐' : '下緣' },
       { i1: start, v1: lo(start), i2: start, v2: up(start), kind: 'H', label: '高度' }];
-    const p = cpFinish(x, type, bull, start, endP, (k) => (bull ? up(k) : lo(k)), stop, target, segs, [], { needTrend: type === 'SYM_TRIANGLE' || type === 'DESC_TRIANGLE', needVol: type === 'ASC_TRIANGLE' });
+    const marks = hs.map((q, k) => ({ i: q.i, v: q.v, text: '高' + (k + 1), above: true })).concat(ls.map((q, k) => ({ i: q.i, v: q.v, text: '低' + (k + 1), above: false })));
+    const p = cpFinish(x, type, bull, start, endP, (k) => (bull ? up(k) : lo(k)), stop, target, segs, marks, { needTrend: type === 'SYM_TRIANGLE' || type === 'DESC_TRIANGLE', needVol: type === 'ASC_TRIANGLE' });
     if (!p) continue;
     return type === 'FALLING_WEDGE' || type === 'RISING_WEDGE' ? p : cpEq(p);
   }
@@ -8184,6 +8185,95 @@ function kaSideHtml() {
   return `<div class="seg" style="margin-top:10px">${b('long', '做多計畫')}${b('short', '做空計畫')}${b('auto', '依訊號')}</div>`;
 }
 document.addEventListener('click', (e) => { const b = e.target.closest('[data-ps]'); if (!b) return; S.pref.planSide = b.dataset.ps; savePref(); if (S.kaFocus) S.kaFocus = {}; route(); });
+/** 圓圈編號 ①～⑳（圖上標記與說明對應） */
+const OVN = (k) => (k >= 1 && k <= 20 ? String.fromCharCode(0x245F + k) : '(' + k + ')');
+/** 線段為什麼這樣拉（依標籤與斜率） */
+function ovSegWhy(s, bull, id) {
+  const f = fmtPx; const d = s.v2 - s.v1; const flat = Math.abs(d) <= Math.abs(s.v1) * 0.004;
+  const tri = /TRIANGLE|WEDGE/.test(id || ''); const sr = id === 'plan' || id === 'sr';
+  switch (s.label) {
+    case '上緣': return '連接區間內的波段高點（' + f(s.v1) + ' → ' + f(s.v2) + '）：' + (flat ? '高點大致持平' : d < 0 ? '高點一次比一次低（較低高點），代表賣方逐步讓價' : '高點逐步墊高（較高高點）') + '。收盤越過這條線才算向上突破。';
+    case '下緣': return '連接區間內的波段低點（' + f(s.v1) + ' → ' + f(s.v2) + '）：' + (flat ? '低點大致持平' : d > 0 ? '低點一次比一次高（較高低點），代表買方逐步墊高承接' : '低點逐步走低（較低低點）') + '。收盤跌破這條線視為向下跌破。';
+    case '壓力': return sr ? '前 20 根 K 棒的最高點 ' + f(s.v1) + '：近期多次上攻未能收過的價位，是上方第一道賣壓。' : tri ? '水平連接的波段高點 ' + f(s.v1) + '：多次測試都沒有收過，收盤站上即向上突破。' : '上方壓力 ' + f(s.v1) + '。';
+    case '支撐': return sr ? '前 20 根 K 棒的最低點 ' + f(s.v1) + '（若 MA60 介於最低點與現價之間則改用 MA60）：近期回檔守住的價位，是下方第一道承接。' : tri ? '水平連接的波段低點 ' + f(s.v1) + '：多次回測都守住，收盤跌破即向下跌破。' : '下方支撐 ' + f(s.v1) + '。';
+    case '頸線': return (bull ? '兩個低點（或頭肩）之間反彈高點拉出的水平線 ' : '兩個高點（或頭肩）之間回檔低點拉出的水平線 ') + f(s.v1) + '：收盤' + (bull ? '站上' : '跌破') + '頸線，型態才算完成。';
+    case '高度': return '型態最寬處的上下距離 ' + f(Math.abs(d)) + '：作為突破後的量度幅度。';
+    case '等高': return '把型態高度從突破價平移 ' + f(Math.abs(d)) + '：' + (bull ? '向上' : '向下') + '量出目標 ' + f(s.v2) + '。';
+    case '旗桿': return '旗形前的急' + (bull ? '漲' : '跌') + '段（' + f(Math.abs(d)) + '）：整理後再突破，常走出與旗桿相近的幅度。';
+    case '前高': return '訂單塊之前的波段高點 ' + f(s.v1) + '：價格回到這裡附近會遇到前波賣壓，作為目標參考。';
+    case '舊壓力→支撐': return '先前的壓力 ' + f(s.v1) + ' 被收盤突破後，回測守住轉為支撐（角色互換）。';
+    case '舊支撐→壓力': return '先前的支撐 ' + f(s.v1) + ' 被收盤跌破後，反彈到這裡被壓回轉為壓力（角色互換）。';
+    default: return '';
+  }
+}
+/** 交易計畫逐項說明：每條線、每個數值怎麼來（圖上編號＝說明編號） */
+function ovExplain(ov, r) {
+  const f = fmtPx; const cs = r.cs, n = cs.length, atr = r.x && r.x.atr; const bull = !!ov.bull; const out = [];
+  const add = (ref, k, v, why) => { if (why) out.push({ ref, k, v, why }); };
+  const risk = Math.abs(ov.entry - ov.stop), reward = Math.abs(ov.target - ov.entry);
+  const inAtr = (v) => (atr > 0 ? '（約 ' + (v / atr).toFixed(1) + ' 倍 ATR）' : '');
+  const pat = (r.pats || []).find((p) => p.id === ov.id);
+  const sig = (r.sigs || []).find((s) => KS_SIGID(s) === ov.id);
+  if (pat) {
+    const s0 = Math.max(0, pat.start - 30); const c0 = cs[s0].c, c1 = cs[pat.start].c; const pc = c0 > 0 ? (c1 / c0 - 1) * 100 : 0;
+    add(null, '前段走勢', null, '型態開始前 30 根由 ' + f(c0) + ' 到 ' + f(c1) + '（' + (pc >= 0 ? '+' : '') + pc.toFixed(1) + '%），' + (Math.abs(pc) < 3 ? '屬於盤整後的型態' : pc > 0 ? '上漲後的整理型態' : '下跌後的整理型態') + '。');
+    const hs = pat.marks.filter((m) => /^高\d/.test(m.text)), ls = pat.marks.filter((m) => /^低\d/.test(m.text));
+    if (hs.length >= 2) add(null, '波段高點', null, hs.map((m) => m.text + ' ' + f(m.v)).join('、') + '：' + (hs[hs.length - 1].v < hs[0].v ? '一個比一個低（較低高點）' : '高點相近或墊高') + '，上緣就是連接這些高點。');
+    if (ls.length >= 2) add(null, '波段低點', null, ls.map((m) => m.text + ' ' + f(m.v)).join('、') + '：' + (ls[ls.length - 1].v > ls[0].v ? '一個比一個高（較高低點）' : '低點相近或走低') + '，下緣就是連接這些低點。');
+  }
+  ov.segs.forEach((s, i) => add('s' + i, s.label || '', s.kind === 'H' ? Math.abs(s.v2 - s.v1) : s.v1, ovSegWhy(s, bull, ov.id)));
+  if (ov.box) add('box', ov.box.label, null, '大漲前最後一根下跌 K 棒的區間（' + f(ov.box.lo) + '～' + f(ov.box.hi) + '）：被視為大額成本區，拉回到這裡常有承接。');
+  const parts = pat ? CP_T[pat.type][2].split('｜').map((t) => t.replace(/^[^：]*：/, '')) : null;
+  // 參考價
+  let ew;
+  if (pat) ew = pat.state === 'F' ? '尚未突破：取' + (bull ? '上緣' : '下緣') + '在最新一根的位置' + (bull ? '再加一檔' : '再減一檔') + '，收盤' + (bull ? '站上' : '跌破') + '才算數（' + parts[0] + '）。'
+    : pat.state === 'B' ? '已在第 ' + (n - 1 - pat.at) + ' 根前收盤' + (bull ? '突破' : '跌破') + '：取突破當根的' + (bull ? '上緣' : '下緣') + '價位。現價離這裡越遠，越不宜追價。'
+    : '突破後拉開又回測：取突破位置，回測守住代表舊壓力轉成支撐。';
+  else if (sig) ew = '「' + KS_ST[sig.st] + '」訊號成立的價位（' + KS_TM[sig.tm][0] + '）：' + (sig.pattern || '');
+  else if (ov.id === 'plan') ew = '布局區間中點：現價 ' + f(cs[n - 1].c) + (bull ? ' 往下 0.5 倍 ATR 到現價' : ' 往上 0.5 倍 ATR') + '，等小幅' + (bull ? '回檔' : '反彈') + '再分批，不追價。';
+  else if (ov.id === 'sr') ew = '最新收盤價 ' + f(cs[n - 1].c) + '。';
+  add('entry', '參考價', ov.entry, ew);
+  // 停損
+  let sw;
+  if (pat) sw = parts[1] + '；再限制在參考價的 1～3 倍 ATR 之間，太近易被洗、太遠風險過大。';
+  else if (sig) sw = (bull ? '訊號 K 棒（或型態）的關鍵低點再低一檔' : '訊號 K 棒的關鍵高點再高一檔') + '：收盤' + (bull ? '跌破' : '站回') + '代表訊號失效。';
+  else if (ov.id === 'plan') sw = (bull ? '取近 3 根偏多形態低點與支撐 ' + f(r.x.support) + ' 較低者，再往下 0.3 倍 ATR 避開雜訊' : '取近 3 根偏空形態高點與壓力 ' + f(r.x.resistance) + ' 較高者，再往上 0.3 倍 ATR') + '；距離現價限制在 0.8～3 倍 ATR。';
+  else if (ov.id === 'sr') sw = (bull ? '支撐下方 0.3 倍 ATR' : '壓力上方 0.3 倍 ATR') + '，限制在 1～3 倍 ATR：支撐（壓力）失守就代表區間判斷錯誤。';
+  add('stop', bull ? '停損' : '防守', ov.stop, sw + '距參考價 ' + f(risk) + inAtr(risk) + '。');
+  // 目標
+  let tw;
+  const eq = ov.segs.find((s) => s.label === '等高');
+  if (pat) tw = parts[2] + (eq ? '：參考價 ' + (bull ? '+' : '−') + ' 型態高度 ' + f(Math.abs(eq.v2 - eq.v1)) + '。' : '。');
+  else if (sig) tw = '前波' + (bull ? '高點／壓力' : '低點／支撐') + '若超過 1 倍風險就取用，否則以 2 倍風險（1:2）推算。';
+  else if (ov.id === 'plan') { const lv = bull ? r.x.resistance : r.x.support; tw = Math.abs(ov.target - lv) < 1e-9 ? '前 20 根' + (bull ? '壓力 ' : '支撐 ') + f(lv) + '：距離超過 1 倍風險，直接作為第一目標。' : (bull ? '壓力' : '支撐') + ' ' + f(lv) + ' 太近（不到 1 倍風險），改用現價 ' + (bull ? '+' : '−') + ' 1.5 倍風險。'; }
+  else if (ov.id === 'sr') tw = (bull ? '壓力' : '支撐') + '距離至少 1 倍 ATR 時取' + (bull ? '壓力' : '支撐') + '，否則以 2 倍風險推算。';
+  add('target', bull ? '目標' : '下看', ov.target, tw + '距參考價 ' + f(reward) + inAtr(reward) + '。');
+  add(null, '盈虧比', null, '（目標 − 參考價）÷（參考價 − 停損）＝ ' + f(reward) + ' ÷ ' + f(risk) + ' ＝ 1 : ' + ov.rr.toFixed(2) + '。' + (ov.rr >= 2 ? '大於 2，報酬相對風險較划算。' : ov.rr >= 1.2 ? '介於 1.2～2，普通。' : '低於 1.2，報酬不足以彌補風險。'));
+  let k = 0; out.forEach((e) => { if (e.ref) e.no = ++k; });
+  return out;
+}
+/** 計畫說明清單（圖下方） */
+function ovExplainHtml(ov) {
+  if (!ov || !ov.ex || !ov.ex.length) return '';
+  const col = (ref) => (ref === 'stop' ? PLAN_C.risk : ref === 'target' ? PLAN_C.target : ref === 'entry' ? 'var(--text)' : 'var(--text2)');
+  return `<details open style="margin-top:6px"><summary class="small" style="cursor:pointer;color:var(--primary)">線段與數值說明（圖上編號對應）</summary>
+    ${ov.ex.map((e) => `<div class="row" style="align-items:flex-start;gap:6px;margin-top:5px"><b style="min-width:16px;color:${col(e.ref)}">${e.no ? OVN(e.no) : '・'}</b><div class="sp"><div class="small"><b>${esc(e.k)}</b>${e.v != null ? ` <span class="num">${fmtPx(e.v)}</span>` : ''}</div><div class="small muted">${esc(e.why)}</div></div></div>`).join('')}</details>`;
+}
+/** K 線操作計畫各數值的由來 */
+function kaPlanWhy(p, r) {
+  const f = fmtPx; const x = r.x; const atr = x.atr; const px = r.cs[r.cs.length - 1].c; const risk = Math.abs(px - p.stop); const bull = p.bull;
+  const nA = (v) => (atr > 0 ? (v / atr).toFixed(1) + ' 倍 ATR' : '');
+  const lv = bull ? x.resistance : x.support; const t1lv = Math.abs(p.tp1 - lv) < 1e-9;
+  const lo = bull ? px - atr * 3 : px + atr * 0.8, hi = bull ? px - atr * 0.8 : px + atr * 3; const clamp = Math.abs(p.stop - lo) < 1e-9 ? (bull ? '（原本更遠，已縮到 3 倍 ATR）' : '（原本更近，已拉到 0.8 倍 ATR）') : Math.abs(p.stop - hi) < 1e-9 ? (bull ? '（原本太近，已拉到 0.8 倍 ATR）' : '（原本更遠，已縮到 3 倍 ATR）') : '';
+  const supWhy = Math.abs(x.support - (x.ma60 ?? NaN)) < 1e-9 ? 'MA60' : '前 20 根最低點';
+  return [
+    [bull ? '布局區間' : '減碼區間', f(p.e0) + ' ～ ' + f(p.e1), bull ? '現價 ' + f(px) + ' 往下 0.5 倍 ATR（ATR(14)=' + f(atr) + '）到現價：等小幅回檔分批，不追高。' : '現價 ' + f(px) + ' 往上 0.5 倍 ATR：反彈到這段時減碼。'],
+    ['停損／防守', f(p.stop), (bull ? '近 3 根偏多形態低點與支撐 ' + f(x.support) + '（' + supWhy + '）較低者，再往下 0.3 倍 ATR' : '近 3 根偏空形態高點與壓力 ' + f(x.resistance) + '（前 20 根最高點）較高者，再往上 0.3 倍 ATR') + '；距現價限制在 0.8～3 倍 ATR' + clamp + '。目前風險 ' + f(risk) + '（' + nA(risk) + '）。'],
+    ['目標一', f(p.tp1), t1lv ? (bull ? '前 20 根壓力 ' : '下方支撐 ') + f(lv) + '：距離超過 1 倍風險，直接當第一目標。' : (bull ? '壓力 ' : '支撐 ') + f(lv) + ' 距離不到 1 倍風險，改用現價 ' + (bull ? '+' : '−') + ' 1.5 倍風險。'],
+    ['目標二', f(p.tp2), bull ? '取「現價 + 3 倍風險」與「目標一 + 1 倍風險」較高者：給續強時的延伸空間。' : '取「現價 − 3 倍風險」與「目標一 − 1 倍風險」較低者（不低於 0）。'],
+    ['盈虧比', '1 : ' + p.rr.toFixed(2), '（目標一 − 現價）÷ 風險 ' + f(risk) + '；2 以上較划算，低於 1.2 報酬不足以彌補風險。'],
+  ];
+}
 /** 可畫在圖上的交易計畫：經典型態＋K 棒策略訊號＋K 線操作計畫＋支撐壓力（依做多／做空篩選） */
 function kaOverlays(r, tick) {
   const n = r.cs.length; const out = (r.pats || []).map((p) => cpOv(p.id, p.name + '・' + CP_ST[p.state], p.bull, p.at, p.entry, p.stop, p.target, p.segs, p.marks, p.box));
@@ -8191,7 +8281,8 @@ function kaOverlays(r, tick) {
   const p = kaPick(r); if (p) { const e = (p.e0 + p.e1) / 2; const ok = p.bull ? p.stop < e && p.tp1 > e : p.stop > e && p.tp1 < e;
     if (ok) out.push(cpOv('plan', 'K 線操作計畫・' + p.title, p.bull, n - 1, e, p.stop, p.tp1, [{ i1: Math.max(0, n - 20), v1: r.x.support, i2: n - 1, v2: r.x.support, kind: 'L', label: '支撐' }, { i1: Math.max(0, n - 20), v1: r.x.resistance, i2: n - 1, v2: r.x.resistance, kind: 'L', label: '壓力' }])); }
   const sp = cpSimplePlan(r.cs, tick); if (sp) out.push(sp);
-  const sd = kaSide(); return sd === 'auto' ? out : out.filter((o) => !!o.bull === (sd === 'long'));
+  const sd = kaSide(); const keep = sd === 'auto' ? out : out.filter((o) => !!o.bull === (sd === 'long'));
+  keep.forEach((o) => { try { o.ex = ovExplain(o, r); } catch (e) { o.ex = []; } }); return keep;
 }
 /** 目前要畫的計畫：使用者點選的優先，否則取已突破的型態 → 策略訊號 → 成形中的型態 → 操作計畫 */
 function kaFocus(sym, r, all) {
@@ -8215,19 +8306,23 @@ function drawOverlayZones(g, ov, x, y, cw, right) {
     g.fillStyle = col + '24'; g.fillRect(bx, y(b.hi), bw, y(b.lo) - y(b.hi)); g.strokeStyle = col; g.lineWidth = 1.5; g.strokeRect(bx, y(b.hi), bw, y(b.lo) - y(b.hi)); g.lineWidth = 1; }
 }
 function drawOverlayLines(g, ov, x, y, cw, right, TXT, MUT) {
-  const x0 = Math.max(0, x(ov.start) - cw / 2);
+  const x0 = Math.max(0, x(ov.start) - cw / 2); const no = {}; (ov.ex || []).forEach((e) => { if (e.no) no[e.ref] = e.no; });
   if (right > x0) { const ln = (v, col, w) => { g.strokeStyle = col; g.lineWidth = w; g.beginPath(); g.moveTo(x0, y(v)); g.lineTo(right, y(v)); g.stroke(); };
     ln(ov.target, PLAN_C.target, 2); ln(ov.stop, PLAN_C.risk, 2); ln(ov.entry, TXT, 1.5); g.lineWidth = 1; }
   g.font = 'bold 10px sans-serif'; g.textBaseline = 'alphabetic';
-  ov.segs.forEach((s) => { const x1 = x(s.i1), y1 = y(s.v1), x2 = x(s.i2), y2 = y(s.v2);
+  ov.segs.forEach((s, si) => { const x1 = x(s.i1), y1 = y(s.v1), x2 = x(s.i2), y2 = y(s.v2);
     if (s.kind === 'L') { g.strokeStyle = TXT; g.globalAlpha = 0.85; g.lineWidth = 2; g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke(); g.globalAlpha = 1; }
     else if (s.kind === 'O') { g.strokeStyle = MUT; g.lineWidth = 1.5; g.setLineDash([5, 4]); g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke(); g.setLineDash([]); }
     else { g.strokeStyle = g.fillStyle = PLAN_C.target; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke(); const up = y2 < y1, ah = 5;
       g.beginPath(); g.moveTo(x2, y2); g.lineTo(x2 - ah * 0.7, y2 + (up ? ah : -ah)); g.lineTo(x2 + ah * 0.7, y2 + (up ? ah : -ah)); g.closePath(); g.fill(); }
     g.lineWidth = 1;
-    if (s.label) { g.fillStyle = s.kind === 'H' ? PLAN_C.target : TXT; g.textAlign = 'left'; g.fillText(s.label, s.kind === 'H' ? x1 + 3 : Math.max(2, x1), s.kind === 'H' ? (y1 + y2) / 2 : y1 - 3); } });
-  if (ov.box) { g.fillStyle = ov.bull ? PLAN_C.profit : PLAN_C.risk; g.textAlign = 'left'; g.fillText(ov.box.label, x(ov.box.i1), y(ov.box.lo) + 12); }
+    if (s.label) { g.fillStyle = s.kind === 'H' ? PLAN_C.target : TXT; g.textAlign = 'left'; g.fillText((no['s' + si] ? OVN(no['s' + si]) + ' ' : '') + s.label, s.kind === 'H' ? x1 + 3 : Math.max(2, x1), s.kind === 'H' ? (y1 + y2) / 2 : y1 - 3); } });
+  if (ov.box) { g.fillStyle = ov.bull ? PLAN_C.profit : PLAN_C.risk; g.textAlign = 'left'; g.fillText((no.box ? OVN(no.box) + ' ' : '') + ov.box.label, x(ov.box.i1), y(ov.box.lo) + 12); }
   ov.marks.forEach((m) => { g.fillStyle = TXT; g.textAlign = 'center'; g.fillText(m.text, x(m.i), m.above ? y(m.v) - 5 : y(m.v) + 14); });
+  // 參考價／停損／目標線起點的編號圓章（對應圖下說明）
+  if (right > x0) [['entry', ov.entry, '#888'], ['stop', ov.stop, PLAN_C.risk], ['target', ov.target, PLAN_C.target]].forEach(([k, v, col]) => { if (!no[k]) return;
+    const cx = x0 + 9, cy = y(v); g.fillStyle = col; g.beginPath(); g.arc(cx, cy, 7.5, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#fff'; g.font = 'bold 10px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(String(no[k]), cx, cy + 0.5); g.textBaseline = 'alphabetic'; });
   g.textAlign = 'start'; g.textBaseline = 'middle'; g.font = '11px sans-serif';
 }
 /** 把整段 K 棒的索引平移成圖上（切片後）的索引 */
@@ -8262,7 +8357,7 @@ function kaCardHtml(r, weekly, sym, o = {}) {
       ${on ? `<div class="small muted" style="margin-top:2px">${esc(CP_T[q.type][2])}</div><div class="small muted">${esc(cpHistText(q.type))}</div><div class="small muted">${q.volOk ? '突破帶量' : q.state === 'F' ? '尚未突破' : '突破量能普通'}</div>${q.note ? `<div class="small muted">${esc(q.note)}</div>` : ''}` : ''}</div>`; }).join('') : '<div class="small muted" style="margin-top:4px">近期沒有成形或剛突破的經典型態。</div>'}
     ${pats.some((q) => !q.bull) ? '<div class="small muted" style="margin-top:6px">台股以持股減碼／避開為主，不建議放空。</div>' : ''}</div>`;
   const legend = ov ? `<div class="row small" style="margin-top:4px;gap:6px;flex-wrap:wrap"><span style="color:${PLAN_C.profit}">■</span> 獲利區 <span style="color:${PLAN_C.risk}">■</span> 風險區 <span class="muted" style="flex:1">· ${esc(ov.title)} · 盈虧比 1:${ov.rr.toFixed(1)}</span>
-      ${all.length > 1 ? `<select data-ovsel style="width:auto;padding:2px 6px;font-size:12px">${all.map((a) => `<option value="${esc(a.id)}" ${a.id === ov.id ? 'selected' : ''}>${esc(a.title)}</option>`).join('')}</select>` : ''}<a href="javascript:void 0" data-ovoff style="color:var(--primary)">隱藏</a></div>`
+      ${all.length > 1 ? `<select data-ovsel style="width:auto;padding:2px 6px;font-size:12px">${all.map((a) => `<option value="${esc(a.id)}" ${a.id === ov.id ? 'selected' : ''}>${esc(a.title)}</option>`).join('')}</select>` : ''}<a href="javascript:void 0" data-ovoff style="color:var(--primary)">隱藏</a></div>${ovExplainHtml(ov)}`
     : `<div class="row small muted" style="margin-top:4px"><span style="flex:1">▲ 偏多　▼ 偏空（K 線形態）</span>${all.length ? '<a href="javascript:void 0" data-ovon style="color:var(--primary)">顯示交易計畫</a>' : ''}</div>`;
   return `<h2>K 線形態分析<span class="r"><span class="seg" id="kaTf"><button data-tf="d" class="${weekly ? '' : 'on'}">日 K</button><button data-tf="w" class="${weekly ? 'on' : ''}">週 K</button></span></span></h2>
     <div class="row wrap" style="gap:10px;align-items:center"><span class="small muted">${weekly ? '週 K' : '日 K'}綜合訊號</span><span class="badge ${dc}" style="font-size:15px;padding:4px 10px">${DIRL[r.dir]}</span><span class="small muted">多空強度 ${r.strength}</span></div>
@@ -8276,7 +8371,7 @@ function kaCardHtml(r, weekly, sym, o = {}) {
     <div style="margin-top:10px"><b>最新形態（近 3 根）</b>${r.latest.length ? Array.from(new Map(r.latest.map((h) => [h.k + h.i, h])).values()).map(hit).join('') : '<div class="small muted">近 3 根沒有明顯的 K 線形態，以趨勢與量價為主。</div>'}</div>
     <div class="tile" style="margin-top:10px"><b>判斷依據</b>${r.reasons.map((t) => `<div class="small text2">・${esc(t)}</div>`).join('')}</div>
     ${kaSideHtml()}${p ? `<div class="tile" style="margin-top:10px;background:${css(p.bull ? '--up' : '--down')}14"><div class="row"><b class="${p.bull ? 'up' : 'down'}" style="flex:1">${esc(p.title)}</b><span class="small muted">盈虧比</span> <b class="num ${p.rr >= 2 ? 'up' : p.rr < 1.2 ? 'down' : ''}">1 : ${p.rr.toFixed(2)}</b></div>
-      <div class="small text2" style="margin-top:4px">${esc(p.trigger)}</div>${kvRows([[p.bull ? '布局區間' : '減碼區間', f(p.e0) + ' ～ ' + f(p.e1)], ['停損／防守', f(p.stop)], ['目標一', f(p.tp1)], ['目標二', f(p.tp2)]])}<div class="small muted">${esc(p.note)}</div></div>`
+      <div class="small text2" style="margin-top:4px">${esc(p.trigger)}</div>${kaPlanWhy(p, r).map(([k, v, w]) => `<div style="margin-top:6px"><div class="row"><span class="small muted" style="flex:1">${k}</span><b class="num">${v}</b></div><div class="small muted">${esc(w)}</div></div>`).join('')}</div>`
       : '<div class="small muted" style="margin-top:8px">訊號中性：建議觀望，等待帶量突破壓力或跌破支撐再決定方向。</div>'}
     ${older.length ? `<details style="margin-top:8px"><summary class="small" style="cursor:pointer;color:var(--primary)">近 40 根其他形態（${older.length}）</summary>${older.map(hit).join('')}</details>` : ''}
     <div class="small muted" style="margin-top:6px">形態辨識依據 K 棒實體、影線、前趨勢、量能與前 20 根高低點；勝率為此股過去 ${weekly ? '5 年週 K' : '2 年日 K'} 同形態出現後 ${r.forward} 根的結果。經典型態回測為台美股 37 檔近 2 年統計。僅為分析成果，不構成投資建議；投資有風險，請自行評估並自負盈虧。</div>`;
